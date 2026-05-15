@@ -1,0 +1,66 @@
+import { contextBridge, ipcRenderer } from "electron";
+import type {
+  CrudTableName,
+  DatabaseEntityMap,
+  DatabaseRecordInput,
+  DatabaseRecordUpdate,
+  DatabaseResult,
+  DatabaseStatus,
+  ListRecordsOptions,
+  SettingRecord
+} from "../shared/types";
+
+const api = {
+  getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
+  database: {
+    getStatus: () =>
+      ipcRenderer.invoke("database:getStatus") as Promise<
+        DatabaseResult<DatabaseStatus>
+      >,
+    listRecords: <T extends CrudTableName>(
+      tableName: T,
+      options?: ListRecordsOptions
+    ) =>
+      ipcRenderer.invoke("database:listRecords", tableName, options) as Promise<
+        DatabaseResult<DatabaseEntityMap[T][]>
+      >,
+    getRecord: <T extends CrudTableName>(tableName: T, id: string) =>
+      ipcRenderer.invoke("database:getRecord", tableName, id) as Promise<
+        DatabaseResult<DatabaseEntityMap[T] | null>
+      >,
+    createRecord: <T extends CrudTableName>(
+      tableName: T,
+      data: DatabaseRecordInput
+    ) =>
+      ipcRenderer.invoke("database:createRecord", tableName, data) as Promise<
+        DatabaseResult<DatabaseEntityMap[T]>
+      >,
+    updateRecord: <T extends CrudTableName>(
+      tableName: T,
+      id: string,
+      data: DatabaseRecordUpdate
+    ) =>
+      ipcRenderer.invoke(
+        "database:updateRecord",
+        tableName,
+        id,
+        data
+      ) as Promise<DatabaseResult<DatabaseEntityMap[T] | null>>,
+    deleteRecord: (tableName: CrudTableName, id: string) =>
+      ipcRenderer.invoke("database:deleteRecord", tableName, id) as Promise<
+        DatabaseResult<boolean>
+      >,
+    getSetting: (key: string) =>
+      ipcRenderer.invoke("database:getSetting", key) as Promise<
+        DatabaseResult<SettingRecord | null>
+      >,
+    setSetting: (key: string, value: string) =>
+      ipcRenderer.invoke("database:setSetting", key, value) as Promise<
+        DatabaseResult<SettingRecord>
+      >
+  }
+};
+
+contextBridge.exposeInMainWorld("jprogrammer", api);
+
+export type JProgrammerApi = typeof api;
