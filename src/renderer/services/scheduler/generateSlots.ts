@@ -1,0 +1,168 @@
+import type {
+  DayOfWeek,
+  OpeningHours,
+  SpecialDay,
+  StaffingRequirement
+} from "../../types";
+
+export type SlotDraft = {
+  date: string;
+  dayOfWeek: DayOfWeek;
+  roleId: string;
+  startTime: string;
+  endTime: string;
+  sourceId: string;
+  slotNumber: number;
+  requiredCount: number;
+};
+
+export type GenerationWarningDraft = {
+  severity: "info" | "warning";
+  warningType: string;
+  message: string;
+};
+
+export type GenerationPlan = {
+  weekStartDate: string;
+  weekEndDate: string;
+  slots: SlotDraft[];
+  warnings: GenerationWarningDraft[];
+};
+
+export type WeekRange = {
+  selectedDate: string;
+  weekStartDate: string;
+  weekEndDate: string;
+  weekStartsOn: DayOfWeek;
+};
+
+export function getWeekRangeForDate({
+  selectedDate,
+  weekStartsOn
+}: {
+  selectedDate: string;
+  weekStartsOn: DayOfWeek;
+}): WeekRange {
+  const selectedDayOfWeek = getDayOfWeek(selectedDate);
+  const daysSinceWeekStart = (selectedDayOfWeek - weekStartsOn + 7) % 7;
+  const weekStartDate = addDays(selectedDate, -daysSinceWeekStart);
+
+  return {
+    selectedDate,
+    weekStartDate,
+    weekEndDate: addDays(weekStartDate, 6),
+    weekStartsOn
+  };
+}
+
+export function buildScheduleGenerationPlan({
+  weekStartDate,
+  openingHours,
+  staffingRequirements,
+  specialDays
+}: {
+  weekStartDate: string;
+  openingHours: OpeningHours[];
+  staffingRequirements: StaffingRequirement[];
+  specialDays: SpecialDay[];
+}): GenerationPlan {
+  const activeRequirements = staffingRequirements.filter(
+    (requirement) => requirement.is_active && requirement.required_count > 0
+  );
+  const warnings: GenerationWarningDraft[] = [];
+  const slots: SlotDraft[] = [];
+  const weekDates = Array.from({ length: 7 }, (_, index) =>
+    addDays(weekStartDate, index)
+  );
+
+  if (activeRequirements.length === 0) {
+    warnings.push({
+      severity: "warning",
+      warningType: "no_staffing_requirements",
+      message: "No active staffing requirements exist for this week."
+    });
+  }
+
+  for (const date of weekDates) {
+    const dayOfWeek = getDayOfWeek(date);
+    const specialDay = specialDays.find((item) => item.date === date);
+
+    if (specialDay?.is_closed) {
+      continue;
+    }
+
+    const openingHour = openingHours.find(
+      (item) => item.day_of_week === dayOfWeek
+    );
+
+    if (openingHour && !openingHour.is_open) {
+      continue;
+    }
+
+    const dayRequirements = activeRequirements.filter(
+      (requirement) => requirement.day_of_week === dayOfWeek
+    );
+
+    if (dayRequirements.length === 0) {
+      warnings.push({
+        severity: "info",
+        warningType: "no_day_requirements",
+        message: `${date} has no active staffing requirements.`
+      });
+      continue;
+    }
+
+    for (const requirement of dayRequirements) {
+      for (let index = 1; index <= requirement.required_count; index += 1) {
+        slots.push({
+          date,
+          dayOfWeek,
+          roleId: requirement.role_id,
+          startTime: requirement.start_time,
+          endTime: requirement.end_time,
+          sourceId: requirement.id,
+          slotNumber: index,
+          requiredCount: requirement.required_count
+        });
+      }
+    }
+  }
+
+  if (slots.length === 0 && activeRequirements.length > 0) {
+    warnings.push({
+      severity: "warning",
+      warningType: "no_slots_generated",
+      message:
+        "No slots were generated. The business may be closed for every day in the selected week."
+    });
+  }
+
+  return {
+    weekStartDate,
+    weekEndDate: weekDates[6],
+    slots,
+    warnings
+  };
+}
+
+export function isDateInputValue(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+export function addDays(dateValue: string, amount: number): string {
+  const date = new Date(`${dateValue}T00:00:00`);
+  date.setDate(date.getDate() + amount);
+  return toDateInputValue(date);
+}
+
+export function getDayOfWeek(dateValue: string): DayOfWeek {
+  return new Date(`${dateValue}T00:00:00`).getDay() as DayOfWeek;
+}
+
+function toDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}

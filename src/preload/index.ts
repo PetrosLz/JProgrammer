@@ -7,11 +7,15 @@ import type {
   DatabaseResult,
   DatabaseStatus,
   ListRecordsOptions,
+  PdfExportRequest,
+  PdfExportResult,
   SettingRecord
 } from "../shared/types";
 
 const api = {
   getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
+  exportPdf: (request: PdfExportRequest) =>
+    ipcRenderer.invoke("pdf:export", request) as Promise<PdfExportResult>,
   database: {
     getStatus: () =>
       ipcRenderer.invoke("database:getStatus") as Promise<

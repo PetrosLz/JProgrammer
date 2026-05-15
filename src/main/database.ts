@@ -28,8 +28,11 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   business_settings: {
     writableColumns: [
       "business_name",
+      "business_type",
+      "location",
       "timezone",
       "week_starts_on",
+      "language",
       "locale",
       "currency"
     ],
@@ -41,6 +44,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "is_open",
       "open_time",
       "close_time",
+      "is_overnight",
       "notes"
     ],
     defaultOrderBy: "day_of_week ASC"
@@ -55,6 +59,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "role_id",
       "start_time",
       "end_time",
+      "is_overnight",
       "break_minutes",
       "color",
       "notes",
@@ -65,10 +70,13 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   staffing_requirements: {
     writableColumns: [
       "day_of_week",
+      "shift_template_id",
       "role_id",
       "start_time",
       "end_time",
       "required_count",
+      "priority",
+      "is_active",
       "notes"
     ],
     defaultOrderBy: "day_of_week ASC, start_time ASC"
@@ -100,12 +108,25 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
     defaultOrderBy: "last_name ASC, first_name ASC"
   },
   employee_roles: {
-    writableColumns: ["employee_id", "role_id", "is_primary"],
+    writableColumns: [
+      "employee_id",
+      "role_id",
+      "is_primary",
+      "skill_level",
+      "can_lead_role",
+      "is_preferred_role"
+    ],
     defaultOrderBy: "created_at DESC"
   },
   employee_work_rules: {
     writableColumns: [
       "employee_id",
+      "min_days_per_week",
+      "target_days_per_week",
+      "min_hours_per_week",
+      "target_hours_per_week",
+      "max_consecutive_days",
+      "can_work_weekends",
       "max_hours_per_week",
       "max_shifts_per_week",
       "max_days_per_week",
@@ -118,6 +139,16 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   employee_day_constraints: {
     writableColumns: ["employee_id", "day_of_week", "constraint_type", "notes"],
     defaultOrderBy: "day_of_week ASC"
+  },
+  employee_shift_availability: {
+    writableColumns: [
+      "employee_id",
+      "day_of_week",
+      "shift_template_id",
+      "availability_type",
+      "notes"
+    ],
+    defaultOrderBy: "employee_id ASC, day_of_week ASC"
   },
   employee_time_constraints: {
     writableColumns: [
@@ -134,6 +165,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   time_off: {
     writableColumns: [
       "employee_id",
+      "type",
       "start_date",
       "end_date",
       "reason",
@@ -161,6 +193,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "start_time",
       "end_time",
       "required_count",
+      "status",
       "source_type",
       "source_id",
       "notes"
@@ -173,6 +206,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "schedule_slot_id",
       "employee_id",
       "status",
+      "is_manual_override",
       "notes"
     ],
     defaultOrderBy: "created_at DESC"
@@ -226,6 +260,7 @@ export function initializeDatabase(): DatabaseStatus {
     database.pragma("foreign_keys = ON");
     database.pragma("journal_mode = WAL");
     database.exec(initSql);
+    applyCompatibilityMigrations(database);
 
     return getDatabaseStatus();
   } catch (error) {
@@ -505,4 +540,121 @@ function normalizeOffset(offset = 0): number {
   }
 
   return offset;
+}
+
+function applyCompatibilityMigrations(db: SqliteDatabase): void {
+  addColumnIfMissing(db, "business_settings", "business_type", "TEXT");
+  addColumnIfMissing(db, "business_settings", "location", "TEXT");
+  addColumnIfMissing(
+    db,
+    "business_settings",
+    "language",
+    "TEXT NOT NULL DEFAULT 'el'"
+  );
+  addColumnIfMissing(
+    db,
+    "opening_hours",
+    "is_overnight",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1))"
+  );
+  addColumnIfMissing(
+    db,
+    "shift_templates",
+    "is_overnight",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1))"
+  );
+  addColumnIfMissing(db, "staffing_requirements", "shift_template_id", "TEXT");
+  addColumnIfMissing(
+    db,
+    "employee_roles",
+    "skill_level",
+    "INTEGER NOT NULL DEFAULT 3 CHECK (skill_level BETWEEN 1 AND 5)"
+  );
+  addColumnIfMissing(
+    db,
+    "employee_roles",
+    "can_lead_role",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (can_lead_role IN (0, 1))"
+  );
+  addColumnIfMissing(
+    db,
+    "employee_roles",
+    "is_preferred_role",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (is_preferred_role IN (0, 1))"
+  );
+  addColumnIfMissing(
+    db,
+    "staffing_requirements",
+    "priority",
+    "TEXT NOT NULL DEFAULT 'normal'"
+  );
+  addColumnIfMissing(
+    db,
+    "staffing_requirements",
+    "is_active",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))"
+  );
+  addColumnIfMissing(db, "employee_work_rules", "min_days_per_week", "INTEGER");
+  addColumnIfMissing(db, "employee_work_rules", "target_days_per_week", "INTEGER");
+  addColumnIfMissing(db, "employee_work_rules", "min_hours_per_week", "REAL");
+  addColumnIfMissing(db, "employee_work_rules", "target_hours_per_week", "REAL");
+  addColumnIfMissing(db, "employee_work_rules", "max_consecutive_days", "INTEGER");
+  addColumnIfMissing(
+    db,
+    "employee_work_rules",
+    "can_work_weekends",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (can_work_weekends IN (0, 1))"
+  );
+  addColumnIfMissing(
+    db,
+    "time_off",
+    "type",
+    "TEXT NOT NULL DEFAULT 'day_off'"
+  );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS employee_shift_availability (
+      id TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL,
+      day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+      shift_template_id TEXT NOT NULL,
+      availability_type TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
+      FOREIGN KEY (shift_template_id) REFERENCES shift_templates (id) ON DELETE CASCADE,
+      UNIQUE (employee_id, day_of_week, shift_template_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_employee_shift_availability_employee_shift
+      ON employee_shift_availability (employee_id, day_of_week, shift_template_id);
+  `);
+  addColumnIfMissing(
+    db,
+    "schedule_slots",
+    "status",
+    "TEXT NOT NULL DEFAULT 'unfilled'"
+  );
+  addColumnIfMissing(
+    db,
+    "schedule_assignments",
+    "is_manual_override",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (is_manual_override IN (0, 1))"
+  );
+}
+
+function addColumnIfMissing(
+  db: SqliteDatabase,
+  tableName: string,
+  columnName: string,
+  definition: string
+): void {
+  const columns = db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as Array<{ name: string }>;
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`).run();
 }

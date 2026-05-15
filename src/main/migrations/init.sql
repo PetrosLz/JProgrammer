@@ -3,8 +3,11 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS business_settings (
   id TEXT PRIMARY KEY,
   business_name TEXT NOT NULL DEFAULT 'JProgrammer',
+  business_type TEXT,
+  location TEXT,
   timezone TEXT NOT NULL DEFAULT 'Europe/Athens',
   week_starts_on INTEGER NOT NULL DEFAULT 1 CHECK (week_starts_on BETWEEN 0 AND 6),
+  language TEXT NOT NULL DEFAULT 'el',
   locale TEXT NOT NULL DEFAULT 'en',
   currency TEXT NOT NULL DEFAULT 'EUR',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -17,6 +20,7 @@ CREATE TABLE IF NOT EXISTS opening_hours (
   is_open INTEGER NOT NULL DEFAULT 1 CHECK (is_open IN (0, 1)),
   open_time TEXT,
   close_time TEXT,
+  is_overnight INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1)),
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS shift_templates (
   role_id TEXT,
   start_time TEXT NOT NULL,
   end_time TEXT NOT NULL,
+  is_overnight INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1)),
   break_minutes INTEGER NOT NULL DEFAULT 0 CHECK (break_minutes >= 0),
   color TEXT,
   notes TEXT,
@@ -52,13 +57,17 @@ CREATE TABLE IF NOT EXISTS shift_templates (
 CREATE TABLE IF NOT EXISTS staffing_requirements (
   id TEXT PRIMARY KEY,
   day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+  shift_template_id TEXT,
   role_id TEXT NOT NULL,
   start_time TEXT NOT NULL,
   end_time TEXT NOT NULL,
   required_count INTEGER NOT NULL CHECK (required_count >= 0),
+  priority TEXT NOT NULL DEFAULT 'normal',
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (shift_template_id) REFERENCES shift_templates (id) ON DELETE SET NULL,
   FOREIGN KEY (role_id) REFERENCES roles (id) ON DELETE CASCADE
 );
 
@@ -104,6 +113,9 @@ CREATE TABLE IF NOT EXISTS employee_roles (
   employee_id TEXT NOT NULL,
   role_id TEXT NOT NULL,
   is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+  skill_level INTEGER NOT NULL DEFAULT 3 CHECK (skill_level BETWEEN 1 AND 5),
+  can_lead_role INTEGER NOT NULL DEFAULT 0 CHECK (can_lead_role IN (0, 1)),
+  is_preferred_role INTEGER NOT NULL DEFAULT 0 CHECK (is_preferred_role IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
@@ -114,9 +126,15 @@ CREATE TABLE IF NOT EXISTS employee_roles (
 CREATE TABLE IF NOT EXISTS employee_work_rules (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL,
-  max_hours_per_week REAL,
-  max_shifts_per_week INTEGER,
+  min_days_per_week INTEGER,
   max_days_per_week INTEGER,
+  target_days_per_week INTEGER,
+  min_hours_per_week REAL,
+  max_hours_per_week REAL,
+  target_hours_per_week REAL,
+  max_consecutive_days INTEGER,
+  can_work_weekends INTEGER NOT NULL DEFAULT 1 CHECK (can_work_weekends IN (0, 1)),
+  max_shifts_per_week INTEGER,
   min_hours_between_shifts REAL,
   preferred_hours_per_week REAL,
   notes TEXT,
@@ -137,6 +155,20 @@ CREATE TABLE IF NOT EXISTS employee_day_constraints (
   FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS employee_shift_availability (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+  shift_template_id TEXT NOT NULL,
+  availability_type TEXT NOT NULL,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
+  FOREIGN KEY (shift_template_id) REFERENCES shift_templates (id) ON DELETE CASCADE,
+  UNIQUE (employee_id, day_of_week, shift_template_id)
+);
+
 CREATE TABLE IF NOT EXISTS employee_time_constraints (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL,
@@ -155,6 +187,7 @@ CREATE TABLE IF NOT EXISTS employee_time_constraints (
 CREATE TABLE IF NOT EXISTS time_off (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'day_off',
   start_date TEXT NOT NULL,
   end_date TEXT NOT NULL,
   reason TEXT,
@@ -185,6 +218,7 @@ CREATE TABLE IF NOT EXISTS schedule_slots (
   start_time TEXT NOT NULL,
   end_time TEXT NOT NULL,
   required_count INTEGER NOT NULL DEFAULT 1 CHECK (required_count >= 0),
+  status TEXT NOT NULL DEFAULT 'unfilled',
   source_type TEXT,
   source_id TEXT,
   notes TEXT,
@@ -200,6 +234,7 @@ CREATE TABLE IF NOT EXISTS schedule_assignments (
   schedule_slot_id TEXT NOT NULL,
   employee_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'assigned',
+  is_manual_override INTEGER NOT NULL DEFAULT 0 CHECK (is_manual_override IN (0, 1)),
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -232,10 +267,12 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE INDEX IF NOT EXISTS idx_shift_templates_role_id ON shift_templates (role_id);
 CREATE INDEX IF NOT EXISTS idx_staffing_requirements_day_role ON staffing_requirements (day_of_week, role_id);
+CREATE INDEX IF NOT EXISTS idx_staffing_requirements_shift_template_id ON staffing_requirements (shift_template_id);
 CREATE INDEX IF NOT EXISTS idx_special_day_staffing_special_day_id ON special_day_staffing_requirements (special_day_id);
 CREATE INDEX IF NOT EXISTS idx_employee_roles_employee_id ON employee_roles (employee_id);
 CREATE INDEX IF NOT EXISTS idx_employee_roles_role_id ON employee_roles (role_id);
 CREATE INDEX IF NOT EXISTS idx_employee_day_constraints_employee_id ON employee_day_constraints (employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_shift_availability_employee_shift ON employee_shift_availability (employee_id, day_of_week, shift_template_id);
 CREATE INDEX IF NOT EXISTS idx_employee_time_constraints_employee_id ON employee_time_constraints (employee_id);
 CREATE INDEX IF NOT EXISTS idx_time_off_employee_dates ON time_off (employee_id, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_schedule_slots_run_date ON schedule_slots (schedule_run_id, date);

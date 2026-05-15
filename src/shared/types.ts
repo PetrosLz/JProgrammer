@@ -10,6 +10,7 @@ export const databaseTableNames = [
   "employee_roles",
   "employee_work_rules",
   "employee_day_constraints",
+  "employee_shift_availability",
   "employee_time_constraints",
   "time_off",
   "schedule_runs",
@@ -36,8 +37,11 @@ export interface EntityBase {
 
 export interface BusinessSettings extends EntityBase {
   business_name: string;
+  business_type: string | null;
+  location: string | null;
   timezone: string;
   week_starts_on: DayOfWeek;
+  language: string;
   locale: string;
   currency: string;
 }
@@ -47,6 +51,7 @@ export interface OpeningHours extends EntityBase {
   is_open: SqlBoolean;
   open_time: string | null;
   close_time: string | null;
+  is_overnight: SqlBoolean;
   notes: string | null;
 }
 
@@ -62,6 +67,7 @@ export interface ShiftTemplate extends EntityBase {
   role_id: string | null;
   start_time: string;
   end_time: string;
+  is_overnight: SqlBoolean;
   break_minutes: number;
   color: string | null;
   notes: string | null;
@@ -70,10 +76,13 @@ export interface ShiftTemplate extends EntityBase {
 
 export interface StaffingRequirement extends EntityBase {
   day_of_week: DayOfWeek;
+  shift_template_id: string | null;
   role_id: string;
   start_time: string;
   end_time: string;
   required_count: number;
+  priority: string | null;
+  is_active: SqlBoolean;
   notes: string | null;
 }
 
@@ -106,13 +115,22 @@ export interface EmployeeRole extends EntityBase {
   employee_id: string;
   role_id: string;
   is_primary: SqlBoolean;
+  skill_level: number;
+  can_lead_role: SqlBoolean;
+  is_preferred_role: SqlBoolean;
 }
 
 export interface EmployeeWorkRules extends EntityBase {
   employee_id: string;
+  min_days_per_week: number | null;
   max_hours_per_week: number | null;
+  min_hours_per_week: number | null;
   max_shifts_per_week: number | null;
   max_days_per_week: number | null;
+  target_days_per_week: number | null;
+  target_hours_per_week: number | null;
+  max_consecutive_days: number | null;
+  can_work_weekends: SqlBoolean | null;
   min_hours_between_shifts: number | null;
   preferred_hours_per_week: number | null;
   notes: string | null;
@@ -122,6 +140,14 @@ export interface EmployeeDayConstraint extends EntityBase {
   employee_id: string;
   day_of_week: DayOfWeek;
   constraint_type: string;
+  notes: string | null;
+}
+
+export interface EmployeeShiftAvailability extends EntityBase {
+  employee_id: string;
+  day_of_week: DayOfWeek;
+  shift_template_id: string;
+  availability_type: string;
   notes: string | null;
 }
 
@@ -137,6 +163,7 @@ export interface EmployeeTimeConstraint extends EntityBase {
 
 export interface TimeOff extends EntityBase {
   employee_id: string;
+  type: string;
   start_date: string;
   end_date: string;
   reason: string | null;
@@ -160,6 +187,7 @@ export interface ScheduleSlot extends EntityBase {
   start_time: string;
   end_time: string;
   required_count: number;
+  status: string;
   source_type: string | null;
   source_id: string | null;
   notes: string | null;
@@ -170,6 +198,7 @@ export interface ScheduleAssignment extends EntityBase {
   schedule_slot_id: string;
   employee_id: string;
   status: string;
+  is_manual_override: SqlBoolean;
   notes: string | null;
 }
 
@@ -200,6 +229,7 @@ export interface DatabaseEntityMap {
   employee_roles: EmployeeRole;
   employee_work_rules: EmployeeWorkRules;
   employee_day_constraints: EmployeeDayConstraint;
+  employee_shift_availability: EmployeeShiftAvailability;
   employee_time_constraints: EmployeeTimeConstraint;
   time_off: TimeOff;
   schedule_runs: ScheduleRun;
@@ -224,6 +254,25 @@ export interface DatabaseApiErrorPayload {
   code: string;
   message: string;
 }
+
+export interface PdfExportRequest {
+  html: string;
+  defaultFileName: string;
+}
+
+export type PdfExportResult =
+  | {
+      ok: true;
+      filePath: string;
+    }
+  | {
+      ok: false;
+      cancelled?: boolean;
+      error: {
+        code: string;
+        message: string;
+      };
+    };
 
 export type DatabaseResult<T> =
   | {

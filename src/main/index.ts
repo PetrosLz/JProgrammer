@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
 import { initializeDatabase } from "./database";
 import { registerDatabaseIpc } from "./ipc/databaseIpc";
+import { registerPdfExportIpc } from "./ipc/pdfExportIpc";
 
 const isWindows = process.platform === "win32";
 
@@ -38,6 +39,7 @@ app.whenReady().then(() => {
   try {
     initializeDatabase();
     registerDatabaseIpc();
+    registerPdfExportIpc();
     createMainWindow();
   } catch (error) {
     console.error("JProgrammer failed to start:", error);
