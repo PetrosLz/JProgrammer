@@ -25,6 +25,7 @@ export type DemoDataResult = {
 };
 
 const setupCompletedKey = "setup.completedAt";
+const demoCleanupBatchSize = 10000;
 
 const deleteOrder: CrudTableName[] = [
   "schedule_warnings",
@@ -87,7 +88,19 @@ export async function loadDemoData(): Promise<DemoDataResult> {
 
 async function clearDemoTables(): Promise<void> {
   for (const tableName of deleteOrder) {
-    const records = await databaseApi.listRecords(tableName, { limit: 10000 });
+    await deleteAllRecords(tableName);
+  }
+}
+
+async function deleteAllRecords(tableName: CrudTableName): Promise<void> {
+  while (true) {
+    const records = await databaseApi.listRecords(tableName, {
+      limit: demoCleanupBatchSize
+    });
+
+    if (records.length === 0) {
+      return;
+    }
 
     for (const record of records) {
       await databaseApi.deleteRecord(tableName, record.id);

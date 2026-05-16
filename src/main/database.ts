@@ -24,6 +24,9 @@ type CrudTableMetadata = {
   defaultOrderBy: string;
 };
 
+const defaultListLimit = 100;
+const maxListLimit = 10000;
+
 const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   business_settings: {
     writableColumns: [
@@ -533,12 +536,12 @@ function validateSettingKey(key: string): void {
   }
 }
 
-function normalizeLimit(limit = 100): number {
+function normalizeLimit(limit = defaultListLimit): number {
   if (!Number.isInteger(limit) || limit < 1) {
-    return 100;
+    return defaultListLimit;
   }
 
-  return Math.min(limit, 500);
+  return Math.min(limit, maxListLimit);
 }
 
 function normalizeOffset(offset = 0): number {
