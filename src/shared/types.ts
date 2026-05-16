@@ -34,6 +34,13 @@ export const experienceLevelValues = [
   "experienced"
 ] as const;
 export type ExperienceLevel = (typeof experienceLevelValues)[number];
+export const employmentTypeValues = [
+  "full_time",
+  "part_time",
+  "weekly_hours",
+  "custom"
+] as const;
+export type EmploymentType = (typeof employmentTypeValues)[number];
 
 export const experienceLevelOptions: Array<{
   value: ExperienceLevel;
@@ -224,6 +231,10 @@ export interface EmployeeRole extends EntityBase {
 
 export interface EmployeeWorkRules extends EntityBase {
   employee_id: string;
+  employment_type: EmploymentType | null;
+  contract_days_per_week: number | null;
+  contract_hours_per_week: number | null;
+  preferred_hours_per_day: number | null;
   min_days_per_week: number | null;
   max_hours_per_week: number | null;
   min_hours_per_week: number | null;

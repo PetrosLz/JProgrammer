@@ -160,34 +160,32 @@ export function checkHardConstraints({
   const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
   const hasMaxHoursOverride = manualOverrides[slot.id]?.includes(employee.id);
   const hasMaxDaysOverride = manualOverrides[slot.id]?.includes(employee.id);
+  const maxHoursPerWeek = getEffectiveMaxHoursPerWeek(workRules);
+  const maxDaysPerWeek = getEffectiveMaxDaysPerWeek(workRules);
 
-  if (
-    workRules?.max_hours_per_week !== null &&
-    workRules?.max_hours_per_week !== undefined &&
-    !hasMaxHoursOverride
-  ) {
+  if (isWeekendDate(slot.date) && workRules?.can_work_weekends === 0) {
+    reasons.push("Employee cannot work weekends.");
+  }
+
+  if (maxHoursPerWeek !== null && !hasMaxHoursOverride) {
     const projectedHours =
       getAssignedHours(employee.id, assignedShifts) + getSlotDurationHours(slot);
 
-    if (projectedHours > workRules.max_hours_per_week) {
+    if (projectedHours > maxHoursPerWeek) {
       reasons.push(
         `Employee would exceed max weekly hours (${formatHours(projectedHours)}/${formatHours(
-          workRules.max_hours_per_week
+          maxHoursPerWeek
         )}).`
       );
     }
   }
 
-  if (
-    workRules?.max_days_per_week !== null &&
-    workRules?.max_days_per_week !== undefined &&
-    !hasMaxDaysOverride
-  ) {
+  if (maxDaysPerWeek !== null && !hasMaxDaysOverride) {
     const projectedDays = getAssignedDayCount(employee.id, assignedShifts, slot.date);
 
-    if (projectedDays > workRules.max_days_per_week) {
+    if (projectedDays > maxDaysPerWeek) {
       reasons.push(
-        `Employee would exceed max weekly days (${projectedDays}/${workRules.max_days_per_week}).`
+        `Employee would exceed max weekly days (${projectedDays}/${maxDaysPerWeek}).`
       );
     }
   }
@@ -233,6 +231,44 @@ export function getEmployeeWorkRules(
   workRules: EmployeeWorkRules[]
 ): EmployeeWorkRules | null {
   return workRules.find((item) => item.employee_id === employeeId) ?? null;
+}
+
+export function getContractHoursPerWeek(
+  workRules: EmployeeWorkRules | null
+): number | null {
+  return (
+    workRules?.contract_hours_per_week ??
+    workRules?.target_hours_per_week ??
+    workRules?.preferred_hours_per_week ??
+    null
+  );
+}
+
+export function getContractDaysPerWeek(
+  workRules: EmployeeWorkRules | null
+): number | null {
+  return (
+    workRules?.contract_days_per_week ??
+    workRules?.target_days_per_week ??
+    workRules?.max_days_per_week ??
+    null
+  );
+}
+
+export function getEffectiveMaxHoursPerWeek(
+  workRules: EmployeeWorkRules | null
+): number | null {
+  const contractHours = getContractHoursPerWeek(workRules);
+
+  return workRules?.max_hours_per_week ?? (contractHours !== null ? contractHours + 4 : null);
+}
+
+export function getEffectiveMaxDaysPerWeek(
+  workRules: EmployeeWorkRules | null
+): number | null {
+  const contractDays = getContractDaysPerWeek(workRules);
+
+  return workRules?.max_days_per_week ?? (contractDays !== null ? Math.min(7, contractDays + 1) : null);
 }
 
 export function getDayConstraint(

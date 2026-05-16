@@ -13,10 +13,10 @@ type EmployeeKey =
   | "giorgos"
   | "eleni"
   | "nikos"
-  | "anna"
+  | "sofia"
   | "kostas"
-  | "dimitris"
-  | "sofia";
+  | "anna"
+  | "dimitris";
 
 export type DemoDataResult = {
   employeeCount: number;
@@ -52,7 +52,7 @@ export async function loadDemoData(): Promise<DemoDataResult> {
 
   await databaseApi.createRecord("business_settings", {
     business_name: "Demo Cafe",
-    business_type: "Cafe",
+    business_type: "Cafe / bar",
     location: "Athens",
     timezone: "Europe/Athens",
     week_starts_on: 1,
@@ -69,7 +69,7 @@ export async function loadDemoData(): Promise<DemoDataResult> {
   await createEmployeeWorkRules(employees);
   await createEmployeeConstraints(employees);
   await createEmployeeShiftAvailability(employees, shifts);
-  await createTimeOff(employees);
+  await createTimeOff();
   const staffingRequirementCount = await createStaffingRequirements(
     roles,
     shifts
@@ -242,11 +242,11 @@ async function createEmployees(): Promise<Record<EmployeeKey, string>> {
       email: "nikos@example.local"
     },
     {
-      key: "anna",
-      firstName: "Anna",
-      lastName: "Georgiou",
+      key: "sofia",
+      firstName: "Sofia",
+      lastName: "Markaki",
       phone: "6900000005",
-      email: "anna@example.local"
+      email: "sofia@example.local"
     },
     {
       key: "kostas",
@@ -256,18 +256,18 @@ async function createEmployees(): Promise<Record<EmployeeKey, string>> {
       email: "kostas@example.local"
     },
     {
+      key: "anna",
+      firstName: "Anna",
+      lastName: "Georgiou",
+      phone: "6900000007",
+      email: "anna@example.local"
+    },
+    {
       key: "dimitris",
       firstName: "Dimitris",
       lastName: "Ioannou",
-      phone: "6900000007",
-      email: "dimitris@example.local"
-    },
-    {
-      key: "sofia",
-      firstName: "Sofia",
-      lastName: "Markaki",
       phone: "6900000008",
-      email: "sofia@example.local"
+      email: "dimitris@example.local"
     }
   ];
   const employees = {} as Record<EmployeeKey, string>;
@@ -303,66 +303,53 @@ async function createEmployeeRoles(
     {
       employee: "maria",
       roles: [
-        { role: "manager", experienceLevel: "some_experience", canLeadRole: true },
-        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "cashier", experienceLevel: "some_experience", canLeadRole: true },
-        { role: "waiter", experienceLevel: "some_experience" }
+        { role: "cashier", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "bar", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "giorgos",
       roles: [
-        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "bar", experienceLevel: "some_experience" },
-        { role: "cashier", experienceLevel: "no_experience" }
+        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "eleni",
       roles: [
-        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "manager", experienceLevel: "some_experience" },
-        { role: "cashier", experienceLevel: "some_experience" },
-        { role: "bar", experienceLevel: "some_experience" }
+        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "nikos",
       roles: [
-        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "waiter", experienceLevel: "no_experience" }
+        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "anna",
       roles: [
-        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "manager", experienceLevel: "experienced", canLeadRole: true },
-        { role: "cashier", experienceLevel: "some_experience" }
+        { role: "bar", experienceLevel: "some_experience", isPreferredRole: true },
+        { role: "manager", experienceLevel: "experienced", canLeadRole: true }
       ]
     },
     {
       employee: "kostas",
       roles: [
-        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
-        { role: "waiter", experienceLevel: "some_experience" },
-        { role: "cashier", experienceLevel: "no_experience" }
+        { role: "kitchen", experienceLevel: "some_experience", isPreferredRole: true },
+        { role: "waiter", experienceLevel: "no_experience" }
       ]
     },
     {
       employee: "dimitris",
       roles: [
-        { role: "bar", experienceLevel: "some_experience", isPreferredRole: true },
-        { role: "kitchen", experienceLevel: "some_experience" },
-        { role: "waiter", experienceLevel: "no_experience" }
+        { role: "waiter", experienceLevel: "some_experience", isPreferredRole: true },
+        { role: "cashier", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "sofia",
       roles: [
-        { role: "waiter", experienceLevel: "some_experience", isPreferredRole: true },
-        { role: "cashier", experienceLevel: "some_experience" },
-        { role: "bar", experienceLevel: "no_experience" }
+        { role: "waiter", experienceLevel: "some_experience", isPreferredRole: true }
       ]
     }
   ];
@@ -389,37 +376,44 @@ async function createEmployeeWorkRules(
 ): Promise<void> {
   const workRules: Array<{
     employee: EmployeeKey;
-    targetDays: number;
-    maxDays: number;
-    targetHours: number;
-    maxHours: number;
+    employmentType: "full_time" | "part_time" | "weekly_hours" | "custom";
+    contractDays: number;
+    preferredHoursPerDay: number;
+    contractHours: number;
     maxConsecutiveDays: number;
     canWorkWeekends: boolean;
   }> = [
-    { employee: "maria", targetDays: 5, maxDays: 6, targetHours: 38, maxHours: 48, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "giorgos", targetDays: 5, maxDays: 6, targetHours: 36, maxHours: 44, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "eleni", targetDays: 5, maxDays: 6, targetHours: 34, maxHours: 42, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "nikos", targetDays: 5, maxDays: 6, targetHours: 36, maxHours: 44, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "anna", targetDays: 5, maxDays: 6, targetHours: 34, maxHours: 42, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "kostas", targetDays: 5, maxDays: 6, targetHours: 34, maxHours: 42, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "dimitris", targetDays: 4, maxDays: 5, targetHours: 30, maxHours: 36, maxConsecutiveDays: 4, canWorkWeekends: true },
-    { employee: "sofia", targetDays: 4, maxDays: 5, targetHours: 30, maxHours: 36, maxConsecutiveDays: 4, canWorkWeekends: true }
+    { employee: "maria", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "giorgos", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "eleni", employmentType: "part_time", contractDays: 5, preferredHoursPerDay: 6, contractHours: 30, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "nikos", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "anna", employmentType: "part_time", contractDays: 5, preferredHoursPerDay: 6, contractHours: 30, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "kostas", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
+    { employee: "dimitris", employmentType: "weekly_hours", contractDays: 4, preferredHoursPerDay: 8, contractHours: 32, maxConsecutiveDays: 4, canWorkWeekends: true },
+    { employee: "sofia", employmentType: "part_time", contractDays: 4, preferredHoursPerDay: 6, contractHours: 24, maxConsecutiveDays: 4, canWorkWeekends: true }
   ];
 
   for (const rule of workRules) {
+    const maxDays = Math.min(7, rule.contractDays + 1);
+    const maxHours = rule.contractHours + 4;
+
     await databaseApi.createRecord("employee_work_rules", {
       employee_id: employees[rule.employee],
-      min_days_per_week: 2,
-      max_days_per_week: rule.maxDays,
-      target_days_per_week: rule.targetDays,
-      min_hours_per_week: 12,
-      max_hours_per_week: rule.maxHours,
-      target_hours_per_week: rule.targetHours,
+      employment_type: rule.employmentType,
+      contract_days_per_week: rule.contractDays,
+      contract_hours_per_week: rule.contractHours,
+      preferred_hours_per_day: rule.preferredHoursPerDay,
+      min_days_per_week: null,
+      max_days_per_week: maxDays,
+      target_days_per_week: rule.contractDays,
+      min_hours_per_week: null,
+      max_hours_per_week: maxHours,
+      target_hours_per_week: rule.contractHours,
       max_consecutive_days: rule.maxConsecutiveDays,
       can_work_weekends: rule.canWorkWeekends,
-      max_shifts_per_week: rule.maxDays,
+      max_shifts_per_week: maxDays,
       min_hours_between_shifts: null,
-      preferred_hours_per_week: rule.targetHours,
+      preferred_hours_per_week: rule.contractHours,
       notes: "Demo work rules"
     });
   }
@@ -435,13 +429,7 @@ async function createEmployeeConstraints(
     notes: string;
   }> = [
     { employee: "giorgos", dayOfWeek: 0, type: "cannot_work", notes: "Family day" },
-    { employee: "nikos", dayOfWeek: 5, type: "cannot_work", notes: "School" },
-    { employee: "maria", dayOfWeek: 1, type: "prefers_to_work", notes: "Prefers Monday leadership shift" },
-    { employee: "anna", dayOfWeek: 6, type: "prefers_to_work", notes: "Likes Saturday shifts" },
-    { employee: "eleni", dayOfWeek: 6, type: "prefers_not_to_work", notes: "Avoid Saturday when possible" },
-    { employee: "kostas", dayOfWeek: 0, type: "prefers_not_to_work", notes: "Avoid Sunday when possible" },
-    { employee: "dimitris", dayOfWeek: 4, type: "prefers_to_work", notes: "Prefers Thursday" },
-    { employee: "sofia", dayOfWeek: 2, type: "prefers_not_to_work", notes: "Avoid Tuesday when possible" }
+    { employee: "dimitris", dayOfWeek: 0, type: "cannot_work", notes: "Family day" }
   ];
 
   for (const constraint of constraints) {
@@ -466,39 +454,46 @@ async function createEmployeeShiftAvailability(
     notes: string;
   }> = [
     {
-      employee: "maria",
-      days: [1, 2, 3, 4, 5],
-      shifts: ["evening"],
-      type: "cannot_work",
-      notes: "Demo: Maria is mostly morning-only on weekdays"
-    },
-    {
-      employee: "maria",
-      days: [6],
-      shifts: ["saturdayEvening"],
-      type: "cannot_work",
-      notes: "Demo: Maria avoids Saturday late shifts"
-    },
-    {
-      employee: "giorgos",
+      employee: "eleni",
       days: [1, 2, 3, 4, 5],
       shifts: ["morning"],
       type: "cannot_work",
-      notes: "Demo: Giorgos attends classes in the morning"
+      notes: "Demo: Eleni can only work weekday evenings"
     },
     {
-      employee: "giorgos",
+      employee: "eleni",
       days: [1, 2, 3, 4, 5],
       shifts: ["evening"],
       type: "prefers_to_work",
-      notes: "Demo: Giorgos prefers weekday evenings"
+      notes: "Demo: Eleni prefers weekday evenings"
     },
     {
       employee: "eleni",
       days: [6],
       shifts: ["saturdayEvening"],
+      type: "available",
+      notes: "Demo: Eleni can work Saturday evening if needed"
+    },
+    {
+      employee: "sofia",
+      days: [1, 2, 3, 4, 5],
+      shifts: ["morning"],
+      type: "prefers_to_work",
+      notes: "Demo: Sofia prefers weekday mornings"
+    },
+    {
+      employee: "sofia",
+      days: [1, 2, 3, 4, 5],
+      shifts: ["evening"],
       type: "cannot_work",
-      notes: "Demo: Eleni cannot work Saturday evening"
+      notes: "Demo: Sofia cannot work weekday evenings"
+    },
+    {
+      employee: "sofia",
+      days: [0],
+      shifts: ["morning"],
+      type: "available",
+      notes: "Demo: Sofia can work Sunday morning"
     },
     {
       employee: "anna",
@@ -506,13 +501,6 @@ async function createEmployeeShiftAvailability(
       shifts: ["saturdayEvening"],
       type: "prefers_to_work",
       notes: "Demo: Anna prefers Saturday evening"
-    },
-    {
-      employee: "dimitris",
-      days: [1, 2, 3, 4, 5],
-      shifts: ["evening"],
-      type: "prefers_not_to_work",
-      notes: "Demo: Dimitris prefers to avoid weekday evenings"
     }
   ];
 
@@ -531,41 +519,8 @@ async function createEmployeeShiftAvailability(
   }
 }
 
-async function createTimeOff(employees: Record<EmployeeKey, string>): Promise<void> {
-  const entries: Array<{
-    employee: EmployeeKey;
-    type: string;
-    startDate: string;
-    endDate: string;
-    reason: string;
-  }> = [
-    {
-      employee: "sofia",
-      type: "vacation",
-      startDate: "2026-05-15",
-      endDate: "2026-05-16",
-      reason: "Demo vacation"
-    },
-    {
-      employee: "nikos",
-      type: "personal",
-      startDate: "2026-05-13",
-      endDate: "2026-05-13",
-      reason: "Demo personal day"
-    }
-  ];
-
-  for (const entry of entries) {
-    await databaseApi.createRecord("time_off", {
-      employee_id: employees[entry.employee],
-      type: entry.type,
-      start_date: entry.startDate,
-      end_date: entry.endDate,
-      reason: entry.reason,
-      status: "recorded",
-      notes: null
-    });
-  }
+async function createTimeOff(): Promise<void> {
+  // Keep demo absences empty so the availability examples stay easy to inspect.
 }
 
 async function createStaffingRequirements(

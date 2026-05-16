@@ -129,6 +129,10 @@ CREATE TABLE IF NOT EXISTS employee_roles (
 CREATE TABLE IF NOT EXISTS employee_work_rules (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL,
+  employment_type TEXT NOT NULL DEFAULT 'custom' CHECK (employment_type IN ('full_time', 'part_time', 'weekly_hours', 'custom')),
+  contract_days_per_week INTEGER,
+  contract_hours_per_week REAL,
+  preferred_hours_per_day REAL,
   min_days_per_week INTEGER,
   max_days_per_week INTEGER,
   target_days_per_week INTEGER,

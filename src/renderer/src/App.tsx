@@ -28,6 +28,7 @@ import type {
   StaffingRequirement,
   TimeOff,
   DayOfWeek,
+  EmploymentType,
   ExperienceLevel
 } from "../types";
 import {
@@ -139,7 +140,7 @@ const pages: Page[] = [
   },
   {
     id: "employees",
-    title: "Employees",
+    title: "Εργαζόμενοι",
     description: "Θα υλοποιηθεί σε επόμενη φάση."
   },
   {
@@ -342,7 +343,7 @@ export function App() {
 
   async function handleLoadDemoData() {
     const confirmed = window.confirm(
-      "Load Demo Data will replace the current local data with Demo Cafe sample data. Continue?"
+      "Η φόρτωση demo δεδομένων θα αντικαταστήσει τα τρέχοντα τοπικά δεδομένα με το Demo Cafe. Συνέχεια;"
     );
 
     if (!confirmed) {
@@ -361,7 +362,7 @@ export function App() {
       setActivePageId("dashboard");
       setAppState("ready");
       setNotice(
-        `Demo Cafe loaded: ${result.employeeCount} employees, ${result.roleCount} roles, ${result.staffingRequirementCount} staffing requirements.`
+        `Το Demo Cafe φορτώθηκε: ${result.employeeCount} εργαζόμενοι, ${result.roleCount} ρόλοι, ${result.staffingRequirementCount} ανάγκες προσωπικού.`
       );
     } catch (error) {
       setErrors([getErrorMessage(error)]);
@@ -521,11 +522,11 @@ function SetupWizard({
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-semibold tracking-normal text-emerald-950">
-                Quick test data
+                Δοκιμαστικά δεδομένα
               </h2>
               <p className="mt-1 text-sm text-emerald-800">
-                Load Demo Cafe with roles, employees, constraints, time off and
-                staffing requirements.
+                Φορτώστε το Demo Cafe με ρόλους, εργαζομένους, λίγους καθαρούς
+                περιορισμούς και ανάγκες προσωπικού.
               </p>
             </div>
             <button
@@ -534,7 +535,7 @@ function SetupWizard({
               disabled={isLoadingDemoData}
               className={secondaryButtonClassName}
             >
-              {isLoadingDemoData ? "Loading demo..." : "Load Demo Data"}
+              {isLoadingDemoData ? "Φόρτωση demo..." : "Φόρτωση demo δεδομένων"}
             </button>
           </div>
         </div>
@@ -1051,12 +1052,10 @@ type StaffingRequirementGroup = {
 };
 
 type EmployeeWorkRulesForm = {
-  minDaysPerWeek: string;
-  maxDaysPerWeek: string;
-  targetDaysPerWeek: string;
-  minHoursPerWeek: string;
-  maxHoursPerWeek: string;
-  targetHoursPerWeek: string;
+  employmentType: EmploymentType;
+  contractDaysPerWeek: string;
+  preferredHoursPerDay: string;
+  contractHoursPerWeek: string;
   maxConsecutiveDays: string;
   canWorkWeekends: boolean;
 };
@@ -2875,7 +2874,7 @@ function EmployeesPage({
         : await databaseApi.createRecord("employees", payload);
 
       if (!employee) {
-        throw new Error("Employee could not be saved.");
+        throw new Error("Δεν ήταν δυνατή η αποθήκευση εργαζομένου.");
       }
 
       await syncEmployeeRoleAssignments(
@@ -2888,7 +2887,11 @@ function EmployeesPage({
         form.workRules,
         employeeWorkRules
       );
-      await onChanged(editingEmployeeId ? "Employee updated." : "Employee added.");
+      await onChanged(
+        editingEmployeeId
+          ? "Ο εργαζόμενος ενημερώθηκε."
+          : "Ο εργαζόμενος προστέθηκε."
+      );
 
       setEditingEmployeeId(null);
       setForm(createEmployeeForm());
@@ -2914,7 +2917,9 @@ function EmployeesPage({
       }
 
       await onChanged(
-        nextIsActive ? "Employee reactivated." : "Employee deactivated."
+        nextIsActive
+          ? "Ο εργαζόμενος ενεργοποιήθηκε."
+          : "Ο εργαζόμενος απενεργοποιήθηκε."
       );
     } catch (error) {
       setErrors([getErrorMessage(error)]);
@@ -2985,22 +2990,22 @@ function EmployeesPage({
   return (
     <div className="max-w-7xl">
       <SectionHeading
-        title="Employees"
-        description="Manage employee records, role assignments, and weekly working limits. Availability constraints and scheduling are not part of this phase."
+        title="Εργαζόμενοι"
+        description="Διαχείριση στοιχείων εργαζομένων, ρόλων και κανόνων εργασίας."
       />
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
       {roles.length === 0 ? (
         <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          Add custom roles before assigning employee roles.
+          Προσθέστε ρόλους πριν τους αναθέσετε σε εργαζομένους.
         </div>
       ) : null}
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
-            {editingEmployeeId ? "Edit employee" : "Add employee"}
+            {editingEmployeeId ? "Επεξεργασία εργαζομένου" : "Προσθήκη εργαζομένου"}
           </h3>
           {editingEmployeeId ? (
             <button
@@ -3008,13 +3013,13 @@ function EmployeesPage({
               onClick={resetForm}
               className={secondaryButtonClassName}
             >
-              Cancel edit
+              Ακύρωση
             </button>
           ) : null}
         </div>
 
         <div className="mt-4 grid grid-cols-3 gap-4">
-          <Field label="First name" required>
+          <Field label="Όνομα" required>
             <input
               value={form.firstName}
               onChange={(event) =>
@@ -3024,7 +3029,7 @@ function EmployeesPage({
               placeholder="Alex"
             />
           </Field>
-          <Field label="Last name" required>
+          <Field label="Επώνυμο" required>
             <input
               value={form.lastName}
               onChange={(event) =>
@@ -3034,7 +3039,7 @@ function EmployeesPage({
               placeholder="Papadopoulos"
             />
           </Field>
-          <Field label="Status">
+          <Field label="Κατάσταση">
             <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -3044,10 +3049,10 @@ function EmployeesPage({
                 }
                 className="h-4 w-4"
               />
-              Active
+              Ενεργός
             </label>
           </Field>
-          <Field label="Phone">
+          <Field label="Τηλέφωνο">
             <input
               value={form.phone}
               onChange={(event) =>
@@ -3068,7 +3073,7 @@ function EmployeesPage({
               placeholder="name@example.com"
             />
           </Field>
-          <Field label="Notes">
+          <Field label="Σημειώσεις">
             <input
               value={form.notes}
               onChange={(event) =>
@@ -3083,11 +3088,11 @@ function EmployeesPage({
         <div className="mt-6 grid grid-cols-[1fr_1.4fr] gap-5">
           <div>
             <h4 className="text-sm font-semibold text-slate-800">
-              Role assignments
+              Ρόλοι εργαζομένου
             </h4>
             <div className="mt-3 grid grid-cols-2 gap-2">
               {roles.length === 0 ? (
-                <p className="text-sm text-slate-500">No roles available.</p>
+                <p className="text-sm text-slate-500">Δεν υπάρχουν διαθέσιμοι ρόλοι.</p>
               ) : (
                 roles.map((role) => {
                   const isSelected = form.roleIds.includes(role.id);
@@ -3117,7 +3122,7 @@ function EmployeesPage({
                         />
                         <span>{role.name}</span>
                         {!role.is_active ? (
-                          <span className="text-xs text-slate-400">inactive</span>
+                          <span className="text-xs text-slate-400">ανενεργός</span>
                         ) : null}
                       </label>
 
@@ -3151,7 +3156,7 @@ function EmployeesPage({
                                 })
                               }
                             />
-                            Can lead this role
+                            Μπορεί να είναι υπεύθυνος ρόλου
                           </label>
                           <label className="flex items-center gap-2 text-xs text-slate-600">
                             <input
@@ -3163,7 +3168,7 @@ function EmployeesPage({
                                 })
                               }
                             />
-                            Preferred role
+                            Προτιμώμενος ρόλος
                           </label>
                         </div>
                       ) : null}
@@ -3175,70 +3180,94 @@ function EmployeesPage({
           </div>
 
           <div>
-            <h4 className="text-sm font-semibold text-slate-800">Work rules</h4>
-            <div className="mt-3 grid grid-cols-3 gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-sm font-semibold text-slate-800">
+                Σύμβαση / Κανόνες εργασίας
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {employmentPatternPresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        workRules: applyEmploymentPatternPreset(
+                          form.workRules,
+                          preset.id
+                        )
+                      })
+                    }
+                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-3">
+              <Field label="Τύπος απασχόλησης">
+                <select
+                  value={form.workRules.employmentType}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      workRules: applyEmploymentTypeDefaults(
+                        form.workRules,
+                        event.target.value as EmploymentType
+                      )
+                    })
+                  }
+                  className={inputClassName}
+                >
+                  {employmentTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <NumberField
-                label="Min days/week"
-                value={form.workRules.minDaysPerWeek}
+                label="Ημέρες / εβδομάδα"
+                value={form.workRules.contractDaysPerWeek}
                 onChange={(value) =>
                   setForm({
                     ...form,
-                    workRules: { ...form.workRules, minDaysPerWeek: value }
+                    workRules: {
+                      ...form.workRules,
+                      contractDaysPerWeek: value
+                    }
                   })
                 }
               />
               <NumberField
-                label="Target days/week"
-                value={form.workRules.targetDaysPerWeek}
+                label="Ώρες / ημέρα"
+                value={form.workRules.preferredHoursPerDay}
                 onChange={(value) =>
                   setForm({
                     ...form,
-                    workRules: { ...form.workRules, targetDaysPerWeek: value }
+                    workRules: {
+                      ...form.workRules,
+                      preferredHoursPerDay: value
+                    }
                   })
                 }
               />
               <NumberField
-                label="Max days/week"
-                value={form.workRules.maxDaysPerWeek}
+                label="Ώρες / εβδομάδα"
+                value={form.workRules.contractHoursPerWeek}
                 onChange={(value) =>
                   setForm({
                     ...form,
-                    workRules: { ...form.workRules, maxDaysPerWeek: value }
+                    workRules: {
+                      ...form.workRules,
+                      contractHoursPerWeek: value
+                    }
                   })
                 }
               />
               <NumberField
-                label="Min hours/week"
-                value={form.workRules.minHoursPerWeek}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: { ...form.workRules, minHoursPerWeek: value }
-                  })
-                }
-              />
-              <NumberField
-                label="Target hours/week"
-                value={form.workRules.targetHoursPerWeek}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: { ...form.workRules, targetHoursPerWeek: value }
-                  })
-                }
-              />
-              <NumberField
-                label="Max hours/week"
-                value={form.workRules.maxHoursPerWeek}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: { ...form.workRules, maxHoursPerWeek: value }
-                  })
-                }
-              />
-              <NumberField
-                label="Max consecutive days"
+                label="Μέγιστες συνεχόμενες ημέρες"
                 value={form.workRules.maxConsecutiveDays}
                 onChange={(value) =>
                   setForm({
@@ -3262,7 +3291,7 @@ function EmployeesPage({
                   }
                   className="h-4 w-4"
                 />
-                Can work weekends
+                Μπορεί να δουλεύει Σαββατοκύριακο
               </label>
             </div>
           </div>
@@ -3275,40 +3304,40 @@ function EmployeesPage({
           className="mt-6 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
         >
           {isSaving
-            ? "Saving..."
+            ? "Αποθήκευση..."
             : editingEmployeeId
-              ? "Save employee"
-              : "Add employee"}
+              ? "Αποθήκευση εργαζομένου"
+              : "Προσθήκη εργαζομένου"}
         </button>
       </div>
 
       <div className="mt-6 flex items-end justify-between gap-4">
-        <Field label="Search employees">
+        <Field label="Αναζήτηση εργαζομένων">
           <input
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             className={`${inputClassName} w-96`}
-            placeholder="Search by name, phone, email, or notes"
+            placeholder="Αναζήτηση με όνομα, τηλέφωνο, email ή σημειώσεις"
           />
         </Field>
         <p className="pb-2 text-sm text-slate-500">
-          Showing {filteredEmployees.length} of {employees.length}
+          Εμφάνιση {filteredEmployees.length} από {employees.length}
         </p>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid grid-cols-[1.1fr_1.1fr_1.4fr_1.4fr_110px_190px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Employee</span>
-          <span>Contact</span>
-          <span>Roles</span>
-          <span>Work rules</span>
-          <span>Status</span>
-          <span>Actions</span>
+          <span>Εργαζόμενος</span>
+          <span>Επικοινωνία</span>
+          <span>Ρόλοι</span>
+          <span>Σύμβαση</span>
+          <span>Κατάσταση</span>
+          <span>Ενέργειες</span>
         </div>
 
         {filteredEmployees.length === 0 ? (
           <p className="px-5 py-5 text-sm text-slate-500">
-            No employees match the current filter.
+            Δεν βρέθηκαν εργαζόμενοι με αυτό το φίλτρο.
           </p>
         ) : (
           filteredEmployees.map((employee) => {
@@ -3330,12 +3359,12 @@ function EmployeesPage({
                     {employee.first_name} {employee.last_name}
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
-                    {employee.notes || "No notes"}
+                    {employee.notes || "Χωρίς σημειώσεις"}
                   </p>
                 </div>
                 <div className="text-sm text-slate-600">
-                  <p>{employee.phone || "No phone"}</p>
-                  <p className="mt-1">{employee.email || "No email"}</p>
+                  <p>{employee.phone || "Χωρίς τηλέφωνο"}</p>
+                  <p className="mt-1">{employee.email || "Χωρίς email"}</p>
                 </div>
                 <p className="text-sm text-slate-600">
                   {employeeRoleLabels(assignedRoleIds, roles)}
@@ -3350,14 +3379,14 @@ function EmployeesPage({
                     onClick={() => startEditing(employee)}
                     className={secondaryButtonClassName}
                   >
-                    Edit
+                    Επεξεργασία
                   </button>
                   <button
                     type="button"
                     onClick={() => void toggleEmployeeActive(employee)}
                     className={secondaryButtonClassName}
                   >
-                    {employee.is_active ? "Deactivate" : "Reactivate"}
+                    {employee.is_active ? "Απενεργοποίηση" : "Ενεργοποίηση"}
                   </button>
                 </div>
               </div>
@@ -5575,6 +5604,30 @@ const shiftAvailabilityOptions: Array<{
   { value: "prefers_to_work", label: "Προτιμά να δουλέψει" }
 ];
 
+const employmentTypeOptions: Array<{
+  value: EmploymentType;
+  label: string;
+}> = [
+  { value: "full_time", label: "Πλήρης απασχόληση" },
+  { value: "part_time", label: "Μερική απασχόληση" },
+  {
+    value: "weekly_hours",
+    label: "Συμφωνημένες εβδομαδιαίες ώρες"
+  },
+  { value: "custom", label: "Custom" }
+];
+
+type EmploymentPatternPresetId = "full_time_8h" | "part_time_6h" | "part_time_4h";
+
+const employmentPatternPresets: Array<{
+  id: EmploymentPatternPresetId;
+  label: string;
+}> = [
+  { id: "full_time_8h", label: "5x8" },
+  { id: "part_time_6h", label: "5x6" },
+  { id: "part_time_4h", label: "5x4" }
+];
+
 const timeOffTypes = [
   { value: "day_off", label: "Day off" },
   { value: "vacation", label: "Vacation" },
@@ -5708,17 +5761,84 @@ function createEmployeeForm(): EmployeeForm {
     notes: "",
     roleIds: [],
     roleDetails: {},
-    workRules: {
-      minDaysPerWeek: "",
-      maxDaysPerWeek: "",
-      targetDaysPerWeek: "",
-      minHoursPerWeek: "",
-      maxHoursPerWeek: "",
-      targetHoursPerWeek: "",
-      maxConsecutiveDays: "",
-      canWorkWeekends: true
-    }
+    workRules: createDefaultWorkRulesForm()
   };
+}
+
+function createDefaultWorkRulesForm(): EmployeeWorkRulesForm {
+  return {
+    employmentType: "full_time",
+    contractDaysPerWeek: "5",
+    preferredHoursPerDay: "8",
+    contractHoursPerWeek: "40",
+    maxConsecutiveDays: "5",
+    canWorkWeekends: true
+  };
+}
+
+function applyEmploymentTypeDefaults(
+  current: EmployeeWorkRulesForm,
+  employmentType: EmploymentType
+): EmployeeWorkRulesForm {
+  if (employmentType === "full_time") {
+    return {
+      ...current,
+      employmentType,
+      contractDaysPerWeek: "5",
+      preferredHoursPerDay: "8",
+      contractHoursPerWeek: "40",
+      maxConsecutiveDays: current.maxConsecutiveDays || "5"
+    };
+  }
+
+  if (employmentType === "part_time") {
+    return {
+      ...current,
+      employmentType,
+      contractDaysPerWeek: "5",
+      preferredHoursPerDay: "6",
+      contractHoursPerWeek: "30",
+      maxConsecutiveDays: current.maxConsecutiveDays || "5"
+    };
+  }
+
+  if (employmentType === "weekly_hours") {
+    return {
+      ...current,
+      employmentType,
+      contractDaysPerWeek: current.contractDaysPerWeek || "5",
+      preferredHoursPerDay: current.preferredHoursPerDay || "",
+      contractHoursPerWeek: current.contractHoursPerWeek || "32",
+      maxConsecutiveDays: current.maxConsecutiveDays || "5"
+    };
+  }
+
+  return {
+    ...current,
+    employmentType
+  };
+}
+
+function applyEmploymentPatternPreset(
+  current: EmployeeWorkRulesForm,
+  presetId: EmploymentPatternPresetId
+): EmployeeWorkRulesForm {
+  if (presetId === "full_time_8h") {
+    return applyEmploymentTypeDefaults(current, "full_time");
+  }
+
+  if (presetId === "part_time_4h") {
+    return {
+      ...current,
+      employmentType: "part_time",
+      contractDaysPerWeek: "5",
+      preferredHoursPerDay: "4",
+      contractHoursPerWeek: "20",
+      maxConsecutiveDays: current.maxConsecutiveDays || "5"
+    };
+  }
+
+  return applyEmploymentTypeDefaults(current, "part_time");
 }
 
 function employeeToForm(
@@ -5749,84 +5869,97 @@ function employeeToForm(
     notes: employee.notes ?? "",
     roleIds: assignedRoles.map((employeeRole) => employeeRole.role_id),
     roleDetails,
-    workRules: {
-      minDaysPerWeek: optionalNumberToString(workRules?.min_days_per_week),
-      maxDaysPerWeek: optionalNumberToString(workRules?.max_days_per_week),
-      targetDaysPerWeek: optionalNumberToString(workRules?.target_days_per_week),
-      minHoursPerWeek: optionalNumberToString(workRules?.min_hours_per_week),
-      maxHoursPerWeek: optionalNumberToString(workRules?.max_hours_per_week),
-      targetHoursPerWeek: optionalNumberToString(
-        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week
-      ),
-      maxConsecutiveDays: optionalNumberToString(
-        workRules?.max_consecutive_days
-      ),
-      canWorkWeekends: workRules?.can_work_weekends !== 0
-    }
+    workRules: workRulesToForm(workRules)
   };
+}
+
+function workRulesToForm(
+  workRules: EmployeeWorkRules | null
+): EmployeeWorkRulesForm {
+  const defaultForm = createDefaultWorkRulesForm();
+
+  if (!workRules) {
+    return defaultForm;
+  }
+
+  const contractDays =
+    workRules.contract_days_per_week ??
+    workRules.target_days_per_week ??
+    workRules.max_days_per_week ??
+    5;
+  const contractHours =
+    workRules.contract_hours_per_week ??
+    workRules.target_hours_per_week ??
+    workRules.preferred_hours_per_week ??
+    workRules.max_hours_per_week ??
+    40;
+  const preferredHoursPerDay =
+    workRules.preferred_hours_per_day ??
+    (contractDays > 0 ? contractHours / contractDays : null);
+
+  return {
+    employmentType: normalizeEmploymentType(workRules.employment_type),
+    contractDaysPerWeek: optionalNumberToString(contractDays),
+    preferredHoursPerDay: optionalNumberToString(preferredHoursPerDay),
+    contractHoursPerWeek: optionalNumberToString(contractHours),
+    maxConsecutiveDays: optionalNumberToString(
+      workRules.max_consecutive_days ?? Math.min(5, contractDays)
+    ),
+    canWorkWeekends: workRules.can_work_weekends !== 0
+  };
+}
+
+function normalizeEmploymentType(value: unknown): EmploymentType {
+  return value === "full_time" ||
+    value === "part_time" ||
+    value === "weekly_hours" ||
+    value === "custom"
+    ? value
+    : "custom";
 }
 
 function validateEmployeeForm(form: EmployeeForm): string[] {
   const errors: string[] = [];
 
   if (!form.firstName.trim()) {
-    errors.push("First name is required.");
+    errors.push("Το όνομα είναι υποχρεωτικό.");
   }
 
   if (!form.lastName.trim()) {
-    errors.push("Last name is required.");
+    errors.push("Το επώνυμο είναι υποχρεωτικό.");
   }
 
   if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-    errors.push("Enter a valid email address.");
+    errors.push("Συμπληρώστε έγκυρο email.");
   }
 
-  const minDays = parseOptionalNumber(form.workRules.minDaysPerWeek);
-  const targetDays = parseOptionalNumber(form.workRules.targetDaysPerWeek);
-  const maxDays = parseOptionalNumber(form.workRules.maxDaysPerWeek);
-  const minHours = parseOptionalNumber(form.workRules.minHoursPerWeek);
-  const targetHours = parseOptionalNumber(form.workRules.targetHoursPerWeek);
-  const maxHours = parseOptionalNumber(form.workRules.maxHoursPerWeek);
+  const contractDays = parseOptionalNumber(form.workRules.contractDaysPerWeek);
+  const preferredHoursPerDay = parseOptionalNumber(
+    form.workRules.preferredHoursPerDay
+  );
+  const contractHours = parseOptionalNumber(form.workRules.contractHoursPerWeek);
   const maxConsecutiveDays = parseOptionalNumber(
     form.workRules.maxConsecutiveDays
   );
 
-  for (const [label, value] of [
-    ["Min days/week", minDays],
-    ["Target days/week", targetDays],
-    ["Max days/week", maxDays],
-    ["Min hours/week", minHours],
-    ["Target hours/week", targetHours],
-    ["Max hours/week", maxHours],
-    ["Max consecutive days", maxConsecutiveDays]
-  ] as Array<[string, number | null]>) {
-    if (value !== null && value < 0) {
-      errors.push(`${label} cannot be negative.`);
-    }
+  if (contractDays === null || contractDays < 1 || contractDays > 7) {
+    errors.push("Οι ημέρες / εβδομάδα πρέπει να είναι από 1 έως 7.");
   }
 
-  if (minDays !== null && maxDays !== null && minDays > maxDays) {
-    errors.push("Min days/week cannot be greater than max days/week.");
+  if (preferredHoursPerDay === null || preferredHoursPerDay <= 0) {
+    errors.push("Οι ώρες / ημέρα πρέπει να είναι θετικός αριθμός.");
+  }
+
+  if (contractHours === null || contractHours <= 0) {
+    errors.push("Οι ώρες / εβδομάδα πρέπει να είναι θετικός αριθμός.");
   }
 
   if (
-    targetDays !== null &&
-    ((minDays !== null && targetDays < minDays) ||
-      (maxDays !== null && targetDays > maxDays))
+    maxConsecutiveDays === null ||
+    maxConsecutiveDays < 1 ||
+    maxConsecutiveDays > 7
   ) {
-    errors.push("Target days/week must sit between min and max days/week.");
-  }
-
-  if (minHours !== null && maxHours !== null && minHours > maxHours) {
-    errors.push("Min hours/week cannot be greater than max hours/week.");
-  }
-
-  if (
-    targetHours !== null &&
-    ((minHours !== null && targetHours < minHours) ||
-      (maxHours !== null && targetHours > maxHours))
-  ) {
-    errors.push("Target hours/week must sit between min and max hours/week.");
+    errors.push("Οι μέγιστες συνεχόμενες ημέρες πρέπει να είναι από 1 έως 7.");
   }
 
   return errors;
@@ -5891,20 +6024,31 @@ async function upsertEmployeeWorkRules(
   const existingWorkRules = allWorkRules.find(
     (workRules) => workRules.employee_id === employeeId
   );
-  const targetHours = parseOptionalNumber(form.targetHoursPerWeek);
+  const contractDays = parseOptionalNumber(form.contractDaysPerWeek) ?? 5;
+  const contractHours = parseOptionalNumber(form.contractHoursPerWeek) ?? 40;
+  const preferredHoursPerDay =
+    parseOptionalNumber(form.preferredHoursPerDay) ??
+    (contractDays > 0 ? contractHours / contractDays : 8);
+  const maxConsecutiveDays = parseOptionalNumber(form.maxConsecutiveDays) ?? 5;
+  const derivedMaxDays = Math.min(7, contractDays + 1);
+  const derivedMaxHours = contractHours + 4;
   const payload = {
     employee_id: employeeId,
-    min_days_per_week: parseOptionalNumber(form.minDaysPerWeek),
-    max_days_per_week: parseOptionalNumber(form.maxDaysPerWeek),
-    target_days_per_week: parseOptionalNumber(form.targetDaysPerWeek),
-    min_hours_per_week: parseOptionalNumber(form.minHoursPerWeek),
-    max_hours_per_week: parseOptionalNumber(form.maxHoursPerWeek),
-    target_hours_per_week: targetHours,
-    max_consecutive_days: parseOptionalNumber(form.maxConsecutiveDays),
+    employment_type: form.employmentType,
+    contract_days_per_week: contractDays,
+    contract_hours_per_week: contractHours,
+    preferred_hours_per_day: preferredHoursPerDay,
+    min_days_per_week: null,
+    max_days_per_week: derivedMaxDays,
+    target_days_per_week: contractDays,
+    min_hours_per_week: null,
+    max_hours_per_week: derivedMaxHours,
+    target_hours_per_week: contractHours,
+    max_consecutive_days: maxConsecutiveDays,
     can_work_weekends: form.canWorkWeekends,
-    max_shifts_per_week: null,
+    max_shifts_per_week: derivedMaxDays,
     min_hours_between_shifts: null,
-    preferred_hours_per_week: targetHours,
+    preferred_hours_per_week: contractHours,
     notes: null
   };
 
@@ -5947,26 +6091,29 @@ function employeeRoleLabels(roleIds: string[], roles: Role[]): string {
 
 function workRulesSummary(workRules: EmployeeWorkRules | null): string {
   if (!workRules) {
-    return "No work rules";
+    return "Δεν έχουν οριστεί κανόνες εργασίας";
   }
 
-  const days = [
-    workRules.min_days_per_week,
-    workRules.target_days_per_week,
-    workRules.max_days_per_week
-  ]
-    .map((value) => value ?? "-")
-    .join("/");
-  const hours = [
-    workRules.min_hours_per_week,
-    workRules.target_hours_per_week ?? workRules.preferred_hours_per_week,
-    workRules.max_hours_per_week
-  ]
-    .map((value) => value ?? "-")
-    .join("/");
-  const weekends = workRules.can_work_weekends === 0 ? "no weekends" : "weekends ok";
+  const employmentType = employmentTypeOptions.find(
+    (option) => option.value === normalizeEmploymentType(workRules.employment_type)
+  )?.label;
+  const days =
+    workRules.contract_days_per_week ??
+    workRules.target_days_per_week ??
+    workRules.max_days_per_week ??
+    "-";
+  const hours =
+    workRules.contract_hours_per_week ??
+    workRules.target_hours_per_week ??
+    workRules.preferred_hours_per_week ??
+    "-";
+  const hoursPerDay = workRules.preferred_hours_per_day ?? "-";
+  const weekends =
+    workRules.can_work_weekends === 0
+      ? "όχι Σαββατοκύριακα"
+      : "Σαββατοκύριακα οκ";
 
-  return `Days ${days}, hours ${hours}, ${weekends}`;
+  return `${employmentType ?? "Custom"}: ${days} ημέρες, ${hoursPerDay} ώρες/ημέρα, ${hours} ώρες/εβδομάδα, ${weekends}`;
 }
 
 function renderPage(

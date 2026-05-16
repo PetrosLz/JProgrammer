@@ -5,8 +5,12 @@ import {
   type SchedulerData,
   getAssignedDayCount,
   getAssignedHours,
+  getContractDaysPerWeek,
+  getContractHoursPerWeek,
   getConsecutiveDayCountIfAssigned,
   getDayConstraint,
+  getEffectiveMaxDaysPerWeek,
+  getEffectiveMaxHoursPerWeek,
   getEmployeeWorkRules,
   getEmployeeShiftAvailability,
   getNightShiftCount,
@@ -135,6 +139,10 @@ export function scoreCandidate({
   const details: ScoreDetail[] = [{ label: "Base score", points: baseScore }];
   const warnings: CandidateScoreWarning[] = [];
   const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
+  const contractHoursPerWeek = getContractHoursPerWeek(workRules);
+  const contractDaysPerWeek = getContractDaysPerWeek(workRules);
+  const maxHoursPerWeek = getEffectiveMaxHoursPerWeek(workRules);
+  const maxDaysPerWeek = getEffectiveMaxDaysPerWeek(workRules);
   const currentHours = getAssignedHours(employee.id, assignedShifts);
   const slotHours = getSlotDurationHours(slot);
   const projectedHours = currentHours + slotHours;
@@ -187,19 +195,17 @@ export function scoreCandidate({
   }
 
   if (
-    workRules?.target_hours_per_week !== null &&
-    workRules?.target_hours_per_week !== undefined &&
-    currentHours < workRules.target_hours_per_week
+    contractHoursPerWeek !== null &&
+    currentHours < contractHoursPerWeek
   ) {
-    add("Below target hours", scoreWeights.belowTargetHours);
+    add("Below contract hours", scoreWeights.belowTargetHours);
   }
 
   if (
-    workRules?.target_days_per_week !== null &&
-    workRules?.target_days_per_week !== undefined &&
-    currentDays < workRules.target_days_per_week
+    contractDaysPerWeek !== null &&
+    currentDays < contractDaysPerWeek
   ) {
-    add("Below target days", scoreWeights.belowTargetDays);
+    add("Below contract days", scoreWeights.belowTargetDays);
   }
 
   if (context && currentHours < context.averageAssignedHours) {
@@ -232,17 +238,15 @@ export function scoreCandidate({
   add("Good role fit", scoreWeights.goodRoleFit);
 
   if (
-    workRules?.max_hours_per_week !== null &&
-    workRules?.max_hours_per_week !== undefined &&
-    projectedHours >= workRules.max_hours_per_week * 0.85
+    maxHoursPerWeek !== null &&
+    projectedHours >= maxHoursPerWeek * 0.85
   ) {
     add("Close to max weekly hours", scoreWeights.closeToMaxHours);
   }
 
   if (
-    workRules?.max_days_per_week !== null &&
-    workRules?.max_days_per_week !== undefined &&
-    projectedDays >= workRules.max_days_per_week
+    maxDaysPerWeek !== null &&
+    projectedDays >= maxDaysPerWeek
   ) {
     add("Close to max weekly days", scoreWeights.closeToMaxDays);
   }

@@ -56,6 +56,16 @@ export {
   type SchedulerDiagnostics
 } from "./diagnostics";
 export {
+  buildScheduleFeasibilityAnalysis,
+  type FeasibilityBlockedReasons,
+  type FeasibilityDayCapacity,
+  type FeasibilityResult,
+  type FeasibilityRoleCapacity,
+  type FeasibilityShiftCapacity,
+  type FeasibilityShortage,
+  type FeasibilityStatus
+} from "./feasibility";
+export {
   assessRoleGroupQuality,
   employeeCanLeadRole,
   employeePrefersRole,
