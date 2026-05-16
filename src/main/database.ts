@@ -75,6 +75,8 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "start_time",
       "end_time",
       "required_count",
+      "minimum_experience_level",
+      "experienced_required_count",
       "priority",
       "is_active",
       "notes"
@@ -112,6 +114,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "employee_id",
       "role_id",
       "is_primary",
+      "experience_level",
       "skill_level",
       "can_lead_role",
       "is_preferred_role"
@@ -564,6 +567,12 @@ function applyCompatibilityMigrations(db: SqliteDatabase): void {
     "INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1))"
   );
   addColumnIfMissing(db, "staffing_requirements", "shift_template_id", "TEXT");
+  const addedEmployeeExperienceLevel = addColumnIfMissing(
+    db,
+    "employee_roles",
+    "experience_level",
+    "TEXT NOT NULL DEFAULT 'some_experience' CHECK (experience_level IN ('no_experience', 'some_experience', 'experienced'))"
+  );
   addColumnIfMissing(
     db,
     "employee_roles",
@@ -581,6 +590,28 @@ function applyCompatibilityMigrations(db: SqliteDatabase): void {
     "employee_roles",
     "is_preferred_role",
     "INTEGER NOT NULL DEFAULT 0 CHECK (is_preferred_role IN (0, 1))"
+  );
+  if (addedEmployeeExperienceLevel) {
+    db.exec(`
+      UPDATE employee_roles
+      SET experience_level = CASE
+        WHEN skill_level <= 2 THEN 'no_experience'
+        WHEN skill_level >= 4 THEN 'experienced'
+        ELSE 'some_experience'
+      END
+    `);
+  }
+  addColumnIfMissing(
+    db,
+    "staffing_requirements",
+    "minimum_experience_level",
+    "TEXT NOT NULL DEFAULT 'no_experience' CHECK (minimum_experience_level IN ('no_experience', 'some_experience', 'experienced'))"
+  );
+  addColumnIfMissing(
+    db,
+    "staffing_requirements",
+    "experienced_required_count",
+    "INTEGER NOT NULL DEFAULT 0 CHECK (experienced_required_count >= 0)"
   );
   addColumnIfMissing(
     db,
@@ -647,14 +678,15 @@ function addColumnIfMissing(
   tableName: string,
   columnName: string,
   definition: string
-): void {
+): boolean {
   const columns = db
     .prepare(`PRAGMA table_info(${tableName})`)
     .all() as Array<{ name: string }>;
 
   if (columns.some((column) => column.name === columnName)) {
-    return;
+    return false;
   }
 
   db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`).run();
+  return true;
 }

@@ -1,5 +1,10 @@
 import { databaseApi } from "./databaseApi";
-import type { CrudTableName, DayOfWeek } from "../types";
+import {
+  experienceLevelToLegacySkillLevel,
+  type CrudTableName,
+  type DayOfWeek,
+  type ExperienceLevel
+} from "../types";
 
 type RoleKey = "bar" | "waiter" | "kitchen" | "cashier" | "manager";
 type ShiftKey = "morning" | "evening" | "saturdayEvening";
@@ -290,7 +295,7 @@ async function createEmployeeRoles(
     employee: EmployeeKey;
     roles: Array<{
       role: RoleKey;
-      skillLevel: number;
+      experienceLevel: ExperienceLevel;
       canLeadRole?: boolean;
       isPreferredRole?: boolean;
     }>;
@@ -298,66 +303,66 @@ async function createEmployeeRoles(
     {
       employee: "maria",
       roles: [
-        { role: "manager", skillLevel: 5, canLeadRole: true },
-        { role: "bar", skillLevel: 5, canLeadRole: true, isPreferredRole: true },
-        { role: "cashier", skillLevel: 4, canLeadRole: true },
-        { role: "waiter", skillLevel: 3 }
+        { role: "manager", experienceLevel: "some_experience", canLeadRole: true },
+        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "cashier", experienceLevel: "some_experience", canLeadRole: true },
+        { role: "waiter", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "giorgos",
       roles: [
-        { role: "waiter", skillLevel: 4, canLeadRole: true, isPreferredRole: true },
-        { role: "bar", skillLevel: 3 },
-        { role: "cashier", skillLevel: 2 }
+        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "bar", experienceLevel: "some_experience" },
+        { role: "cashier", experienceLevel: "no_experience" }
       ]
     },
     {
       employee: "eleni",
       roles: [
-        { role: "waiter", skillLevel: 5, canLeadRole: true, isPreferredRole: true },
-        { role: "manager", skillLevel: 3 },
-        { role: "cashier", skillLevel: 3 },
-        { role: "bar", skillLevel: 3 }
+        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "manager", experienceLevel: "some_experience" },
+        { role: "cashier", experienceLevel: "some_experience" },
+        { role: "bar", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "nikos",
       roles: [
-        { role: "kitchen", skillLevel: 5, canLeadRole: true, isPreferredRole: true },
-        { role: "waiter", skillLevel: 2 }
+        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "waiter", experienceLevel: "no_experience" }
       ]
     },
     {
       employee: "anna",
       roles: [
-        { role: "bar", skillLevel: 4, canLeadRole: true, isPreferredRole: true },
-        { role: "manager", skillLevel: 4, canLeadRole: true },
-        { role: "cashier", skillLevel: 3 }
+        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "manager", experienceLevel: "experienced", canLeadRole: true },
+        { role: "cashier", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "kostas",
       roles: [
-        { role: "kitchen", skillLevel: 4, canLeadRole: true, isPreferredRole: true },
-        { role: "waiter", skillLevel: 3 },
-        { role: "cashier", skillLevel: 2 }
+        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "waiter", experienceLevel: "some_experience" },
+        { role: "cashier", experienceLevel: "no_experience" }
       ]
     },
     {
       employee: "dimitris",
       roles: [
-        { role: "bar", skillLevel: 3, isPreferredRole: true },
-        { role: "kitchen", skillLevel: 3 },
-        { role: "waiter", skillLevel: 2 }
+        { role: "bar", experienceLevel: "some_experience", isPreferredRole: true },
+        { role: "kitchen", experienceLevel: "some_experience" },
+        { role: "waiter", experienceLevel: "no_experience" }
       ]
     },
     {
       employee: "sofia",
       roles: [
-        { role: "waiter", skillLevel: 3, isPreferredRole: true },
-        { role: "cashier", skillLevel: 3 },
-        { role: "bar", skillLevel: 2 }
+        { role: "waiter", experienceLevel: "some_experience", isPreferredRole: true },
+        { role: "cashier", experienceLevel: "some_experience" },
+        { role: "bar", experienceLevel: "no_experience" }
       ]
     }
   ];
@@ -368,7 +373,10 @@ async function createEmployeeRoles(
         employee_id: employees[assignment.employee],
         role_id: roles[roleAssignment.role],
         is_primary: index === 0,
-        skill_level: roleAssignment.skillLevel,
+        experience_level: roleAssignment.experienceLevel,
+        skill_level: experienceLevelToLegacySkillLevel(
+          roleAssignment.experienceLevel
+        ),
         can_lead_role: Boolean(roleAssignment.canLeadRole),
         is_preferred_role: Boolean(roleAssignment.isPreferredRole)
       });
@@ -571,12 +579,16 @@ async function createStaffingRequirements(
     shift,
     role,
     requiredCount,
+    minimumExperienceLevel = "no_experience",
+    experiencedRequiredCount = 0,
     priority = "normal"
   }: {
     dayOfWeek: DayOfWeek;
     shift: ShiftKey;
     role: RoleKey;
     requiredCount: number;
+    minimumExperienceLevel?: ExperienceLevel;
+    experiencedRequiredCount?: number;
     priority?: string;
   }) {
     const time = shiftTime(shift);
@@ -587,6 +599,8 @@ async function createStaffingRequirements(
       start_time: time.startTime,
       end_time: time.endTime,
       required_count: requiredCount,
+      minimum_experience_level: minimumExperienceLevel,
+      experienced_required_count: experiencedRequiredCount,
       priority,
       is_active: true,
       notes: "Demo requirement"
@@ -598,24 +612,24 @@ async function createStaffingRequirements(
   for (const dayOfWeek of weekdays) {
     await addRequirement({ dayOfWeek, shift: "morning", role: "bar", requiredCount: 1 });
     await addRequirement({ dayOfWeek, shift: "morning", role: "waiter", requiredCount: 1 });
-    await addRequirement({ dayOfWeek, shift: "morning", role: "kitchen", requiredCount: 1 });
+    await addRequirement({ dayOfWeek, shift: "morning", role: "kitchen", requiredCount: 1, minimumExperienceLevel: "some_experience" });
     await addRequirement({ dayOfWeek, shift: "evening", role: "bar", requiredCount: 1 });
     await addRequirement({ dayOfWeek, shift: "evening", role: "waiter", requiredCount: 1 });
   }
 
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "bar", requiredCount: 2, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "waiter", requiredCount: 2, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "kitchen", requiredCount: 1 });
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "cashier", requiredCount: 1 });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "bar", requiredCount: 2, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "waiter", requiredCount: 2, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "kitchen", requiredCount: 2, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "cashier", requiredCount: 1 });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "bar", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "waiter", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "kitchen", requiredCount: 1, minimumExperienceLevel: "some_experience" });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "cashier", requiredCount: 1, minimumExperienceLevel: "some_experience" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "bar", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "waiter", requiredCount: 3, experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "kitchen", requiredCount: 2, minimumExperienceLevel: "some_experience", experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "cashier", requiredCount: 1, minimumExperienceLevel: "some_experience" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, minimumExperienceLevel: "experienced", priority: "high" });
 
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "bar", requiredCount: 1 });
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "waiter", requiredCount: 1 });
-  await addRequirement({ dayOfWeek: 0, shift: "morning", role: "kitchen", requiredCount: 1 });
+  await addRequirement({ dayOfWeek: 0, shift: "morning", role: "kitchen", requiredCount: 1, minimumExperienceLevel: "some_experience" });
   await addRequirement({ dayOfWeek: 0, shift: "evening", role: "waiter", requiredCount: 1 });
 
   return count;

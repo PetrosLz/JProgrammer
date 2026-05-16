@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { databaseApi } from "../services/databaseApi";
 import { loadDemoData } from "../services/demoData";
 import { pdfExportApi, PdfExportError } from "../services/pdfExportApi";
+import {
+  experienceLevelOptions,
+  experienceLevelToLegacySkillLevel,
+  normalizeExperienceLevel,
+  skillLevelToExperienceLevel
+} from "../types";
 import type {
   BusinessSettings,
   Employee,
@@ -21,7 +27,8 @@ import type {
   SpecialDay,
   StaffingRequirement,
   TimeOff,
-  DayOfWeek
+  DayOfWeek,
+  ExperienceLevel
 } from "../types";
 import {
   createBlankRole,
@@ -1029,9 +1036,18 @@ type ShiftTemplateCrudForm = {
 type StaffingRequirementForm = {
   dayOfWeek: DayOfWeek;
   shiftTemplateId: string;
-  roleId: string;
-  requiredCount: number;
-  priority: string;
+  roleCounts: Record<string, string>;
+};
+
+type StaffingRequirementGroup = {
+  key: string;
+  dayOfWeek: DayOfWeek;
+  shiftTemplateId: string;
+  label: string;
+  startTime: string;
+  endTime: string;
+  requirements: StaffingRequirement[];
+  totalCount: number;
 };
 
 type EmployeeWorkRulesForm = {
@@ -1056,7 +1072,7 @@ type EmployeeForm = {
   roleDetails: Record<
     string,
     {
-      skillLevel: string;
+      experienceLevel: ExperienceLevel;
       canLeadRole: boolean;
       isPreferredRole: boolean;
     }
@@ -1155,6 +1171,7 @@ function GenerateSchedulePage({
         weekStartDate: weekRange.weekStartDate,
         openingHours,
         staffingRequirements,
+        shiftTemplates,
         specialDays
       });
       const run = await databaseApi.createRecord("schedule_runs", {
@@ -1491,7 +1508,9 @@ function ScheduleViewPage({
   const [isSaving, setIsSaving] = useState(false);
   const [exportError, setExportError] = useState("");
   const [exportNotice, setExportNotice] = useState("");
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [exportingPdfType, setExportingPdfType] = useState<
+    "team" | "manager" | null
+  >(null);
   const [isDeletingProgram, setIsDeletingProgram] = useState(false);
   const selectedRun =
     scheduleRuns.find((run) => run.id === selectedRunId) ??
@@ -1662,7 +1681,7 @@ function ScheduleViewPage({
     }
   }
 
-  async function exportPdf() {
+  async function exportSchedulePdf(exportType: "team" | "manager") {
     setExportError("");
     setExportNotice("");
 
@@ -1683,26 +1702,40 @@ function ScheduleViewPage({
       return;
     }
 
-    setIsExportingPdf(true);
+    setExportingPdfType(exportType);
 
     try {
-      const html = buildSchedulePdfHtml({
-        businessName,
-        run: selectedRun,
-        dates,
-        employeeRows,
-        runSlots,
-        roles,
-        shiftTemplates,
-        staffingRequirements,
-        warnings: runWarnings,
-        unfilledSlots: runSlots.filter(
-          (slot) => slot.status !== "filled" && !assignmentBySlotId.has(slot.id)
-        )
-      });
+      const unfilledSlots = runSlots.filter(
+        (slot) => slot.status !== "filled" && !assignmentBySlotId.has(slot.id)
+      );
+      const html =
+        exportType === "team"
+          ? buildTeamSchedulePdfHtml({
+              businessName,
+              run: selectedRun,
+              dates,
+              employeeRows
+            })
+          : buildManagerReportPdfHtml({
+              businessName,
+              run: selectedRun,
+              dates,
+              employeeRows,
+              runSlots,
+              roles,
+              shiftTemplates,
+              staffingRequirements,
+              warnings: runWarnings,
+              unfilledSlots,
+              employeeWorkRules
+            });
+      const filePrefix =
+        exportType === "team" ? "Programma_Omadas" : "Manager_Report";
       const filePath = await pdfExportApi.exportPdf({
         html,
-        defaultFileName: `JProgrammer_Weekly_Schedule_${selectedRun.start_date}_to_${selectedRun.end_date}.pdf`
+        defaultFileName: `${safeFileNamePart(
+          businessName
+        )}_${filePrefix}_${selectedRun.start_date}_to_${selectedRun.end_date}.pdf`
       });
 
       setExportNotice(`Το PDF αποθηκεύτηκε: ${filePath}`);
@@ -1713,7 +1746,7 @@ function ScheduleViewPage({
         setExportError(getErrorMessage(error));
       }
     } finally {
-      setIsExportingPdf(false);
+      setExportingPdfType(null);
     }
   }
 
@@ -1768,14 +1801,36 @@ function ScheduleViewPage({
                 ))}
             </select>
           </Field>
-          <button
-            type="button"
-            onClick={() => void exportPdf()}
-            disabled={isExportingPdf}
-            className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-          >
-            {isExportingPdf ? "Εξαγωγή..." : "Εξαγωγή PDF"}
-          </button>
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => void exportSchedulePdf("team")}
+              disabled={exportingPdfType !== null}
+              className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {exportingPdfType === "team"
+                ? "Εξαγωγή..."
+                : "Εξαγωγή για ομάδα"}
+            </button>
+            <span className="text-xs text-slate-500">
+              Καθαρό πρόγραμμα για αποστολή στους εργαζόμενους.
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => void exportSchedulePdf("manager")}
+              disabled={exportingPdfType !== null}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              {exportingPdfType === "manager"
+                ? "Εξαγωγή..."
+                : "Αναφορά manager"}
+            </button>
+            <span className="text-xs text-slate-500">
+              Περιέχει ώρες, κενές βάρδιες και προειδοποιήσεις.
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => void deleteCurrentProgram()}
@@ -2896,7 +2951,7 @@ function EmployeesPage({
       roleDetails: {
         ...current.roleDetails,
         [roleId]: current.roleDetails[roleId] ?? {
-          skillLevel: "3",
+          experienceLevel: "some_experience",
           canLeadRole: false,
           isPreferredRole: false
         }
@@ -2911,7 +2966,7 @@ function EmployeesPage({
     setForm((current) => {
       const existing = current.roleDetails[roleId];
       const nextDetail = {
-        skillLevel: existing?.skillLevel ?? "3",
+        experienceLevel: existing?.experienceLevel ?? "some_experience",
         canLeadRole: existing?.canLeadRole ?? false,
         isPreferredRole: existing?.isPreferredRole ?? false,
         ...detail
@@ -3037,7 +3092,7 @@ function EmployeesPage({
                 roles.map((role) => {
                   const isSelected = form.roleIds.includes(role.id);
                   const details = form.roleDetails[role.id] ?? {
-                    skillLevel: "3",
+                    experienceLevel: "some_experience",
                     canLeadRole: false,
                     isPreferredRole: false
                   };
@@ -3068,17 +3123,18 @@ function EmployeesPage({
 
                       {isSelected ? (
                         <div className="mt-3 space-y-2">
-                          <Field label="Επίπεδο ικανότητας">
+                          <Field label="Προϋπηρεσία">
                             <select
-                              value={details.skillLevel}
+                              value={details.experienceLevel}
                               onChange={(event) =>
                                 updateRoleDetail(role.id, {
-                                  skillLevel: event.target.value
+                                  experienceLevel: event.target
+                                    .value as ExperienceLevel
                                 })
                               }
                               className={inputClassName}
                             >
-                              {skillLevelOptions.map((option) => (
+                              {experienceLevelOptions.map((option) => (
                                 <option key={option.value} value={option.value}>
                                   {option.label}
                                 </option>
@@ -3335,41 +3391,40 @@ function StaffingRequirementsPage({
   const [form, setForm] = useState<StaffingRequirementForm>(() =>
     createStaffingRequirementForm(roles, shiftTemplates)
   );
-  const [editingRequirementId, setEditingRequirementId] = useState<string | null>(
-    null
-  );
+  const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null);
   const [copySourceDay, setCopySourceDay] = useState<DayOfWeek>(1);
   const [copyTargetDay, setCopyTargetDay] = useState<DayOfWeek>(2);
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const groupedRequirements = useMemo(
+    () => groupStaffingRequirements(requirements, shiftTemplates),
+    [requirements, shiftTemplates]
+  );
+  const selectedShiftTemplate = shiftTemplates.find(
+    (template) => template.id === form.shiftTemplateId
+  );
 
   useEffect(() => {
-    if (editingRequirementId) {
+    if (editingGroupKey) {
       return;
     }
 
     setForm((current) => ({
       ...current,
-      roleId:
-        current.roleId && roles.some((role) => role.id === current.roleId)
-          ? current.roleId
-          : activeRoles[0]?.id ?? "",
       shiftTemplateId:
         current.shiftTemplateId &&
         shiftTemplates.some((template) => template.id === current.shiftTemplateId)
           ? current.shiftTemplateId
-          : activeShiftTemplates[0]?.id ?? ""
+          : activeShiftTemplates[0]?.id ?? "",
+      roleCounts: ensureRoleCountKeys(current.roleCounts, activeRoles)
     }));
-  }, [roles, shiftTemplates, activeRoles, activeShiftTemplates, editingRequirementId]);
+  }, [roles, shiftTemplates, activeRoles, activeShiftTemplates, editingGroupKey]);
 
-  async function saveRequirement() {
-    const selectedShiftTemplate = shiftTemplates.find(
-      (template) => template.id === form.shiftTemplateId
-    );
+  async function saveRequirementGroup() {
     const nextErrors = validateStaffingRequirementForm(
       form,
       selectedShiftTemplate,
-      roles
+      activeRoles
     );
 
     if (nextErrors.length > 0) {
@@ -3386,31 +3441,63 @@ function StaffingRequirementsPage({
     setIsSaving(true);
 
     try {
-      const payload = {
-        day_of_week: form.dayOfWeek,
-        shift_template_id: selectedShiftTemplate.id,
-        role_id: form.roleId,
-        start_time: selectedShiftTemplate.start_time,
-        end_time: selectedShiftTemplate.end_time,
-        required_count: form.requiredCount,
-        priority: form.priority || "normal",
-        is_active: true,
-        notes: null
-      };
+      const groupRequirements = getRequirementsForShiftGroup({
+        requirements,
+        dayOfWeek: form.dayOfWeek,
+        shiftTemplateId: selectedShiftTemplate.id
+      });
 
-      if (editingRequirementId) {
-        await databaseApi.updateRecord(
-          "staffing_requirements",
-          editingRequirementId,
-          payload
+      for (const role of activeRoles) {
+        const count = parseStaffingRoleCount(form.roleCounts[role.id]) ?? 0;
+        const roleRequirements = groupRequirements.filter(
+          (requirement) => requirement.role_id === role.id
         );
-        await onChanged("Staffing requirement updated.");
-      } else {
-        await databaseApi.createRecord("staffing_requirements", payload);
-        await onChanged("Staffing requirement added.");
+        const [existingRequirement, ...duplicates] = roleRequirements;
+
+        if (count > 0) {
+          const payload = {
+            day_of_week: form.dayOfWeek,
+            shift_template_id: selectedShiftTemplate.id,
+            role_id: role.id,
+            start_time: selectedShiftTemplate.start_time,
+            end_time: selectedShiftTemplate.end_time,
+            required_count: count,
+            minimum_experience_level:
+              existingRequirement?.minimum_experience_level ?? "no_experience",
+            experienced_required_count:
+              existingRequirement?.experienced_required_count ?? 0,
+            priority: existingRequirement?.priority ?? "normal",
+            is_active: true,
+            notes: existingRequirement?.notes ?? null
+          };
+
+          if (existingRequirement) {
+            await databaseApi.updateRecord(
+              "staffing_requirements",
+              existingRequirement.id,
+              payload
+            );
+          } else {
+            await databaseApi.createRecord("staffing_requirements", payload);
+          }
+
+          for (const duplicate of duplicates) {
+            await databaseApi.deleteRecord("staffing_requirements", duplicate.id);
+          }
+          continue;
+        }
+
+        for (const requirement of roleRequirements) {
+          await databaseApi.deleteRecord("staffing_requirements", requirement.id);
+        }
       }
 
-      setEditingRequirementId(null);
+      await onChanged(
+        editingGroupKey
+          ? "Οι ανάγκες βάρδιας ενημερώθηκαν."
+          : "Οι ανάγκες βάρδιας αποθηκεύτηκαν."
+      );
+      setEditingGroupKey(null);
       setForm(createStaffingRequirementForm(roles, shiftTemplates));
     } catch (error) {
       setErrors([getErrorMessage(error)]);
@@ -3419,30 +3506,9 @@ function StaffingRequirementsPage({
     }
   }
 
-  async function toggleRequirementActive(requirement: StaffingRequirement) {
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      const nextIsActive = !requirement.is_active;
-      await databaseApi.updateRecord("staffing_requirements", requirement.id, {
-        is_active: nextIsActive
-      });
-      await onChanged(
-        nextIsActive
-          ? "Staffing requirement reactivated."
-          : "Staffing requirement deactivated."
-      );
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function deleteRequirement(requirement: StaffingRequirement) {
+  async function deleteRequirementGroup(group: StaffingRequirementGroup) {
     const shouldDelete = window.confirm(
-      "Delete this staffing requirement permanently?"
+      "Να διαγραφούν όλες οι ανάγκες προσωπικού για αυτή τη βάρδια; Αυτή η ενέργεια δεν αναιρείται."
     );
 
     if (!shouldDelete) {
@@ -3453,11 +3519,20 @@ function StaffingRequirementsPage({
     setIsSaving(true);
 
     try {
-      await databaseApi.deleteRecord("staffing_requirements", requirement.id);
-      if (editingRequirementId === requirement.id) {
+      const groupRequirements = getRequirementsForShiftGroup({
+        requirements,
+        dayOfWeek: group.dayOfWeek,
+        shiftTemplateId: group.shiftTemplateId
+      });
+
+      for (const requirement of groupRequirements) {
+        await databaseApi.deleteRecord("staffing_requirements", requirement.id);
+      }
+
+      if (editingGroupKey === group.key) {
         resetForm();
       }
-      await onChanged("Staffing requirement deleted.");
+      await onChanged("Οι ανάγκες βάρδιας διαγράφηκαν.");
     } catch (error) {
       setErrors([getErrorMessage(error)]);
     } finally {
@@ -3495,13 +3570,20 @@ function StaffingRequirementsPage({
         }
 
         for (const requirement of sourceRequirements) {
+          const shiftSnapshot = staffingRequirementShiftSnapshot(
+            requirement,
+            shiftTemplates
+          );
+
           await databaseApi.createRecord("staffing_requirements", {
             day_of_week: targetDay,
             shift_template_id: requirement.shift_template_id,
             role_id: requirement.role_id,
-            start_time: requirement.start_time,
-            end_time: requirement.end_time,
+            start_time: shiftSnapshot.startTime,
+            end_time: shiftSnapshot.endTime,
             required_count: requirement.required_count,
+            minimum_experience_level: requirement.minimum_experience_level,
+            experienced_required_count: requirement.experienced_required_count,
             priority: requirement.priority || "normal",
             is_active: true,
             notes: requirement.notes
@@ -3517,60 +3599,68 @@ function StaffingRequirementsPage({
     }
   }
 
-  function startEditing(requirement: StaffingRequirement) {
+  function startEditingGroup(group: StaffingRequirementGroup) {
     setErrors([]);
-    setEditingRequirementId(requirement.id);
+    setEditingGroupKey(group.key);
     setForm({
-      dayOfWeek: requirement.day_of_week,
-      shiftTemplateId: requirement.shift_template_id ?? "",
-      roleId: requirement.role_id,
-      requiredCount: requirement.required_count,
-      priority: requirement.priority ?? "normal"
+      dayOfWeek: group.dayOfWeek,
+      shiftTemplateId: group.shiftTemplateId,
+      roleCounts: createRoleCountValues(activeRoles, group.requirements)
     });
   }
 
   function resetForm() {
     setErrors([]);
-    setEditingRequirementId(null);
+    setEditingGroupKey(null);
     setForm(createStaffingRequirementForm(roles, shiftTemplates));
+  }
+
+  function updateRoleCount(roleId: string, value: string) {
+    setForm((current) => ({
+      ...current,
+      roleCounts: {
+        ...current.roleCounts,
+        [roleId]: value
+      }
+    }));
   }
 
   return (
     <div className="max-w-7xl">
       <SectionHeading
-        title="Staffing Requirements"
-        description="Define how many people are needed by day, shift template, and role. This does not generate schedules yet."
+        title="Ανάγκες Προσωπικού"
+        description="Ορίστε πόσα άτομα χρειάζονται ανά ημέρα, βάρδια και ρόλο."
       />
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
       {activeRoles.length === 0 || activeShiftTemplates.length === 0 ? (
         <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          Add at least one active role and one active shift template before
-          creating staffing requirements.
+          Προσθέστε τουλάχιστον έναν ενεργό ρόλο και μία ενεργή βάρδια πριν
+          ορίσετε ανάγκες προσωπικού.
         </div>
       ) : null}
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
-            {editingRequirementId
-              ? "Edit requirement"
-              : "Add staffing requirement"}
+            {editingGroupKey
+              ? "Επεξεργασία αναγκών βάρδιας"
+              : "Προσθήκη αναγκών βάρδιας"}
           </h3>
-          {editingRequirementId ? (
+          {editingGroupKey ? (
             <button
               type="button"
               onClick={resetForm}
               className={secondaryButtonClassName}
             >
-              Cancel edit
+              Ακύρωση
             </button>
           ) : null}
         </div>
 
-        <div className="mt-4 grid grid-cols-[150px_1.2fr_1.2fr_150px_150px] gap-4">
-          <Field label="Day" required>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[180px_1fr]">
+          <Field label="Ημέρα" required>
             <select
               value={form.dayOfWeek}
               onChange={(event) =>
@@ -3589,7 +3679,7 @@ function StaffingRequirementsPage({
             </select>
           </Field>
 
-          <Field label="Shift template" required>
+          <Field label="Βάρδια" required>
             <select
               value={form.shiftTemplateId}
               onChange={(event) =>
@@ -3597,7 +3687,7 @@ function StaffingRequirementsPage({
               }
               className={inputClassName}
             >
-              <option value="">Choose shift</option>
+              <option value="">Επιλέξτε βάρδια</option>
               {activeShiftTemplates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.name} ({template.start_time}-{template.end_time})
@@ -3605,75 +3695,69 @@ function StaffingRequirementsPage({
               ))}
             </select>
           </Field>
+        </div>
 
-          <Field label="Required role" required>
-            <select
-              value={form.roleId}
-              onChange={(event) =>
-                setForm({ ...form, roleId: event.target.value })
-              }
-              className={inputClassName}
-            >
-              <option value="">Choose role</option>
-              {activeRoles.map((role) => (
-                <option key={role.id} value={role.id}>
-                  {role.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Required count" required>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={form.requiredCount}
-              onChange={(event) =>
-                setForm({
-                  ...form,
-                  requiredCount: Number(event.target.value)
-                })
-              }
-              className={inputClassName}
-            />
-          </Field>
-
-          <Field label="Priority">
-            <select
-              value={form.priority}
-              onChange={(event) =>
-                setForm({ ...form, priority: event.target.value })
-              }
-              className={inputClassName}
-            >
-              <option value="normal">Normal</option>
-              <option value="high">High</option>
-              <option value="low">Low</option>
-            </select>
-          </Field>
+        <div className="mt-5 rounded-md border border-slate-200">
+          <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-900">
+              Άτομα που χρειάζονται
+              {selectedShiftTemplate
+                ? ` για ${selectedShiftTemplate.name} ${selectedShiftTemplate.start_time}-${selectedShiftTemplate.end_time}`
+                : ""}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Βάλτε 0 όταν δεν χρειάζεται άτομο για έναν ρόλο.
+            </p>
+          </div>
+          <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+            {activeRoles.map((role) => (
+              <label
+                key={role.id}
+                className="flex items-center justify-between gap-3 rounded border border-slate-200 px-3 py-2"
+              >
+                <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-slate-800">
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: role.color ?? roleColors[0] }}
+                  />
+                  <span className="truncate">{role.name}</span>
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={form.roleCounts[role.id] ?? "0"}
+                  onChange={(event) => updateRoleCount(role.id, event.target.value)}
+                  className="h-9 w-20 rounded-md border border-slate-300 px-2 text-right text-sm focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                  aria-label={`Άτομα για ${role.name}`}
+                />
+              </label>
+            ))}
+          </div>
         </div>
 
         <button
           type="button"
-          onClick={saveRequirement}
+          onClick={saveRequirementGroup}
           disabled={
             isSaving || activeRoles.length === 0 || activeShiftTemplates.length === 0
           }
           className="mt-5 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
         >
           {isSaving
-            ? "Saving..."
-            : editingRequirementId
-              ? "Save requirement"
-              : "Add requirement"}
+            ? "Αποθήκευση..."
+            : editingGroupKey
+              ? "Αποθήκευση"
+              : "Αποθήκευση αναγκών"}
         </button>
       </div>
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
-        <h3 className="text-base font-semibold tracking-normal">Copy day</h3>
+        <h3 className="text-base font-semibold tracking-normal">
+          Αντιγραφή ημέρας
+        </h3>
         <div className="mt-4 flex flex-wrap items-end gap-4">
-          <Field label="From">
+          <Field label="Από">
             <select
               value={copySourceDay}
               onChange={(event) =>
@@ -3689,7 +3773,7 @@ function StaffingRequirementsPage({
             </select>
           </Field>
 
-          <Field label="To">
+          <Field label="Προς">
             <select
               value={copyTargetDay}
               onChange={(event) =>
@@ -3711,7 +3795,7 @@ function StaffingRequirementsPage({
             disabled={isSaving}
             className={secondaryButtonClassName}
           >
-            Copy day
+            Αντιγραφή
           </button>
 
           <button
@@ -3720,20 +3804,20 @@ function StaffingRequirementsPage({
             disabled={isSaving}
             className={secondaryButtonClassName}
           >
-            Copy Monday to Tue-Fri
+            Αντιγραφή Δευτέρας σε Τρίτη-Παρασκευή
           </button>
         </div>
         <p className="mt-3 text-sm text-slate-500">
-          Copying replaces requirements on the target day with active
-          requirements from the source day.
+          Η αντιγραφή αντικαθιστά τις ανάγκες της ημέρας προορισμού με τις
+          ενεργές ανάγκες της ημέρας προέλευσης.
         </p>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
         {dayLabels.map((day) => {
-          const dayRequirements = requirements
-            .filter((requirement) => requirement.day_of_week === day.dayOfWeek)
-            .sort((a, b) => a.start_time.localeCompare(b.start_time));
+          const dayGroups = groupedRequirements.filter(
+            (group) => group.dayOfWeek === day.dayOfWeek
+          );
 
           return (
             <div
@@ -3745,70 +3829,61 @@ function StaffingRequirementsPage({
                   {day.label}
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  {dayRequirements.length} requirement
-                  {dayRequirements.length === 1 ? "" : "s"}
+                  {dayGroups.length} βάρδια
+                  {dayGroups.length === 1 ? "" : "ες"}
                 </p>
               </div>
 
               <div className="divide-y divide-slate-200">
-                {dayRequirements.length === 0 ? (
+                {dayGroups.length === 0 ? (
                   <p className="px-5 py-4 text-sm text-slate-500">
-                    No requirements for this day.
+                    Δεν έχουν οριστεί ανάγκες για αυτή την ημέρα.
                   </p>
                 ) : (
-                  dayRequirements.map((requirement) => (
-                    <div key={requirement.id} className="px-5 py-4">
+                  dayGroups.map((group) => (
+                    <div key={group.key} className="px-5 py-4">
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-slate-950">
-                              {shiftTemplateLabel(
-                                requirement.shift_template_id,
-                                shiftTemplates
-                              )}
+                              {group.label}
                             </span>
                             <span className="text-sm text-slate-500">
-                              {requirement.start_time} - {requirement.end_time}
+                              {group.startTime} - {group.endTime}
                             </span>
-                            <StatusBadge
-                              isActive={Boolean(requirement.is_active)}
-                            />
+                            <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                              Σύνολο {group.totalCount}
+                            </span>
                           </div>
-                          <p className="mt-2 text-sm text-slate-600">
-                            {roleLabel(requirement.role_id, roles)}:{" "}
-                            <span className="font-semibold text-slate-900">
-                              {requirement.required_count}
-                            </span>{" "}
-                            needed
-                            {requirement.priority
-                              ? `, ${requirement.priority} priority`
-                              : ""}
-                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {group.requirements.map((requirement) => (
+                              <span
+                                key={requirement.id}
+                                className="inline-flex items-center gap-1 rounded bg-slate-50 px-2 py-1 text-sm text-slate-700 ring-1 ring-slate-200"
+                              >
+                                <span className="font-semibold text-slate-900">
+                                  {roleLabel(requirement.role_id, roles)}
+                                </span>
+                                <span>{requirement.required_count}</span>
+                              </span>
+                            ))}
+                          </div>
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => startEditing(requirement)}
+                            onClick={() => startEditingGroup(group)}
                             className={secondaryButtonClassName}
                           >
-                            Edit
+                            Επεξεργασία
                           </button>
                           <button
                             type="button"
-                            onClick={() =>
-                              void toggleRequirementActive(requirement)
-                            }
+                            onClick={() => void deleteRequirementGroup(group)}
                             className={secondaryButtonClassName}
                           >
-                            {requirement.is_active ? "Deactivate" : "Reactivate"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void deleteRequirement(requirement)}
-                            className={secondaryButtonClassName}
-                          >
-                            Delete
+                            Διαγραφή
                           </button>
                         </div>
                       </div>
@@ -4086,7 +4161,9 @@ function ShiftTemplatesCrudPage({
           editingShiftId,
           payload
         );
-        await onChanged("Shift template updated.");
+        await onChanged(
+          "Shift template updated. Future generated programs will use the new template values; existing programs stay unchanged."
+        );
       } else {
         await databaseApi.createRecord("shift_templates", payload);
         await onChanged("Shift template added.");
@@ -4428,9 +4505,7 @@ function createStaffingRequirementForm(
     dayOfWeek: 1,
     shiftTemplateId:
       shiftTemplates.find((template) => template.is_active)?.id ?? "",
-    roleId: roles.find((role) => role.is_active)?.id ?? "",
-    requiredCount: 1,
-    priority: "normal"
+    roleCounts: createRoleCountValues(roles.filter((role) => role.is_active))
   };
 }
 
@@ -4442,22 +4517,147 @@ function validateStaffingRequirementForm(
   const errors: string[] = [];
 
   if (!selectedShiftTemplate) {
-    errors.push("Choose a shift template.");
+    errors.push("Επιλέξτε βάρδια.");
   }
 
-  if (!form.roleId || !roles.some((role) => role.id === form.roleId)) {
-    errors.push("Choose a required role.");
+  if (!roles.length) {
+    errors.push("Προσθέστε τουλάχιστον έναν ενεργό ρόλο.");
   }
 
-  if (!Number.isInteger(form.requiredCount) || form.requiredCount < 1) {
-    errors.push("Required count must be a whole number of at least 1.");
+  let positiveCountTotal = 0;
+
+  for (const role of roles) {
+    const parsedCount = parseStaffingRoleCount(form.roleCounts[role.id]);
+
+    if (parsedCount === null) {
+      errors.push(`Ο ρόλος ${role.name} πρέπει να έχει ακέραιο αριθμό 0 ή μεγαλύτερο.`);
+      continue;
+    }
+
+    positiveCountTotal += parsedCount;
   }
 
-  if (form.priority && !["low", "normal", "high"].includes(form.priority)) {
-    errors.push("Choose a valid priority.");
+  if (positiveCountTotal === 0) {
+    errors.push("Ορίστε τουλάχιστον έναν ρόλο με ανάγκη μεγαλύτερη από 0.");
   }
 
   return errors;
+}
+
+function createRoleCountValues(
+  roles: Role[],
+  groupRequirements: StaffingRequirement[] = []
+): Record<string, string> {
+  return Object.fromEntries(
+    roles.map((role) => {
+      const count = groupRequirements
+        .filter(
+          (requirement) =>
+            requirement.role_id === role.id && Boolean(requirement.is_active)
+        )
+        .reduce((total, requirement) => total + requirement.required_count, 0);
+
+      return [role.id, String(count)];
+    })
+  );
+}
+
+function ensureRoleCountKeys(
+  values: Record<string, string>,
+  roles: Role[]
+): Record<string, string> {
+  return {
+    ...Object.fromEntries(roles.map((role) => [role.id, "0"])),
+    ...values
+  };
+}
+
+function parseStaffingRoleCount(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") {
+    return 0;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function groupStaffingRequirements(
+  requirements: StaffingRequirement[],
+  shiftTemplates: ShiftTemplate[]
+): StaffingRequirementGroup[] {
+  const groups = new Map<string, StaffingRequirementGroup>();
+
+  for (const requirement of requirements) {
+    if (!requirement.is_active || requirement.required_count <= 0) {
+      continue;
+    }
+
+    const shiftTemplate = requirement.shift_template_id
+      ? shiftTemplates.find((template) => template.id === requirement.shift_template_id)
+      : null;
+    const shiftTemplateId =
+      requirement.shift_template_id ??
+      `custom:${requirement.start_time}-${requirement.end_time}`;
+    const key = staffingRequirementGroupKey(requirement.day_of_week, shiftTemplateId);
+    const existingGroup = groups.get(key);
+
+    if (existingGroup) {
+      existingGroup.requirements.push(requirement);
+      existingGroup.totalCount += requirement.required_count;
+      continue;
+    }
+
+    groups.set(key, {
+      key,
+      dayOfWeek: requirement.day_of_week,
+      shiftTemplateId,
+      label: shiftTemplate?.name ?? "Custom shift",
+      startTime: shiftTemplate?.start_time ?? requirement.start_time,
+      endTime: shiftTemplate?.end_time ?? requirement.end_time,
+      requirements: [requirement],
+      totalCount: requirement.required_count
+    });
+  }
+
+  for (const group of groups.values()) {
+    group.requirements.sort((left, right) => left.role_id.localeCompare(right.role_id));
+  }
+
+  return [...groups.values()].sort(
+    (left, right) =>
+      left.dayOfWeek - right.dayOfWeek ||
+      left.startTime.localeCompare(right.startTime) ||
+      left.endTime.localeCompare(right.endTime) ||
+      left.label.localeCompare(right.label)
+  );
+}
+
+function staffingRequirementGroupKey(
+  dayOfWeek: DayOfWeek,
+  shiftTemplateId: string
+): string {
+  return `${dayOfWeek}|${shiftTemplateId}`;
+}
+
+function getRequirementsForShiftGroup({
+  requirements,
+  dayOfWeek,
+  shiftTemplateId
+}: {
+  requirements: StaffingRequirement[];
+  dayOfWeek: DayOfWeek;
+  shiftTemplateId: string;
+}): StaffingRequirement[] {
+  return requirements.filter(
+    (requirement) =>
+      requirement.day_of_week === dayOfWeek &&
+      (requirement.shift_template_id ?? "") === shiftTemplateId
+  );
 }
 
 function shiftTemplateLabel(
@@ -4472,6 +4672,20 @@ function shiftTemplateLabel(
     shiftTemplates.find((template) => template.id === shiftTemplateId)?.name ??
     "Unknown shift"
   );
+}
+
+function staffingRequirementShiftSnapshot(
+  requirement: StaffingRequirement,
+  shiftTemplates: ShiftTemplate[]
+): { startTime: string; endTime: string } {
+  const shiftTemplate = requirement.shift_template_id
+    ? shiftTemplates.find((template) => template.id === requirement.shift_template_id)
+    : null;
+
+  return {
+    startTime: shiftTemplate?.start_time ?? requirement.start_time,
+    endTime: shiftTemplate?.end_time ?? requirement.end_time
+  };
 }
 
 function roleLabel(roleId: string, roles: Role[]): string {
@@ -4782,7 +4996,129 @@ function WarningBadge({ messages }: { messages: string[] }) {
   );
 }
 
-function buildSchedulePdfHtml({
+function buildTeamSchedulePdfHtml({
+  businessName,
+  run,
+  dates,
+  employeeRows
+}: {
+  businessName: string;
+  run: ScheduleRun;
+  dates: string[];
+  employeeRows: EmployeeScheduleRow[];
+}): string {
+  return `<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(businessName)} Program</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #111827;
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 10px;
+      line-height: 1.35;
+      background: white;
+    }
+    .header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 14px;
+      border-bottom: 2px solid #0f766e;
+      padding-bottom: 10px;
+    }
+    h1 { margin: 0; font-size: 21px; letter-spacing: 0; }
+    .subtitle { margin: 4px 0 0; color: #475569; font-size: 12px; }
+    .meta { text-align: right; color: #64748b; font-size: 10px; white-space: nowrap; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 1px solid #cbd5e1; vertical-align: top; padding: 6px; }
+    th { background: #f1f5f9; color: #334155; font-size: 9px; text-transform: uppercase; }
+    th.employee, td.employee { width: 18%; font-weight: 700; }
+    .cell-off { color: #94a3b8; font-weight: 600; }
+    .shift {
+      border-left: 4px solid #64748b;
+      border-radius: 4px;
+      padding-left: 6px;
+      break-inside: avoid;
+    }
+    .shift + .shift { margin-top: 5px; }
+    .shift-name { font-weight: 700; }
+    .shift-time, .shift-role { color: #475569; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>${escapeHtml(businessName)}</h1>
+      <p class="subtitle">Πρόγραμμα εβδομάδας: ${escapeHtml(
+        formatDateRangeEu(run.start_date, run.end_date)
+      )}</p>
+    </div>
+    <div class="meta">Πρόγραμμα ομάδας</div>
+  </header>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="employee">Εργαζόμενος</th>
+        ${dates
+          .map(
+            (date) =>
+              `<th>${escapeHtml(dayLabel(getDayOfWeek(date)))}<br />${escapeHtml(
+                formatDateEu(date)
+              )}</th>`
+          )
+          .join("")}
+      </tr>
+    </thead>
+    <tbody>
+      ${employeeRows
+        .map(
+          (employeeRow) => `<tr>
+            <td class="employee">${escapeHtml(
+              employeeName(employeeRow.employee.id, [employeeRow.employee])
+            )}</td>
+            ${dates
+              .map((date) => {
+                const items = employeeRow.assignmentsByDate.get(date) ?? [];
+
+                if (items.length === 0) {
+                  return `<td><span class="cell-off">Ρεπό</span></td>`;
+                }
+
+                return `<td>${items
+                  .map(
+                    (item) =>
+                      `<div class="shift" style="border-left-color: ${escapeHtml(
+                        item.role?.color ?? "#64748b"
+                      )};">
+                        <div class="shift-name">${escapeHtml(item.shiftName)}</div>
+                        <div class="shift-time">${escapeHtml(
+                          item.slot.start_time
+                        )}-${escapeHtml(item.slot.end_time)}</div>
+                        <div class="shift-role">${escapeHtml(
+                          item.role?.name ?? "Role"
+                        )}</div>
+                      </div>`
+                  )
+                  .join("")}</td>`;
+              })
+              .join("")}
+          </tr>`
+        )
+        .join("")}
+    </tbody>
+  </table>
+</body>
+</html>`;
+}
+
+function buildManagerReportPdfHtml({
   businessName,
   run,
   dates,
@@ -4792,7 +5128,8 @@ function buildSchedulePdfHtml({
   shiftTemplates,
   staffingRequirements,
   warnings,
-  unfilledSlots
+  unfilledSlots,
+  employeeWorkRules
 }: {
   businessName: string;
   run: ScheduleRun;
@@ -4804,6 +5141,7 @@ function buildSchedulePdfHtml({
   staffingRequirements: StaffingRequirement[];
   warnings: ScheduleWarning[];
   unfilledSlots: ScheduleSlot[];
+  employeeWorkRules: EmployeeWorkRules[];
 }): string {
   const warningRows = warnings
     .map((warning) => {
@@ -4829,12 +5167,89 @@ function buildSchedulePdfHtml({
       )}</li>`;
     })
     .join("");
+  const employeeSummaryRows = employeeRows
+    .map((employeeRow) => {
+      const totalHours = getEmployeeScheduleHours(employeeRow);
+      const weekendShifts = getEmployeeWeekendShiftCount(employeeRow);
+      const difficultShifts = getEmployeeDifficultShiftCount(employeeRow);
+      const workRules = employeeWorkRules.find(
+        (rules) => rules.employee_id === employeeRow.employee.id
+      );
+      const targetHours =
+        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week ?? null;
+      const maxHours = workRules?.max_hours_per_week ?? null;
+
+      return `<tr>
+        <td>${escapeHtml(employeeName(employeeRow.employee.id, [employeeRow.employee]))}</td>
+        <td>${employeeRow.assignmentCount}</td>
+        <td>${escapeHtml(formatHours(totalHours))}</td>
+        <td>${weekendShifts}</td>
+        <td>${difficultShifts}</td>
+        <td>${escapeHtml(formatOptionalHours(targetHours))}</td>
+        <td>${escapeHtml(formatOptionalHours(maxHours))}</td>
+      </tr>`;
+    })
+    .join("");
+  const attentionRows = employeeRows
+    .flatMap((employeeRow) => {
+      const totalHours = getEmployeeScheduleHours(employeeRow);
+      const workRules = employeeWorkRules.find(
+        (rules) => rules.employee_id === employeeRow.employee.id
+      );
+      const rows: string[] = [];
+
+      if (
+        workRules?.max_hours_per_week !== null &&
+        workRules?.max_hours_per_week !== undefined &&
+        totalHours >= workRules.max_hours_per_week * 0.85
+      ) {
+        rows.push(
+          `${employeeName(employeeRow.employee.id, [employeeRow.employee])}: close to max hours (${formatHours(
+            totalHours
+          )}/${formatHours(workRules.max_hours_per_week)}).`
+        );
+      }
+
+      const targetHours =
+        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week;
+      if (
+        targetHours !== null &&
+        targetHours !== undefined &&
+        totalHours > targetHours
+      ) {
+        rows.push(
+          `${employeeName(employeeRow.employee.id, [employeeRow.employee])}: above target hours (${formatHours(
+            totalHours
+          )}/${formatHours(targetHours)}).`
+        );
+      }
+
+      return rows;
+    })
+    .map((row) => `<li>${escapeHtml(row)}</li>`)
+    .join("");
+  const assignmentNotes = employeeRows
+    .flatMap((employeeRow) =>
+      [...employeeRow.assignmentsByDate.values()].flat().flatMap((item) =>
+        item.assignment.notes
+          ? [
+              `<li>${escapeHtml(formatDateEu(item.slot.date))} ${escapeHtml(
+                item.slot.start_time
+              )}-${escapeHtml(item.slot.end_time)} ${escapeHtml(
+                employeeName(item.employee.id, [item.employee])
+              )}: ${escapeHtml(item.assignment.notes)}</li>`
+            ]
+          : []
+      )
+    )
+    .slice(0, 30)
+    .join("");
 
   return `<!doctype html>
 <html lang="el">
 <head>
   <meta charset="utf-8" />
-  <title>${escapeHtml(businessName)} Weekly Schedule</title>
+  <title>${escapeHtml(businessName)} Manager Report</title>
   <style>
     @page { size: A4 landscape; margin: 12mm; }
     * { box-sizing: border-box; }
@@ -4949,6 +5364,13 @@ function buildSchedulePdfHtml({
     .section li {
       margin-bottom: 3px;
     }
+    .section table {
+      table-layout: auto;
+    }
+    .section .numeric {
+      text-align: right;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -5028,6 +5450,30 @@ function buildSchedulePdfHtml({
     </tbody>
   </table>
 
+  <section class="section">
+    <h2>Σύνοψη εργαζομένων</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Εργαζόμενος</th>
+          <th class="numeric">Βάρδιες</th>
+          <th class="numeric">Ώρες</th>
+          <th class="numeric">Weekend</th>
+          <th class="numeric">Δύσκολες</th>
+          <th class="numeric">Στόχος</th>
+          <th class="numeric">Μέγιστο</th>
+        </tr>
+      </thead>
+      <tbody>${employeeSummaryRows}</tbody>
+    </table>
+  </section>
+
+  ${
+    attentionRows
+      ? `<section class="section"><h2>Εργαζόμενοι που θέλουν προσοχή</h2><ul>${attentionRows}</ul></section>`
+      : ""
+  }
+
   ${
     unfilledRows
       ? `<section class="section"><h2>Κενές βάρδιες</h2><ul>${unfilledRows}</ul></section>`
@@ -5038,6 +5484,18 @@ function buildSchedulePdfHtml({
       ? `<section class="section"><h2>Προειδοποιήσεις</h2><ul>${warningRows}</ul></section>`
       : ""
   }
+  ${
+    assignmentNotes
+      ? `<section class="section"><h2>Σημειώσεις ανάθεσης</h2><ul>${assignmentNotes}</ul></section>`
+      : ""
+  }
+  <section class="section">
+    <h2>Σημειώσεις / περιορισμοί</h2>
+    <ul>
+      <li>Η αναφορά manager περιέχει εσωτερικές προειδοποιήσεις και σημειώσεις ανάθεσης.</li>
+      <li>Το PDF ομάδας κρατά μόνο το καθαρό πρόγραμμα και δεν περιλαμβάνει constraints, προτιμήσεις, εξηγήσεις ή στοιχεία επικοινωνίας.</li>
+    </ul>
+  </section>
 </body>
 </html>`;
 }
@@ -5048,8 +5506,44 @@ function getEmployeeScheduleHours(employeeRow: EmployeeScheduleRow): number {
     .reduce((total, item) => total + getSlotDurationHours(item.slot), 0);
 }
 
+function getEmployeeWeekendShiftCount(employeeRow: EmployeeScheduleRow): number {
+  return [...employeeRow.assignmentsByDate.values()]
+    .flat()
+    .filter((item) => {
+      const day = getDayOfWeek(item.slot.date);
+      return day === 0 || day === 6;
+    }).length;
+}
+
+function getEmployeeDifficultShiftCount(employeeRow: EmployeeScheduleRow): number {
+  return [...employeeRow.assignmentsByDate.values()]
+    .flat()
+    .filter((item) => isDifficultScheduleSlot(item.slot)).length;
+}
+
+function isDifficultScheduleSlot(slot: ScheduleSlot): boolean {
+  const startMinutes = timeStringToMinutes(slot.start_time);
+  const endMinutes = timeStringToMinutes(slot.end_time);
+
+  return endMinutes <= startMinutes || endMinutes > 22 * 60 || startMinutes < 6 * 60;
+}
+
+function timeStringToMinutes(value: string): number {
+  const [hour = "0", minute = "0"] = value.split(":");
+  return Number(hour) * 60 + Number(minute);
+}
+
 function formatHours(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatOptionalHours(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : formatHours(value);
+}
+
+function safeFileNamePart(value: string): string {
+  const cleaned = value.trim().replace(/[^a-zA-Z0-9]+/g, "");
+  return cleaned || "JProgrammer";
 }
 
 function escapeHtml(value: string): string {
@@ -5079,14 +5573,6 @@ const shiftAvailabilityOptions: Array<{
   { value: "cannot_work", label: "Δεν μπορεί" },
   { value: "prefers_not_to_work", label: "Προτιμά να μη δουλέψει" },
   { value: "prefers_to_work", label: "Προτιμά να δουλέψει" }
-];
-
-const skillLevelOptions = [
-  { value: "1", label: "1 Αρχάριος" },
-  { value: "2", label: "2 Χαμηλό" },
-  { value: "3", label: "3 Κανονικό" },
-  { value: "4", label: "4 Έμπειρος" },
-  { value: "5", label: "5 Πολύ έμπειρος" }
 ];
 
 const timeOffTypes = [
@@ -5244,7 +5730,10 @@ function employeeToForm(
     assignedRoles.map((employeeRole) => [
       employeeRole.role_id,
       {
-        skillLevel: String(employeeRole.skill_level ?? 3),
+        experienceLevel: normalizeExperienceLevel(
+          employeeRole.experience_level ??
+            skillLevelToExperienceLevel(employeeRole.skill_level)
+        ),
         canLeadRole: employeeRole.can_lead_role === 1,
         isPreferredRole: employeeRole.is_preferred_role === 1
       }
@@ -5366,18 +5855,17 @@ async function syncEmployeeRoleAssignments(
     );
     const isPrimary = index === 0;
     const details = form.roleDetails[roleId] ?? {
-      skillLevel: "3",
+      experienceLevel: "some_experience",
       canLeadRole: false,
       isPreferredRole: false
     };
+    const experienceLevel = normalizeExperienceLevel(details.experienceLevel);
     const payload = {
       employee_id: employeeId,
       role_id: roleId,
       is_primary: isPrimary,
-      skill_level: Math.min(
-        5,
-        Math.max(1, Math.round(Number(details.skillLevel) || 3))
-      ),
+      experience_level: experienceLevel,
+      skill_level: experienceLevelToLegacySkillLevel(experienceLevel),
       can_lead_role: details.canLeadRole,
       is_preferred_role: details.isPreferredRole
     };

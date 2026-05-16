@@ -24,12 +24,18 @@ import {
   getAssignedDayCount,
   getAssignedHours,
   getDayConstraint,
+  getEmployeeRoleExperienceLevel,
   getEmployeeShiftAvailability,
+  getSlotDurationHours,
+  getSlotExperiencedRequiredCount,
+  getSlotMinimumExperienceLevel,
+  getSlotShiftTemplateId,
   getNightShiftCount,
   getWeekendShiftCount,
   hasAssignmentOnDate,
   hasOverlappingShift,
   hasTimeOffOnDate,
+  isNightOrDifficultShift,
   isWeekendDate
 } from "./constraints";
 import { buildAssignmentExplanation } from "./explanations";
@@ -41,6 +47,11 @@ import {
 import { buildSchedulerDiagnostics } from "./diagnostics";
 import { getDayOfWeek } from "./generateSlots";
 import {
+  experienceLevelRank,
+  experienceLevelToLabel,
+  meetsMinimumExperience
+} from "../../types";
+import {
   scoreCandidate,
   scoreWeights,
   type CandidateScore,
@@ -50,14 +61,13 @@ import {
   assessRoleGroupQuality,
   employeeCanLeadRole,
   employeePrefersRole,
-  getEmployeeRoleSkillLevel,
+  getEmployeeRoleExperience,
   getRoleGroupKey,
   getRoleGroupSlots
 } from "./teamQuality";
 import {
   type SchedulerWarningDraft,
-  createNoSlotsWarning,
-  createUnfilledSlotWarning
+  createNoSlotsWarning
 } from "./warnings";
 
 export type AssignmentResult = {
@@ -82,6 +92,23 @@ type RepairResult = {
   assignments: ScheduleAssignment[];
   explanations: string[];
 };
+
+type RoleGroupCoverage = {
+  groupKey: string;
+  slots: ScheduleSlot[];
+  assignedCount: number;
+  requiredCount: number;
+};
+
+type EmployeeRotationHistory = {
+  weekendAssignments: number;
+  difficultAssignments: number;
+  totalHours: number;
+  dayKeys: Set<string>;
+  assignmentKeys: Set<string>;
+};
+
+type RotationHistoryMap = Map<string, EmployeeRotationHistory>;
 
 export async function assignEmployeesToRun({
   run,
@@ -143,6 +170,12 @@ export async function assignEmployeesToRun({
   const activeEmployees = sortEmployees(employees).filter(
     (employee) => employee.is_active === 1
   );
+  const rotationHistory = buildRotationHistory({
+    run,
+    slots,
+    assignments,
+    staffingRequirements
+  });
   const explanations: string[] = [];
   let assignedSlots = 0;
   let warningsCreated = 0;
@@ -184,20 +217,93 @@ export async function assignEmployeesToRun({
     warningsCreated += 1;
   }
 
-  const difficultyMap = buildSlotDifficultyMap({
+  let difficultyMap = buildSlotDifficultyMap({
     slots: slotsToAssign,
     employees,
+    roles,
     data,
     assignedShifts,
+    allSlots: runSlots,
     staffingRequirements,
     manualOverrides
   });
-  const orderedSlots = [...slotsToAssign].sort((left, right) =>
-    compareSlotsByDifficulty(left, right, difficultyMap)
-  );
+  const baseCoverageSlots = getBaseCoverageSlots({
+    slotsToAssign,
+    runSlots,
+    assignedShifts,
+    staffingRequirements,
+    difficultyMap
+  });
   const initiallyUnfilledSlots: ScheduleSlot[] = [];
 
+  for (const [slotIndex, slot] of baseCoverageSlots.entries()) {
+    if (assignedSlotIds.has(slot.id) || getRoleGroupAssignedCount({
+      slot,
+      runSlots,
+      assignedShifts,
+      staffingRequirements
+    }) > 0) {
+      continue;
+    }
+
+    const candidates = buildCandidates({
+      slot,
+      slotIndex,
+      orderedSlots: baseCoverageSlots,
+      runSlots,
+      activeEmployees,
+      data,
+      assignedShifts,
+      difficultyMap,
+      rotationHistory,
+      manualOverrides
+    });
+
+    candidates.sort((left, right) =>
+      compareCandidates(left, right, assignedShifts, data)
+    );
+
+    const bestCandidate = candidates[0];
+
+    if (!bestCandidate) {
+      continue;
+    }
+
+    const { assignment, explanation } = await saveAutomaticAssignment({
+      run,
+      slot,
+      candidate: bestCandidate
+    });
+
+    activeRunAssignments = [...activeRunAssignments, assignment];
+    assignedSlotIds.add(slot.id);
+    assignedShifts.push(buildAssignedShift(slot, bestCandidate.employee.id));
+    explanations.push(explanation);
+    assignedSlots += 1;
+  }
+
+  const slotsRemainingAfterCoverage = slotsToAssign.filter(
+    (slot) => !assignedSlotIds.has(slot.id)
+  );
+  difficultyMap = buildSlotDifficultyMap({
+    slots: slotsRemainingAfterCoverage,
+    employees,
+    roles,
+    data,
+    assignedShifts,
+    allSlots: runSlots,
+    staffingRequirements,
+    manualOverrides
+  });
+  const orderedSlots = [...slotsRemainingAfterCoverage].sort((left, right) =>
+    compareSlotsByDifficulty(left, right, difficultyMap)
+  );
+
   for (const [slotIndex, slot] of orderedSlots.entries()) {
+    if (assignedSlotIds.has(slot.id)) {
+      continue;
+    }
+
     const candidates = buildCandidates({
       slot,
       slotIndex,
@@ -207,10 +313,13 @@ export async function assignEmployeesToRun({
       data,
       assignedShifts,
       difficultyMap,
+      rotationHistory,
       manualOverrides
     });
 
-    candidates.sort((left, right) => compareCandidates(left, right, assignedShifts));
+    candidates.sort((left, right) =>
+      compareCandidates(left, right, assignedShifts, data)
+    );
 
     const bestCandidate = candidates[0];
 
@@ -219,22 +328,10 @@ export async function assignEmployeesToRun({
       continue;
     }
 
-    const explanation = buildAssignmentExplanation({
-      employee: bestCandidate.employee,
+    const { assignment, explanation } = await saveAutomaticAssignment({
+      run,
       slot,
-      score: bestCandidate.score
-    });
-    const assignment = await databaseApi.createRecord("schedule_assignments", {
-      schedule_run_id: run.id,
-      schedule_slot_id: slot.id,
-      employee_id: bestCandidate.employee.id,
-      status: "assigned",
-      is_manual_override: false,
-      notes: explanation
-    });
-
-    await databaseApi.updateRecord("schedule_slots", slot.id, {
-      status: "filled"
+      candidate: bestCandidate
     });
 
     activeRunAssignments = [...activeRunAssignments, assignment];
@@ -243,6 +340,17 @@ export async function assignEmployeesToRun({
     explanations.push(explanation);
     assignedSlots += 1;
   }
+
+  const repairDifficultyMap = buildSlotDifficultyMap({
+    slots: runSlots,
+    employees,
+    roles,
+    data,
+    assignedShifts,
+    allSlots: runSlots,
+    staffingRequirements,
+    manualOverrides
+  });
 
   const repairResult = await repairUnfilledSlots({
     run,
@@ -253,7 +361,7 @@ export async function assignEmployeesToRun({
     activeEmployees,
     data,
     assignedShifts,
-    difficultyMap
+    difficultyMap: repairDifficultyMap
   });
 
   activeRunAssignments = repairResult.assignments;
@@ -264,24 +372,20 @@ export async function assignEmployeesToRun({
   assignedSlots += repairResult.repairedSlots;
   explanations.push(...repairResult.explanations);
 
-  for (const slot of repairResult.remainingUnfilledSlots) {
-    const message = buildDiagnosticUnfilledSlotMessage({
-      slot,
-      employees,
-      data,
-      assignedShifts,
-      roles,
-      shiftTemplates,
-      staffingRequirements,
-      manualOverrides
-    });
-    await saveWarning(
-      createUnfilledSlotWarning({
-        scheduleRunId: run.id,
-        slot,
-        message
-      })
-    );
+  const coverageWarnings = createRoleGroupCoverageWarnings({
+    runId: run.id,
+    runSlots,
+    assignedShifts,
+    employees,
+    data,
+    roles,
+    shiftTemplates,
+    staffingRequirements,
+    manualOverrides
+  });
+
+  for (const warning of coverageWarnings) {
+    await saveWarning(warning);
     warningsCreated += 1;
   }
 
@@ -323,6 +427,152 @@ export async function assignEmployeesToRun({
   };
 }
 
+async function saveAutomaticAssignment({
+  run,
+  slot,
+  candidate
+}: {
+  run: ScheduleRun;
+  slot: ScheduleSlot;
+  candidate: AssignmentCandidate;
+}): Promise<{ assignment: ScheduleAssignment; explanation: string }> {
+  const explanation = buildAssignmentExplanation({
+    employee: candidate.employee,
+    slot,
+    score: candidate.score
+  });
+  const assignment = await databaseApi.createRecord("schedule_assignments", {
+    schedule_run_id: run.id,
+    schedule_slot_id: slot.id,
+    employee_id: candidate.employee.id,
+    status: "assigned",
+    is_manual_override: false,
+    notes: explanation
+  });
+
+  await databaseApi.updateRecord("schedule_slots", slot.id, {
+    status: "filled"
+  });
+
+  return { assignment, explanation };
+}
+
+function getBaseCoverageSlots({
+  slotsToAssign,
+  runSlots,
+  assignedShifts,
+  staffingRequirements,
+  difficultyMap
+}: {
+  slotsToAssign: ScheduleSlot[];
+  runSlots: ScheduleSlot[];
+  assignedShifts: AssignedShift[];
+  staffingRequirements: StaffingRequirement[];
+  difficultyMap: Map<string, SlotDifficulty>;
+}): ScheduleSlot[] {
+  const unassignedSlotsByGroup = groupSlotsByRoleGroup(
+    slotsToAssign,
+    staffingRequirements
+  );
+  const coverageGroups = buildRoleGroupCoverage({
+    slots: runSlots,
+    assignedShifts,
+    staffingRequirements
+  });
+
+  return coverageGroups
+    .filter((group) => group.requiredCount > 0 && group.assignedCount === 0)
+    .flatMap((group) => {
+      const unassignedGroupSlots = unassignedSlotsByGroup.get(group.groupKey) ?? [];
+
+      if (unassignedGroupSlots.length === 0) {
+        return [];
+      }
+
+      return [
+        [...unassignedGroupSlots].sort((left, right) =>
+          compareSlotsByDifficulty(left, right, difficultyMap)
+        )[0]
+      ];
+    })
+    .sort((left, right) => {
+      const leftGroup = coverageGroups.find(
+        (group) => group.groupKey === getRoleGroupKey(left, staffingRequirements)
+      );
+      const rightGroup = coverageGroups.find(
+        (group) => group.groupKey === getRoleGroupKey(right, staffingRequirements)
+      );
+
+      return (
+        compareSlotsByDifficulty(left, right, difficultyMap) ||
+        (rightGroup?.requiredCount ?? 0) - (leftGroup?.requiredCount ?? 0) ||
+        left.date.localeCompare(right.date) ||
+        left.start_time.localeCompare(right.start_time) ||
+        left.role_id.localeCompare(right.role_id)
+      );
+    });
+}
+
+function buildRoleGroupCoverage({
+  slots,
+  assignedShifts,
+  staffingRequirements
+}: {
+  slots: ScheduleSlot[];
+  assignedShifts: AssignedShift[];
+  staffingRequirements: StaffingRequirement[];
+}): RoleGroupCoverage[] {
+  const slotsByGroup = groupSlotsByRoleGroup(slots, staffingRequirements);
+
+  return [...slotsByGroup.entries()].map(([groupKey, groupSlots]) => {
+    const groupSlotIds = new Set(groupSlots.map((slot) => slot.id));
+    const assignedCount = assignedShifts.filter((assignedShift) =>
+      groupSlotIds.has(assignedShift.slotId)
+    ).length;
+
+    return {
+      groupKey,
+      slots: groupSlots,
+      assignedCount,
+      requiredCount: groupSlots.length
+    };
+  });
+}
+
+function groupSlotsByRoleGroup(
+  slots: ScheduleSlot[],
+  staffingRequirements: StaffingRequirement[]
+): Map<string, ScheduleSlot[]> {
+  const groups = new Map<string, ScheduleSlot[]>();
+
+  for (const slot of slots) {
+    const groupKey = getRoleGroupKey(slot, staffingRequirements);
+    const existingSlots = groups.get(groupKey) ?? [];
+    groups.set(groupKey, [...existingSlots, slot]);
+  }
+
+  return groups;
+}
+
+function getRoleGroupAssignedCount({
+  slot,
+  runSlots,
+  assignedShifts,
+  staffingRequirements
+}: {
+  slot: ScheduleSlot;
+  runSlots: ScheduleSlot[];
+  assignedShifts: AssignedShift[];
+  staffingRequirements: StaffingRequirement[];
+}): number {
+  const groupSlots = getRoleGroupSlots({ slot, slots: runSlots, staffingRequirements });
+  const groupSlotIds = new Set(groupSlots.map((groupSlot) => groupSlot.id));
+
+  return assignedShifts.filter((assignedShift) =>
+    groupSlotIds.has(assignedShift.slotId)
+  ).length;
+}
+
 function buildCandidates({
   slot,
   slotIndex,
@@ -332,6 +582,7 @@ function buildCandidates({
   data,
   assignedShifts,
   difficultyMap,
+  rotationHistory,
   manualOverrides
 }: {
   slot: ScheduleSlot;
@@ -342,6 +593,7 @@ function buildCandidates({
   data: SchedulerData;
   assignedShifts: AssignedShift[];
   difficultyMap: Map<string, SlotDifficulty>;
+  rotationHistory: RotationHistoryMap;
   manualOverrides: ManualOverrideMap;
 }): AssignmentCandidate[] {
   const candidates: AssignmentCandidate[] = [];
@@ -376,6 +628,7 @@ function buildCandidates({
           data,
           assignedShifts,
           difficultyMap,
+          rotationHistory,
           manualOverrides
         })
       })
@@ -395,6 +648,7 @@ function buildScoringContext({
   data,
   assignedShifts,
   difficultyMap,
+  rotationHistory,
   manualOverrides
 }: {
   employee: Employee;
@@ -406,6 +660,7 @@ function buildScoringContext({
   data: SchedulerData;
   assignedShifts: AssignedShift[];
   difficultyMap: Map<string, SlotDifficulty>;
+  rotationHistory: RotationHistoryMap;
   manualOverrides: ManualOverrideMap;
 }): CandidateScoringContext {
   const divisor = Math.max(1, activeEmployees.length);
@@ -425,12 +680,45 @@ function buildScoringContext({
     (sum, item) => sum + getNightShiftCount(item.id, assignedShifts),
     0
   );
+  const totalRecentWeekendAssignments = activeEmployees.reduce(
+    (sum, item) =>
+      sum + getRotationHistoryForEmployee(item.id, rotationHistory).weekendAssignments,
+    0
+  );
+  const totalRecentDifficultAssignments = activeEmployees.reduce(
+    (sum, item) =>
+      sum + getRotationHistoryForEmployee(item.id, rotationHistory).difficultAssignments,
+    0
+  );
 
-  const roleSkillLevel = getEmployeeRoleSkillLevel(
+  const slotDifficulty = difficultyMap.get(slot.id);
+  const roleExperienceLevel = getEmployeeRoleExperience(
     employee.id,
     slot.role_id,
     data.employeeRoles
   );
+  const roleFlexibility = getEmployeeRoleFlexibility(
+    employee.id,
+    data.employeeRoles
+  );
+  const employeeRotationHistory = getRotationHistoryForEmployee(
+    employee.id,
+    rotationHistory
+  );
+  const activeRoleEmployeeCount =
+    slotDifficulty?.activeRoleEmployeeCount ??
+    getActiveEmployeeCountForRole(slot.role_id, activeEmployees, data.employeeRoles);
+  const slotHardCandidateCount =
+    slotDifficulty?.candidateCount ??
+    activeEmployees.filter((candidate) =>
+      checkHardConstraints({
+        employee: candidate,
+        slot,
+        data,
+        assignedShifts,
+        manualOverrides
+      }).allowed
+    ).length;
   const groupSlots = getRoleGroupSlots({
     slot,
     slots: runSlots,
@@ -440,9 +728,10 @@ function buildScoringContext({
   const roleGroupAssignedEmployeeIds = assignedShifts
     .filter((assignedShift) => groupSlotIds.has(assignedShift.slotId))
     .map((assignedShift) => assignedShift.employeeId);
-  const roleGroupAssignedSkillLevels = roleGroupAssignedEmployeeIds.map(
+  const roleGroupAssignedCount = roleGroupAssignedEmployeeIds.length;
+  const roleGroupAssignedExperienceLevels = roleGroupAssignedEmployeeIds.map(
     (employeeId) =>
-      getEmployeeRoleSkillLevel(employeeId, slot.role_id, data.employeeRoles)
+      getEmployeeRoleExperience(employeeId, slot.role_id, data.employeeRoles)
   );
   const roleGroupHasLead = roleGroupAssignedEmployeeIds.some((employeeId) =>
     employeeCanLeadRole(employeeId, slot.role_id, data.employeeRoles)
@@ -453,7 +742,10 @@ function buildScoringContext({
     averageAssignedDays: totalDays / divisor,
     averageWeekendAssignments: totalWeekendAssignments / divisor,
     averageDifficultAssignments: totalDifficultAssignments / divisor,
-    roleSkillLevel,
+    averageRecentWeekendAssignments: totalRecentWeekendAssignments / divisor,
+    averageRecentDifficultAssignments: totalRecentDifficultAssignments / divisor,
+    roleExperienceLevel,
+    roleExperienceRank: experienceLevelRank(roleExperienceLevel),
     candidateCanLeadRole: employeeCanLeadRole(
       employee.id,
       slot.role_id,
@@ -464,8 +756,32 @@ function buildScoringContext({
       slot.role_id,
       data.employeeRoles
     ),
+    roleFlexibility,
+    candidateIsSpecialistForRole: roleFlexibility === 1,
+    specialistAvailableForRole: hasSpecialistCandidateForRole({
+      employee,
+      slot,
+      activeEmployees,
+      data,
+      assignedShifts,
+      manualOverrides
+    }),
+    activeRoleEmployeeCount,
+    slotHardCandidateCount,
     roleGroupRequiredCount: groupSlots.length,
-    roleGroupAssignedSkillLevels,
+    roleGroupAssignedCount,
+    roleGroupIsUncovered: roleGroupAssignedCount === 0,
+    sameDaySameRoleUncoveredGroupCount: getSameDaySameRoleUncoveredGroupCount({
+      slot,
+      runSlots,
+      assignedShifts,
+      staffingRequirements: data.staffingRequirements ?? []
+    }),
+    roleGroupAssignedExperienceLevels,
+    experiencedRequiredCount: getSlotExperiencedRequiredCount(
+      slot,
+      data.staffingRequirements ?? []
+    ),
     roleGroupHasLead,
     strongerCandidateAvailableForGroup: hasStrongerCandidateForRoleGroup({
       employee,
@@ -475,7 +791,7 @@ function buildScoringContext({
       assignedShifts,
       manualOverrides
     }),
-    highSkillScarcityPenalty: getHighSkillScarcityPenalty({
+    highExperienceScarcityPenalty: getHighExperienceScarcityPenalty({
       employee,
       slot,
       futureSlots: orderedSlots.slice(slotIndex + 1),
@@ -486,6 +802,40 @@ function buildScoringContext({
       runSlots,
       manualOverrides
     }),
+    coverageScarcityPenalty: getCoverageScarcityPenalty({
+      employee,
+      slot,
+      activeEmployees,
+      data,
+      assignedShifts,
+      runSlots,
+      manualOverrides
+    }),
+    rareRoleCapacityPenalty: getRareRoleCapacityPenalty({
+      employee,
+      slot,
+      futureSlots: orderedSlots.slice(slotIndex + 1),
+      activeEmployees,
+      data,
+      assignedShifts,
+      difficultyMap,
+      manualOverrides
+    }),
+    wildcardPreservationPenalty: getWildcardPreservationPenalty({
+      employee,
+      slot,
+      futureSlots: orderedSlots.slice(slotIndex + 1),
+      activeEmployees,
+      data,
+      assignedShifts,
+      difficultyMap,
+      manualOverrides
+    }),
+    recentWeekendAssignments: employeeRotationHistory.weekendAssignments,
+    recentDifficultAssignments: employeeRotationHistory.difficultAssignments,
+    recentSameAssignment: employeeRotationHistory.assignmentKeys.has(
+      buildRotationAssignmentKey(slot, data.staffingRequirements ?? [])
+    ),
     scarcityPenalty: getFutureScarcityPenalty({
       employee,
       slot,
@@ -517,8 +867,12 @@ function hasStrongerCandidateForRoleGroup({
   return activeEmployees.some(
     (candidate) =>
       candidate.id !== employee.id &&
-      getEmployeeRoleSkillLevel(candidate.id, slot.role_id, data.employeeRoles) >=
-        4 &&
+      experienceLevelRank(
+        getEmployeeRoleExperience(candidate.id, slot.role_id, data.employeeRoles)
+      ) >
+        experienceLevelRank(
+          getEmployeeRoleExperience(employee.id, slot.role_id, data.employeeRoles)
+        ) &&
       checkHardConstraints({
         employee: candidate,
         slot,
@@ -527,6 +881,319 @@ function hasStrongerCandidateForRoleGroup({
         manualOverrides
       }).allowed
   );
+}
+
+function getEmployeeRoleIds(
+  employeeId: string,
+  employeeRoles: EmployeeRole[]
+): string[] {
+  return [
+    ...new Set(
+      employeeRoles
+        .filter((employeeRole) => employeeRole.employee_id === employeeId)
+        .map((employeeRole) => employeeRole.role_id)
+    )
+  ];
+}
+
+function getEmployeeRoleFlexibility(
+  employeeId: string,
+  employeeRoles: EmployeeRole[]
+): number {
+  return getEmployeeRoleIds(employeeId, employeeRoles).length;
+}
+
+function getActiveEmployeeCountForRole(
+  roleId: string,
+  activeEmployees: Employee[],
+  employeeRoles: EmployeeRole[]
+): number {
+  return activeEmployees.filter((employee) =>
+    employeeHasRole(employee.id, roleId, employeeRoles)
+  ).length;
+}
+
+function hasSpecialistCandidateForRole({
+  employee,
+  slot,
+  activeEmployees,
+  data,
+  assignedShifts,
+  manualOverrides
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  activeEmployees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  manualOverrides: ManualOverrideMap;
+}): boolean {
+  return activeEmployees.some(
+    (candidate) =>
+      candidate.id !== employee.id &&
+      getEmployeeRoleFlexibility(candidate.id, data.employeeRoles) === 1 &&
+      employeeHasRole(candidate.id, slot.role_id, data.employeeRoles) &&
+      checkHardConstraints({
+        employee: candidate,
+        slot,
+        data,
+        assignedShifts,
+        manualOverrides
+      }).allowed
+  );
+}
+
+function getRareRoleCapacityPenalty({
+  employee,
+  slot,
+  futureSlots,
+  activeEmployees,
+  data,
+  assignedShifts,
+  difficultyMap,
+  manualOverrides
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  futureSlots: ScheduleSlot[];
+  activeEmployees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  difficultyMap: Map<string, SlotDifficulty>;
+  manualOverrides: ManualOverrideMap;
+}): number {
+  const roleFlexibility = getEmployeeRoleFlexibility(employee.id, data.employeeRoles);
+
+  if (roleFlexibility <= 1) {
+    return 0;
+  }
+
+  const currentRoleEmployeeCount = getActiveEmployeeCountForRole(
+    slot.role_id,
+    activeEmployees,
+    data.employeeRoles
+  );
+  const currentDifficulty = difficultyMap.get(slot.id)?.difficulty ?? 0;
+
+  if (currentRoleEmployeeCount <= 3 || currentDifficulty >= 500) {
+    return 0;
+  }
+
+  const futureCriticalSlots = countFutureCriticalSlotsCandidateCanCover({
+    employee,
+    slot,
+    futureSlots: futureSlots.filter(
+      (futureSlot) => futureSlot.role_id !== slot.role_id
+    ),
+    activeEmployees,
+    data,
+    assignedShifts,
+    difficultyMap,
+    manualOverrides
+  });
+
+  if (futureCriticalSlots === 0) {
+    return 0;
+  }
+
+  return futureCriticalSlots > 1
+    ? scoreWeights.preserveRareRoleCapacity * 1.5
+    : scoreWeights.preserveRareRoleCapacity;
+}
+
+function getWildcardPreservationPenalty({
+  employee,
+  slot,
+  futureSlots,
+  activeEmployees,
+  data,
+  assignedShifts,
+  difficultyMap,
+  manualOverrides
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  futureSlots: ScheduleSlot[];
+  activeEmployees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  difficultyMap: Map<string, SlotDifficulty>;
+  manualOverrides: ManualOverrideMap;
+}): number {
+  const roleFlexibility = getEmployeeRoleFlexibility(employee.id, data.employeeRoles);
+  const currentDifficulty = difficultyMap.get(slot.id)?.difficulty ?? 0;
+
+  if (roleFlexibility < 3 || currentDifficulty >= 500) {
+    return 0;
+  }
+
+  const futureCriticalSlots = countFutureCriticalSlotsCandidateCanCover({
+    employee,
+    slot,
+    futureSlots,
+    activeEmployees,
+    data,
+    assignedShifts,
+    difficultyMap,
+    manualOverrides
+  });
+
+  return futureCriticalSlots > 0 ? scoreWeights.preserveFlexibleWildcard : 0;
+}
+
+function countFutureCriticalSlotsCandidateCanCover({
+  employee,
+  slot,
+  futureSlots,
+  activeEmployees,
+  data,
+  assignedShifts,
+  difficultyMap,
+  manualOverrides
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  futureSlots: ScheduleSlot[];
+  activeEmployees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  difficultyMap: Map<string, SlotDifficulty>;
+  manualOverrides: ManualOverrideMap;
+}): number {
+  const projectedShifts = [...assignedShifts, buildAssignedShift(slot, employee.id)];
+
+  return futureSlots.filter((futureSlot) => {
+    const futureDifficulty = difficultyMap.get(futureSlot.id);
+    const activeRoleEmployeeCount =
+      futureDifficulty?.activeRoleEmployeeCount ??
+      getActiveEmployeeCountForRole(
+        futureSlot.role_id,
+        activeEmployees,
+        data.employeeRoles
+      );
+    const candidateCount = futureDifficulty?.candidateCount ?? activeEmployees.length;
+    const isCriticalFutureSlot =
+      (futureDifficulty?.difficulty ?? 0) >= 250 ||
+      candidateCount <= 2 ||
+      activeRoleEmployeeCount <= 3 ||
+      isWeekendDate(futureSlot.date);
+
+    if (!isCriticalFutureSlot) {
+      return false;
+    }
+
+    return checkHardConstraints({
+      employee,
+      slot: futureSlot,
+      data,
+      assignedShifts: projectedShifts,
+      manualOverrides
+    }).allowed;
+  }).length;
+}
+
+function getSameDaySameRoleUncoveredGroupCount({
+  slot,
+  runSlots,
+  assignedShifts,
+  staffingRequirements
+}: {
+  slot: ScheduleSlot;
+  runSlots: ScheduleSlot[];
+  assignedShifts: AssignedShift[];
+  staffingRequirements: StaffingRequirement[];
+}): number {
+  const currentGroupKey = getRoleGroupKey(slot, staffingRequirements);
+  const groups = buildRoleGroupCoverage({
+    slots: runSlots.filter(
+      (candidateSlot) =>
+        candidateSlot.date === slot.date && candidateSlot.role_id === slot.role_id
+    ),
+    assignedShifts,
+    staffingRequirements
+  });
+
+  return groups.filter(
+    (group) => group.groupKey !== currentGroupKey && group.assignedCount === 0
+  ).length;
+}
+
+function getCoverageScarcityPenalty({
+  employee,
+  slot,
+  activeEmployees,
+  data,
+  assignedShifts,
+  runSlots,
+  manualOverrides
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  activeEmployees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  runSlots: ScheduleSlot[];
+  manualOverrides: ManualOverrideMap;
+}): number {
+  const staffingRequirements = data.staffingRequirements ?? [];
+  const currentGroupKey = getRoleGroupKey(slot, staffingRequirements);
+  const currentGroupAssignedCount = getRoleGroupAssignedCount({
+    slot,
+    runSlots,
+    assignedShifts,
+    staffingRequirements
+  });
+
+  if (currentGroupAssignedCount === 0) {
+    return 0;
+  }
+
+  const sameDaySameRoleGroups = buildRoleGroupCoverage({
+    slots: runSlots.filter(
+      (candidateSlot) =>
+        candidateSlot.date === slot.date && candidateSlot.role_id === slot.role_id
+    ),
+    assignedShifts,
+    staffingRequirements
+  }).filter(
+    (group) => group.groupKey !== currentGroupKey && group.assignedCount === 0
+  );
+
+  for (const group of sameDaySameRoleGroups) {
+    const representativeSlot = group.slots[0];
+
+    if (!representativeSlot) {
+      continue;
+    }
+
+    const employeeCanCoverUncoveredGroup = checkHardConstraints({
+      employee,
+      slot: representativeSlot,
+      data,
+      assignedShifts,
+      manualOverrides
+    }).allowed;
+
+    if (!employeeCanCoverUncoveredGroup) {
+      continue;
+    }
+
+    const candidateCount = activeEmployees.filter((candidate) =>
+      checkHardConstraints({
+        employee: candidate,
+        slot: representativeSlot,
+        data,
+        assignedShifts,
+        manualOverrides
+      }).allowed
+    ).length;
+
+    if (candidateCount <= 1) {
+      return scoreWeights.protectUncoveredGroupCandidate;
+    }
+  }
+
+  return 0;
 }
 
 function getFutureScarcityPenalty({
@@ -600,7 +1267,7 @@ function getFutureScarcityPenalty({
     : scoreWeights.futureDifficultSlotProtection;
 }
 
-function getHighSkillScarcityPenalty({
+function getHighExperienceScarcityPenalty({
   employee,
   slot,
   futureSlots,
@@ -622,13 +1289,13 @@ function getHighSkillScarcityPenalty({
   manualOverrides: ManualOverrideMap;
 }): number {
   const currentDifficulty = difficultyMap.get(slot.id)?.difficulty ?? 0;
-  const roleSkillLevel = getEmployeeRoleSkillLevel(
+  const roleExperienceLevel = getEmployeeRoleExperience(
     employee.id,
     slot.role_id,
     data.employeeRoles
   );
 
-  if (roleSkillLevel < 4 || currentDifficulty >= 250) {
+  if (roleExperienceLevel !== "experienced" || currentDifficulty >= 250) {
     return 0;
   }
 
@@ -668,8 +1335,11 @@ function getHighSkillScarcityPenalty({
 
     const strongCandidateCount = activeEmployees.filter(
       (candidate) =>
-        getEmployeeRoleSkillLevel(candidate.id, futureSlot.role_id, data.employeeRoles) >=
-          4 &&
+        getEmployeeRoleExperience(
+          candidate.id,
+          futureSlot.role_id,
+          data.employeeRoles
+        ) === "experienced" &&
         checkHardConstraints({
           employee: candidate,
           slot: futureSlot,
@@ -878,7 +1548,7 @@ function findRepairMove({
           })
         }))
         .sort((left, right) =>
-          compareCandidates(left, right, shiftsWithTargetMove)
+          compareCandidates(left, right, shiftsWithTargetMove, data)
         );
 
       const replacementCandidate = replacementCandidates[0];
@@ -901,6 +1571,7 @@ function buildDiagnosticUnfilledSlotMessage({
   employees,
   data,
   assignedShifts,
+  runSlots,
   roles,
   shiftTemplates,
   staffingRequirements,
@@ -910,6 +1581,7 @@ function buildDiagnosticUnfilledSlotMessage({
   employees: Employee[];
   data: SchedulerData;
   assignedShifts: AssignedShift[];
+  runSlots: ScheduleSlot[];
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
   staffingRequirements: StaffingRequirement[];
@@ -924,6 +1596,7 @@ function buildDiagnosticUnfilledSlotMessage({
     timeOff: 0,
     cannotWork: 0,
     shiftUnavailable: 0,
+    insufficientExperience: 0,
     maxHours: 0,
     maxDays: 0,
     sameDayAssignment: 0,
@@ -934,6 +1607,20 @@ function buildDiagnosticUnfilledSlotMessage({
   for (const employee of activeEmployees) {
     if (!employeeHasRole(employee.id, slot.role_id, data.employeeRoles)) {
       blocked.missingRole += 1;
+    } else {
+      const employeeExperienceLevel = getEmployeeRoleExperienceLevel(
+        employee.id,
+        slot.role_id,
+        data.employeeRoles
+      );
+      const minimumExperienceLevel = getSlotMinimumExperienceLevel(
+        slot,
+        staffingRequirements
+      );
+
+      if (!meetsMinimumExperience(employeeExperienceLevel, minimumExperienceLevel)) {
+        blocked.insufficientExperience += 1;
+      }
     }
 
     if (hasTimeOffOnDate(employee.id, slot.date, data.timeOff)) {
@@ -984,6 +1671,28 @@ function buildDiagnosticUnfilledSlotMessage({
       blocked.maxDays += 1;
     }
   }
+  const groupSlots = getRoleGroupSlots({ slot, slots: runSlots, staffingRequirements });
+  const groupSlotIds = new Set(groupSlots.map((groupSlot) => groupSlot.id));
+  const assignedEmployeeIds = assignedShifts
+    .filter((assignedShift) => groupSlotIds.has(assignedShift.slotId))
+    .map((assignedShift) => assignedShift.employeeId);
+  const minimumExperienceLevel = getSlotMinimumExperienceLevel(
+    slot,
+    staffingRequirements
+  );
+  const experiencedRequiredCount = getSlotExperiencedRequiredCount(
+    slot,
+    staffingRequirements
+  );
+  const experiencedAssignedCount = assignedEmployeeIds.filter(
+    (employeeId) =>
+      getEmployeeRoleExperience(employeeId, slot.role_id, data.employeeRoles) ===
+      "experienced"
+  ).length;
+  const missingExperienceLabel =
+    minimumExperienceLevel === "no_experience"
+      ? "χωρίς συγκεκριμένη απαίτηση προϋπηρεσίας"
+      : `με τουλάχιστον ${experienceLevelToLabel(minimumExperienceLevel)}`;
 
   return [
     `No candidate could fill ${formatDayAndDate(slot.date)} ${formatShiftLabel({
@@ -991,7 +1700,11 @@ function buildDiagnosticUnfilledSlotMessage({
       shiftTemplates,
       staffingRequirements
     })} ${slot.start_time}-${slot.end_time} ${roleName}.`,
+    `Missing: 1 employee for ${roleName} ${missingExperienceLabel}.`,
+    `Required total: ${groupSlots.length}. Assigned: ${assignedEmployeeIds.length}.`,
+    `Required experienced: ${experiencedRequiredCount}. Assigned experienced: ${experiencedAssignedCount}.`,
     `Employees with role: ${employeesWithRole.length}.`,
+    `Blocked by insufficient experience: ${blocked.insufficientExperience}.`,
     `Blocked by time off: ${blocked.timeOff}.`,
     `Blocked by cannot_work: ${blocked.cannotWork}.`,
     `Blocked by shift availability: ${blocked.shiftUnavailable}.`,
@@ -1065,6 +1778,188 @@ function createTeamQualityWarnings({
   return warnings;
 }
 
+function createRoleGroupCoverageWarnings({
+  runId,
+  runSlots,
+  assignedShifts,
+  employees,
+  data,
+  roles,
+  shiftTemplates,
+  staffingRequirements,
+  manualOverrides
+}: {
+  runId: string;
+  runSlots: ScheduleSlot[];
+  assignedShifts: AssignedShift[];
+  employees: Employee[];
+  data: SchedulerData;
+  roles: Role[];
+  shiftTemplates: ShiftTemplate[];
+  staffingRequirements: StaffingRequirement[];
+  manualOverrides: ManualOverrideMap;
+}): SchedulerWarningDraft[] {
+  return buildRoleGroupCoverage({
+    slots: runSlots,
+    assignedShifts,
+    staffingRequirements
+  }).flatMap((group) => {
+    const representativeSlot = group.slots[0];
+
+    if (!representativeSlot || group.assignedCount >= group.requiredCount) {
+      return [];
+    }
+
+    const roleName =
+      roles.find((role) => role.id === representativeSlot.role_id)?.name ??
+      "required role";
+    const shiftLabel = formatShiftLabel({
+      slot: representativeSlot,
+      shiftTemplates,
+      staffingRequirements
+    });
+    const coverageLabel = `${formatDayAndDate(
+      representativeSlot.date
+    )} ${shiftLabel} ${roleName}`;
+    const diagnosticMessage = buildCoverageGroupShortageMessage({
+      slot: representativeSlot,
+      group,
+      coverageLabel,
+      employees,
+      data,
+      assignedShifts,
+      manualOverrides
+    });
+
+    if (group.assignedCount === 0) {
+      return [
+        {
+          scheduleRunId: runId,
+          scheduleSlotId: representativeSlot.id,
+          scheduleAssignmentId: null,
+          severity: "warning",
+          warningType: "critical_coverage_gap",
+          message: diagnosticMessage
+        }
+      ];
+    }
+
+    return [
+      {
+        scheduleRunId: runId,
+        scheduleSlotId: representativeSlot.id,
+        scheduleAssignmentId: null,
+        severity: "warning",
+        warningType: "role_group_understaffed",
+        message: diagnosticMessage
+      }
+    ];
+  });
+}
+
+function buildCoverageGroupShortageMessage({
+  slot,
+  group,
+  coverageLabel,
+  employees,
+  data,
+  assignedShifts,
+  manualOverrides
+}: {
+  slot: ScheduleSlot;
+  group: RoleGroupCoverage;
+  coverageLabel: string;
+  employees: Employee[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+  manualOverrides: ManualOverrideMap;
+}): string {
+  const activeEmployees = employees.filter((employee) => employee.is_active === 1);
+  const diagnostics = {
+    activeEmployeesWithRole: 0,
+    availableAfterHardConstraints: 0,
+    blockedByTimeOff: 0,
+    blockedByCannotWork: 0,
+    blockedBySameDayAssignment: 0,
+    blockedByMaxHours: 0,
+    blockedByMaxDays: 0,
+    blockedByMissingRole: 0
+  };
+
+  for (const employee of activeEmployees) {
+    if (employeeHasRole(employee.id, slot.role_id, data.employeeRoles)) {
+      diagnostics.activeEmployeesWithRole += 1;
+    } else {
+      diagnostics.blockedByMissingRole += 1;
+    }
+
+    if (hasTimeOffOnDate(employee.id, slot.date, data.timeOff)) {
+      diagnostics.blockedByTimeOff += 1;
+    }
+
+    const dayConstraint = getDayConstraint(
+      employee.id,
+      getDayOfWeek(slot.date),
+      data.employeeDayConstraints
+    );
+    const shiftAvailability = getEmployeeShiftAvailability({
+      employeeId: employee.id,
+      slot,
+      data
+    });
+
+    if (
+      dayConstraint?.constraint_type === "cannot_work" ||
+      shiftAvailability?.availability_type === "cannot_work"
+    ) {
+      diagnostics.blockedByCannotWork += 1;
+    }
+
+    if (hasAssignmentOnDate(employee.id, slot.date, assignedShifts)) {
+      diagnostics.blockedBySameDayAssignment += 1;
+    }
+
+    const hardConstraintResult = checkHardConstraints({
+      employee,
+      slot,
+      data,
+      assignedShifts,
+      manualOverrides
+    });
+
+    if (hardConstraintResult.allowed) {
+      diagnostics.availableAfterHardConstraints += 1;
+    }
+
+    const reasons = hardConstraintResult.reasons.join(" ");
+
+    if (reasons.includes("max weekly hours")) {
+      diagnostics.blockedByMaxHours += 1;
+    }
+
+    if (reasons.includes("max weekly days")) {
+      diagnostics.blockedByMaxDays += 1;
+    }
+  }
+
+  const header =
+    group.assignedCount === 0
+      ? `Critical coverage gap: ${coverageLabel} has 0/${group.requiredCount} assigned employees.`
+      : `Understaffed: ${coverageLabel} has ${group.assignedCount}/${group.requiredCount} assigned employees.`;
+
+  return [
+    header,
+    `Active employees with role: ${diagnostics.activeEmployeesWithRole}.`,
+    `Available after hard constraints: ${diagnostics.availableAfterHardConstraints}.`,
+    `Blocked by time off: ${diagnostics.blockedByTimeOff}.`,
+    `Blocked by cannot_work/shift availability: ${diagnostics.blockedByCannotWork}.`,
+    `Blocked by same-day assignment: ${diagnostics.blockedBySameDayAssignment}.`,
+    `Blocked by max hours: ${diagnostics.blockedByMaxHours}.`,
+    `Blocked by max days: ${diagnostics.blockedByMaxDays}.`,
+    `Missing role: ${diagnostics.blockedByMissingRole}.`
+  ].join(" ");
+}
+
 function formatShiftLabel({
   slot,
   shiftTemplates,
@@ -1085,6 +1980,95 @@ function formatShiftLabel({
       );
 
   return shiftTemplate?.name ?? "Shift";
+}
+
+function buildRotationHistory({
+  run,
+  slots,
+  assignments,
+  staffingRequirements
+}: {
+  run: ScheduleRun;
+  slots: ScheduleSlot[];
+  assignments: ScheduleAssignment[];
+  staffingRequirements: StaffingRequirement[];
+}): RotationHistoryMap {
+  const lookbackDays = 28;
+  const runStartTime = new Date(`${run.start_date}T00:00:00`).getTime();
+  const lookbackStartTime = runStartTime - lookbackDays * 24 * 60 * 60 * 1000;
+  const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+  const history: RotationHistoryMap = new Map();
+
+  for (const assignment of assignments) {
+    if (assignment.status === "cancelled" || assignment.status === "removed") {
+      continue;
+    }
+
+    const slot = slotById.get(assignment.schedule_slot_id);
+
+    if (!slot || slot.schedule_run_id === run.id) {
+      continue;
+    }
+
+    const slotTime = new Date(`${slot.date}T00:00:00`).getTime();
+
+    if (slotTime >= runStartTime || slotTime < lookbackStartTime) {
+      continue;
+    }
+
+    const employeeHistory = getRotationHistoryForEmployee(
+      assignment.employee_id,
+      history
+    );
+
+    if (!history.has(assignment.employee_id)) {
+      history.set(assignment.employee_id, employeeHistory);
+    }
+
+    employeeHistory.totalHours += getSlotDurationHours(slot);
+    employeeHistory.dayKeys.add(slot.date);
+    employeeHistory.assignmentKeys.add(
+      buildRotationAssignmentKey(slot, staffingRequirements)
+    );
+
+    if (isWeekendDate(slot.date)) {
+      employeeHistory.weekendAssignments += 1;
+    }
+
+    if (isNightOrDifficultShift(slot.start_time, slot.end_time)) {
+      employeeHistory.difficultAssignments += 1;
+    }
+  }
+
+  return history;
+}
+
+function getRotationHistoryForEmployee(
+  employeeId: string,
+  rotationHistory: RotationHistoryMap
+): EmployeeRotationHistory {
+  return rotationHistory.get(employeeId) ?? createEmptyRotationHistory();
+}
+
+function createEmptyRotationHistory(): EmployeeRotationHistory {
+  return {
+    weekendAssignments: 0,
+    difficultAssignments: 0,
+    totalHours: 0,
+    dayKeys: new Set<string>(),
+    assignmentKeys: new Set<string>()
+  };
+}
+
+function buildRotationAssignmentKey(
+  slot: ScheduleSlot,
+  staffingRequirements: StaffingRequirement[]
+): string {
+  const shiftTemplateId =
+    getSlotShiftTemplateId(slot, staffingRequirements) ??
+    `${slot.start_time}-${slot.end_time}`;
+
+  return `${getDayOfWeek(slot.date)}|${shiftTemplateId}|${slot.role_id}`;
 }
 
 function compareSlots(left: ScheduleSlot, right: ScheduleSlot): number {
@@ -1109,7 +2093,8 @@ function sortEmployees(employees: Employee[]): Employee[] {
 function compareCandidates(
   left: AssignmentCandidate,
   right: AssignmentCandidate,
-  assignedShifts: AssignedShift[]
+  assignedShifts: AssignedShift[],
+  data: SchedulerData
 ): number {
   return (
     right.score.totalScore - left.score.totalScore ||
@@ -1117,6 +2102,12 @@ function compareCandidates(
       getAssignedHours(right.employee.id, assignedShifts) ||
     getAssignedDayCount(left.employee.id, assignedShifts) -
       getAssignedDayCount(right.employee.id, assignedShifts) ||
+    getWeekendShiftCount(left.employee.id, assignedShifts) -
+      getWeekendShiftCount(right.employee.id, assignedShifts) ||
+    getNightShiftCount(left.employee.id, assignedShifts) -
+      getNightShiftCount(right.employee.id, assignedShifts) ||
+    getEmployeeRoleFlexibility(left.employee.id, data.employeeRoles) -
+      getEmployeeRoleFlexibility(right.employee.id, data.employeeRoles) ||
     left.employee.last_name.localeCompare(right.employee.last_name) ||
     left.employee.first_name.localeCompare(right.employee.first_name) ||
     left.employee.id.localeCompare(right.employee.id)
@@ -1163,7 +2154,7 @@ function mergeRunParameters(
   const assignedAt = new Date().toISOString();
   const assignmentParameters = {
     stage: "employee_assignment",
-    algorithm: "scarcity_aware_greedy_with_repair",
+    algorithm: "coverage_first_manager_policy_greedy_with_repair",
     assignedAt,
     diagnostics
   };

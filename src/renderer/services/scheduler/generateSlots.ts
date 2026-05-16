@@ -2,6 +2,7 @@ import type {
   DayOfWeek,
   OpeningHours,
   SpecialDay,
+  ShiftTemplate,
   StaffingRequirement
 } from "../../types";
 
@@ -59,11 +60,13 @@ export function buildScheduleGenerationPlan({
   weekStartDate,
   openingHours,
   staffingRequirements,
+  shiftTemplates,
   specialDays
 }: {
   weekStartDate: string;
   openingHours: OpeningHours[];
   staffingRequirements: StaffingRequirement[];
+  shiftTemplates: ShiftTemplate[];
   specialDays: SpecialDay[];
 }): GenerationPlan {
   const activeRequirements = staffingRequirements.filter(
@@ -113,13 +116,18 @@ export function buildScheduleGenerationPlan({
     }
 
     for (const requirement of dayRequirements) {
+      const shiftSnapshot = getRequirementShiftSnapshot(
+        requirement,
+        shiftTemplates
+      );
+
       for (let index = 1; index <= requirement.required_count; index += 1) {
         slots.push({
           date,
           dayOfWeek,
           roleId: requirement.role_id,
-          startTime: requirement.start_time,
-          endTime: requirement.end_time,
+          startTime: shiftSnapshot.startTime,
+          endTime: shiftSnapshot.endTime,
           sourceId: requirement.id,
           slotNumber: index,
           requiredCount: requirement.required_count
@@ -142,6 +150,20 @@ export function buildScheduleGenerationPlan({
     weekEndDate: weekDates[6],
     slots,
     warnings
+  };
+}
+
+function getRequirementShiftSnapshot(
+  requirement: StaffingRequirement,
+  shiftTemplates: ShiftTemplate[]
+): { startTime: string; endTime: string } {
+  const shiftTemplate = requirement.shift_template_id
+    ? shiftTemplates.find((template) => template.id === requirement.shift_template_id)
+    : null;
+
+  return {
+    startTime: shiftTemplate?.start_time ?? requirement.start_time,
+    endTime: shiftTemplate?.end_time ?? requirement.end_time
   };
 }
 

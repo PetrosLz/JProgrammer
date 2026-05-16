@@ -28,6 +28,104 @@ export type DatabaseRecordInput = Record<string, DbValue | undefined>;
 export type DatabaseRecordUpdate = Record<string, DbValue | undefined>;
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type SqlBoolean = 0 | 1;
+export const experienceLevelValues = [
+  "no_experience",
+  "some_experience",
+  "experienced"
+] as const;
+export type ExperienceLevel = (typeof experienceLevelValues)[number];
+
+export const experienceLevelOptions: Array<{
+  value: ExperienceLevel;
+  label: string;
+}> = [
+  { value: "no_experience", label: "Χωρίς προϋπηρεσία" },
+  { value: "some_experience", label: "Με προϋπηρεσία" },
+  { value: "experienced", label: "Έμπειρος" }
+];
+
+export function normalizeExperienceLevel(value: unknown): ExperienceLevel {
+  return experienceLevelValues.includes(value as ExperienceLevel)
+    ? (value as ExperienceLevel)
+    : "some_experience";
+}
+
+export function skillLevelToExperienceLevel(value: unknown): ExperienceLevel {
+  const numericValue = Number(value);
+
+  if (Number.isFinite(numericValue)) {
+    if (numericValue <= 2) {
+      return "no_experience";
+    }
+
+    if (numericValue >= 4) {
+      return "experienced";
+    }
+  }
+
+  return "some_experience";
+}
+
+export function experienceLevelToLegacySkillLevel(
+  level: ExperienceLevel
+): number {
+  const normalizedLevel = normalizeExperienceLevel(level);
+
+  if (normalizedLevel === "no_experience") {
+    return 1;
+  }
+
+  if (normalizedLevel === "experienced") {
+    return 5;
+  }
+
+  return 3;
+}
+
+export function experienceLevelRank(level: ExperienceLevel): number {
+  const normalizedLevel = normalizeExperienceLevel(level);
+
+  if (normalizedLevel === "no_experience") {
+    return 1;
+  }
+
+  if (normalizedLevel === "experienced") {
+    return 3;
+  }
+
+  return 2;
+}
+
+export function experienceLevelToLabel(
+  level: ExperienceLevel,
+  language: "el" | "en" = "el"
+): string {
+  const normalizedLevel = normalizeExperienceLevel(level);
+
+  if (language === "en") {
+    if (normalizedLevel === "no_experience") {
+      return "no experience";
+    }
+
+    if (normalizedLevel === "experienced") {
+      return "experienced";
+    }
+
+    return "some experience";
+  }
+
+  return (
+    experienceLevelOptions.find((option) => option.value === normalizedLevel)
+      ?.label ?? "Με προϋπηρεσία"
+  );
+}
+
+export function meetsMinimumExperience(
+  employeeLevel: ExperienceLevel,
+  requiredLevel: ExperienceLevel
+): boolean {
+  return experienceLevelRank(employeeLevel) >= experienceLevelRank(requiredLevel);
+}
 
 export interface EntityBase {
   id: string;
@@ -81,6 +179,8 @@ export interface StaffingRequirement extends EntityBase {
   start_time: string;
   end_time: string;
   required_count: number;
+  minimum_experience_level: ExperienceLevel;
+  experienced_required_count: number;
   priority: string | null;
   is_active: SqlBoolean;
   notes: string | null;
@@ -115,7 +215,9 @@ export interface EmployeeRole extends EntityBase {
   employee_id: string;
   role_id: string;
   is_primary: SqlBoolean;
-  skill_level: number;
+  experience_level: ExperienceLevel;
+  /** @deprecated Use experience_level for role-specific manager-facing experience. */
+  skill_level: number | null;
   can_lead_role: SqlBoolean;
   is_preferred_role: SqlBoolean;
 }

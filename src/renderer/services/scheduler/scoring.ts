@@ -1,4 +1,5 @@
-import type { Employee, ScheduleSlot } from "../../types";
+import type { Employee, ExperienceLevel, ScheduleSlot } from "../../types";
+import { experienceLevelRank, experienceLevelToLabel } from "../../types";
 import {
   type AssignedShift,
   type SchedulerData,
@@ -40,15 +41,33 @@ export type CandidateScoringContext = {
   averageAssignedDays: number;
   averageWeekendAssignments: number;
   averageDifficultAssignments: number;
+  averageRecentWeekendAssignments: number;
+  averageRecentDifficultAssignments: number;
   scarcityPenalty: number;
-  roleSkillLevel: number;
+  roleExperienceLevel: ExperienceLevel;
+  roleExperienceRank: number;
   candidateCanLeadRole: boolean;
   candidatePrefersRole: boolean;
+  roleFlexibility: number;
+  candidateIsSpecialistForRole: boolean;
+  specialistAvailableForRole: boolean;
+  activeRoleEmployeeCount: number;
+  slotHardCandidateCount: number;
   roleGroupRequiredCount: number;
-  roleGroupAssignedSkillLevels: number[];
+  roleGroupAssignedCount: number;
+  roleGroupIsUncovered: boolean;
+  sameDaySameRoleUncoveredGroupCount: number;
+  roleGroupAssignedExperienceLevels: ExperienceLevel[];
+  experiencedRequiredCount: number;
   roleGroupHasLead: boolean;
   strongerCandidateAvailableForGroup: boolean;
-  highSkillScarcityPenalty: number;
+  highExperienceScarcityPenalty: number;
+  coverageScarcityPenalty: number;
+  rareRoleCapacityPenalty: number;
+  wildcardPreservationPenalty: number;
+  recentWeekendAssignments: number;
+  recentDifficultAssignments: number;
+  recentSameAssignment: boolean;
 };
 
 export const scoreWeights = {
@@ -68,14 +87,35 @@ export const scoreWeights = {
   alreadyHasDifficultShift: -20,
   futureDifficultSlotProtection: -60,
   cannotUsuallyWorkWeekends: -25,
-  skillStep: 12,
+  experienceStep: 18,
   preferredRole: 8,
+  rareRoleFit: 120,
+  fewValidCandidatesForSlot: 100,
+  specialistForRole: 80,
+  focusedRoleSet: 40,
+  preventsSpecialistIdle: 60,
+  flexibleUsedWhereSpecialistFits: -50,
+  preserveFlexibleWildcard: -60,
+  preserveRareRoleCapacity: -80,
   leadMissingGroup: 24,
-  strongEmployeeNeeded: 45,
-  weakEmployeeCreatesWeakGroup: -50,
-  lowSkillIntoWeakGroup: -35,
-  highSkillOverStacking: -25
+  experiencedEmployeeNeeded: 45,
+  weakEmployeeCreatesWeakGroup: -80,
+  noExperienceIntoWeakGroup: -35,
+  experiencedOverStacking: -25,
+  firstRoleGroupCoverage: 500,
+  singleSlotGroupCoverage: 300,
+  weekendUncoveredGroupCoverage: 200,
+  alreadyCoveredWhileSameRoleUncovered: -300,
+  protectUncoveredGroupCandidate: -500,
+  fewerRecentWeekendAssignments: 10,
+  fewerRecentDifficultAssignments: 8,
+  recentWeekendRotation: -20,
+  recentDifficultRotation: -15,
+  repeatRecentSameAssignment: -12
 } as const;
+
+export type RotationStrength = "none" | "low" | "medium" | "high";
+export const rotationStrength: RotationStrength = "medium";
 
 export function scoreCandidate({
   employee,
@@ -240,35 +280,119 @@ export function scoreCandidate({
   }
 
   if (context) {
+    if (context.roleGroupIsUncovered) {
+      add(
+        "Gives first coverage to role group",
+        scoreWeights.firstRoleGroupCoverage
+      );
+
+      if (context.roleGroupRequiredCount === 1) {
+        add(
+          "Covers single-person role group",
+          scoreWeights.singleSlotGroupCoverage
+        );
+      }
+
+      if (isWeekendDate(slot.date)) {
+        add(
+          "Covers uncovered weekend group",
+          scoreWeights.weekendUncoveredGroupCoverage
+        );
+      }
+    } else if (context.sameDaySameRoleUncoveredGroupCount > 0) {
+      add(
+        "Same role has uncovered shift on this day",
+        scoreWeights.alreadyCoveredWhileSameRoleUncovered
+      );
+    }
+
+    if (context.activeRoleEmployeeCount > 0 && context.activeRoleEmployeeCount <= 3) {
+      add("Fills scarce role", scoreWeights.rareRoleFit);
+    }
+
+    if (
+      context.slotHardCandidateCount > 0 &&
+      context.slotHardCandidateCount <= 2
+    ) {
+      add("One of few valid candidates for this slot", scoreWeights.fewValidCandidatesForSlot);
+    }
+
+    if (context.candidateIsSpecialistForRole) {
+      add("Specialist for this role", scoreWeights.specialistForRole);
+      add("Uses specialist before flexible wildcard", scoreWeights.preventsSpecialistIdle);
+    } else if (context.roleFlexibility <= 2) {
+      add("Focused role set", scoreWeights.focusedRoleSet);
+    }
+
+    if (
+      !context.candidateIsSpecialistForRole &&
+      context.specialistAvailableForRole
+    ) {
+      add(
+        "Flexible employee used where specialist can cover",
+        scoreWeights.flexibleUsedWhereSpecialistFits
+      );
+    }
+
     add(
-      `Role skill level ${context.roleSkillLevel}`,
-      (context.roleSkillLevel - 3) * scoreWeights.skillStep
+      `Role experience ${experienceLevelToLabel(
+        context.roleExperienceLevel,
+        "en"
+      )}`,
+      (context.roleExperienceRank - 2) * scoreWeights.experienceStep
     );
 
     if (context.candidatePrefersRole) {
       add("Preferred role", scoreWeights.preferredRole);
     }
 
-    const groupSkillLevels = context.roleGroupAssignedSkillLevels;
-    const groupHasExperienced = groupSkillLevels.some((skillLevel) => skillLevel >= 4);
-    const groupAverageSkill =
-      groupSkillLevels.length > 0
-        ? groupSkillLevels.reduce((total, skillLevel) => total + skillLevel, 0) /
-          groupSkillLevels.length
-        : 3;
+    const groupExperienceLevels = context.roleGroupAssignedExperienceLevels;
+    const groupHasExperienced = groupExperienceLevels.some(
+      (experienceLevel) => experienceLevel === "experienced"
+    );
+    const groupHasExperience = groupExperienceLevels.some(
+      (experienceLevel) => experienceLevelRank(experienceLevel) >= 2
+    );
+    const experiencedAssignedCount = groupExperienceLevels.filter(
+      (experienceLevel) => experienceLevel === "experienced"
+    ).length;
+    const groupAverageExperience =
+      groupExperienceLevels.length > 0
+        ? groupExperienceLevels.reduce(
+            (total, experienceLevel) =>
+              total + experienceLevelRank(experienceLevel),
+            0
+          ) / groupExperienceLevels.length
+        : 2;
+    const candidateIsExperienced = context.roleExperienceLevel === "experienced";
+    const candidateHasNoExperience =
+      context.roleExperienceLevel === "no_experience";
 
     if (
       context.roleGroupRequiredCount >= 2 &&
-      !groupHasExperienced &&
-      context.roleSkillLevel >= 4
+      !groupHasExperience &&
+      context.roleExperienceRank >= 2
     ) {
-      add("Adds experienced employee to role group", scoreWeights.strongEmployeeNeeded);
+      add(
+        "Adds prior experience to role group",
+        scoreWeights.experiencedEmployeeNeeded
+      );
+    }
+
+    if (
+      context.experiencedRequiredCount > experiencedAssignedCount &&
+      candidateIsExperienced
+    ) {
+      add(
+        "Helps meet experienced employee requirement",
+        scoreWeights.experiencedEmployeeNeeded
+      );
     }
 
     if (
       context.roleGroupRequiredCount >= 2 &&
-      !groupHasExperienced &&
-      context.roleSkillLevel <= 2 &&
+      !groupHasExperience &&
+      candidateHasNoExperience &&
       context.strongerCandidateAvailableForGroup
     ) {
       add(
@@ -278,12 +402,15 @@ export function scoreCandidate({
       warnings.push({
         severity: "info",
         warningType: "weak_role_group_risk",
-        message: `${employee.first_name} ${employee.last_name} is low skill for this role group.`
+        message: `${employee.first_name} ${employee.last_name} has no experience for this role group.`
       });
     }
 
-    if (groupAverageSkill <= 2.5 && context.roleSkillLevel <= 2) {
-      add("Low skill into already weak group", scoreWeights.lowSkillIntoWeakGroup);
+    if (groupAverageExperience <= 1.5 && candidateHasNoExperience) {
+      add(
+        "No experience into already weak group",
+        scoreWeights.noExperienceIntoWeakGroup
+      );
     }
 
     if (context.candidateCanLeadRole && !context.roleGroupHasLead) {
@@ -292,14 +419,85 @@ export function scoreCandidate({
 
     if (
       groupHasExperienced &&
-      context.roleSkillLevel >= 4 &&
-      context.roleGroupRequiredCount >= 2
+      candidateIsExperienced &&
+      context.roleGroupRequiredCount >= 2 &&
+      experiencedAssignedCount >= Math.max(1, context.experiencedRequiredCount)
     ) {
-      add("Avoid stacking high-skill employees", scoreWeights.highSkillOverStacking);
+      add(
+        "Avoid stacking experienced employees",
+        scoreWeights.experiencedOverStacking
+      );
     }
 
-    if (context.highSkillScarcityPenalty < 0) {
-      add("Protect scarce high-skill employee", context.highSkillScarcityPenalty);
+    if (context.highExperienceScarcityPenalty < 0) {
+      add(
+        "Protect scarce experienced employee",
+        context.highExperienceScarcityPenalty
+      );
+    }
+
+    if (context.coverageScarcityPenalty < 0) {
+      add(
+        "Protect uncovered role group candidate",
+        context.coverageScarcityPenalty
+      );
+    }
+
+    if (context.rareRoleCapacityPenalty < 0) {
+      add("Preserve rare-role capacity", context.rareRoleCapacityPenalty);
+    }
+
+    if (context.wildcardPreservationPenalty < 0) {
+      add("Preserve flexible wildcard", context.wildcardPreservationPenalty);
+    }
+
+    const rotationMultiplier = getRotationMultiplier(rotationStrength);
+
+    if (rotationMultiplier > 0) {
+      if (
+        isWeekendDate(slot.date) &&
+        context.recentWeekendAssignments > context.averageRecentWeekendAssignments
+      ) {
+        add(
+          "Recent weekend rotation",
+          scoreWeights.recentWeekendRotation * rotationMultiplier
+        );
+      } else if (
+        isWeekendDate(slot.date) &&
+        context.recentWeekendAssignments < context.averageRecentWeekendAssignments
+      ) {
+        add(
+          "Fewer recent weekend shifts",
+          scoreWeights.fewerRecentWeekendAssignments * rotationMultiplier
+        );
+      }
+
+      if (
+        isNightOrDifficultShift(slot.start_time, slot.end_time) &&
+        context.recentDifficultAssignments >
+          context.averageRecentDifficultAssignments
+      ) {
+        add(
+          "Recent difficult-shift rotation",
+          scoreWeights.recentDifficultRotation * rotationMultiplier
+        );
+      } else if (
+        isNightOrDifficultShift(slot.start_time, slot.end_time) &&
+        context.recentDifficultAssignments <
+          context.averageRecentDifficultAssignments
+      ) {
+        add(
+          "Fewer recent difficult shifts",
+          scoreWeights.fewerRecentDifficultAssignments * rotationMultiplier
+        );
+      }
+
+      if (context.recentSameAssignment) {
+        add(
+          "Avoid repeating exact recent assignment",
+          scoreWeights.repeatRecentSameAssignment * rotationMultiplier
+        );
+      }
     }
   }
 
@@ -314,4 +512,20 @@ export function scoreCandidate({
     details,
     warnings
   };
+}
+
+function getRotationMultiplier(strength: RotationStrength): number {
+  if (strength === "none") {
+    return 0;
+  }
+
+  if (strength === "low") {
+    return 0.5;
+  }
+
+  if (strength === "high") {
+    return 1.5;
+  }
+
+  return 1;
 }

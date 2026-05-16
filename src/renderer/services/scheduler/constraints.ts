@@ -5,10 +5,16 @@ import type {
   EmployeeRole,
   EmployeeShiftAvailability,
   EmployeeWorkRules,
+  ExperienceLevel,
   ScheduleAssignment,
   ScheduleSlot,
   StaffingRequirement,
   TimeOff
+} from "../../types";
+import {
+  meetsMinimumExperience,
+  normalizeExperienceLevel,
+  skillLevelToExperienceLevel
 } from "../../types";
 import { getDayOfWeek } from "./generateSlots";
 
@@ -99,6 +105,24 @@ export function checkHardConstraints({
 
   if (!employeeHasRole(employee.id, slot.role_id, data.employeeRoles)) {
     reasons.push("Employee does not have the required role.");
+  } else {
+    const employeeExperienceLevel = getEmployeeRoleExperienceLevel(
+      employee.id,
+      slot.role_id,
+      data.employeeRoles
+    );
+    const requiredExperienceLevel = getSlotMinimumExperienceLevel(
+      slot,
+      data.staffingRequirements ?? []
+    );
+
+    if (
+      !meetsMinimumExperience(employeeExperienceLevel, requiredExperienceLevel)
+    ) {
+      reasons.push(
+        "Employee does not meet the required experience level for this role."
+      );
+    }
   }
 
   if (hasTimeOffOnDate(employee.id, slot.date, data.timeOff)) {
@@ -185,6 +209,25 @@ export function employeeHasRole(
   );
 }
 
+export function getEmployeeRoleExperienceLevel(
+  employeeId: string,
+  roleId: string,
+  employeeRoles: EmployeeRole[]
+): ExperienceLevel {
+  const employeeRole = employeeRoles.find(
+    (item) => item.employee_id === employeeId && item.role_id === roleId
+  );
+
+  if (!employeeRole) {
+    return "some_experience";
+  }
+
+  return normalizeExperienceLevel(
+    employeeRole.experience_level ??
+      skillLevelToExperienceLevel(employeeRole.skill_level)
+  );
+}
+
 export function getEmployeeWorkRules(
   employeeId: string,
   workRules: EmployeeWorkRules[]
@@ -235,13 +278,41 @@ export function getSlotShiftTemplateId(
   slot: ScheduleSlot,
   staffingRequirements: StaffingRequirement[]
 ): string | null {
+  return getSlotStaffingRequirement(slot, staffingRequirements)?.shift_template_id ?? null;
+}
+
+export function getSlotStaffingRequirement(
+  slot: ScheduleSlot,
+  staffingRequirements: StaffingRequirement[]
+): StaffingRequirement | null {
   if (!slot.source_id) {
     return null;
   }
 
   return (
-    staffingRequirements.find((requirement) => requirement.id === slot.source_id)
-      ?.shift_template_id ?? null
+    staffingRequirements.find((requirement) => requirement.id === slot.source_id) ??
+    null
+  );
+}
+
+export function getSlotMinimumExperienceLevel(
+  slot: ScheduleSlot,
+  staffingRequirements: StaffingRequirement[]
+): ExperienceLevel {
+  return normalizeExperienceLevel(
+    getSlotStaffingRequirement(slot, staffingRequirements)
+      ?.minimum_experience_level ?? "no_experience"
+  );
+}
+
+export function getSlotExperiencedRequiredCount(
+  slot: ScheduleSlot,
+  staffingRequirements: StaffingRequirement[]
+): number {
+  return Math.max(
+    0,
+    getSlotStaffingRequirement(slot, staffingRequirements)
+      ?.experienced_required_count ?? 0
   );
 }
 
