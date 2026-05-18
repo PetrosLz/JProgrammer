@@ -240,6 +240,7 @@ function navigationGroups(language: UiLanguage): NavigationGroup[] {
         title: "Setup",
         items: [
           { id: "profile", title: "Profile" },
+          { id: "business-settings", title: "Settings" },
           { id: "opening-hours", title: "Opening Hours" },
           { id: "roles", title: "Roles" },
           { id: "shift-templates", title: "Shift Templates" },
@@ -267,6 +268,7 @@ function navigationGroups(language: UiLanguage): NavigationGroup[] {
       title: "Ρυθμίσεις",
       items: [
         { id: "profile", title: "Προφίλ" },
+        { id: "business-settings", title: "Ρυθμίσεις" },
         { id: "opening-hours", title: "Ώρες λειτουργίας" },
         { id: "roles", title: "Ρόλοι" },
         { id: "shift-templates", title: "Βάρδιες" },
@@ -597,6 +599,10 @@ export function App() {
             },
             onLoadDemoData: () => void handleLoadDemoData(),
             onResetLocalData: () => void handleResetLocalData(),
+            onOpenSettings: () => {
+              setNotice("");
+              setActivePageId("business-settings");
+            },
             onProgramGenerated: async (runId, message) => {
               await refreshSummary();
               setSelectedScheduleRunId(runId);
@@ -856,24 +862,32 @@ function BusinessInfoForm({
   value,
   onChange,
   onBusinessTypePresetChange,
-  showExtendedFields = false
+  language = "el",
+  showLocationField = false,
+  showWeekStartsOnField = false
 }: {
   value: BusinessInfoDraft;
   onChange: (value: BusinessInfoDraft) => void;
   onBusinessTypePresetChange?: (presetId: BusinessTypePresetId) => void;
-  showExtendedFields?: boolean;
+  language?: UiLanguage;
+  showLocationField?: boolean;
+  showWeekStartsOnField?: boolean;
 }) {
   const selectedPresetId = getBusinessTypePresetIdForValue(value.businessType);
 
   return (
     <div>
       <SectionHeading
-        title="Στοιχεία επιχείρησης"
-        description="Όνομα, τύπος επιχείρησης και γλώσσα εφαρμογής."
+        title={language === "en" ? "Business details" : "Στοιχεία επιχείρησης"}
+        description={
+          language === "en"
+            ? "Business name, type and app language."
+            : "Όνομα, τύπος επιχείρησης και γλώσσα εφαρμογής."
+        }
       />
 
       <div className="mt-6 grid max-w-3xl gap-4 md:grid-cols-2">
-        <Field label="Όνομα επιχείρησης" required>
+        <Field label={language === "en" ? "Business name" : "Όνομα επιχείρησης"} required>
           <input
             value={value.businessName}
             onChange={(event) =>
@@ -884,7 +898,7 @@ function BusinessInfoForm({
           />
         </Field>
 
-        <Field label="Τύπος επιχείρησης">
+        <Field label={language === "en" ? "Business type" : "Τύπος επιχείρησης"}>
           <select
             value={selectedPresetId}
             onChange={(event) => {
@@ -910,12 +924,14 @@ function BusinessInfoForm({
             ))}
           </select>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            Προτείνει ρόλους που μπορείτε να αλλάξετε στο επόμενο βήμα.
+            {language === "en"
+              ? "Suggests roles you can edit in the next step."
+              : "Προτείνει ρόλους που μπορείτε να αλλάξετε στο επόμενο βήμα."}
           </p>
         </Field>
 
         {selectedPresetId === "custom" ? (
-          <Field label="Προσαρμοσμένος τύπος">
+          <Field label={language === "en" ? "Custom type" : "Προσαρμοσμένος τύπος"}>
             <input
               value={value.businessType}
               onChange={(event) =>
@@ -927,38 +943,38 @@ function BusinessInfoForm({
           </Field>
         ) : null}
 
-        {showExtendedFields ? (
-          <>
-            <Field label="Τοποθεσία">
-              <input
-                value={value.location}
-                onChange={(event) =>
-                  onChange({ ...value, location: event.target.value })
-                }
-                className={inputClassName}
-                placeholder="π.χ. Αθήνα"
-              />
-            </Field>
-
-            <Field label="Πρώτη ημέρα εβδομάδας">
-              <select
-                value={value.weekStartsOn}
-                onChange={(event) =>
-                  onChange({
-                    ...value,
-                    weekStartsOn: Number(event.target.value) as 0 | 1
-                  })
-                }
-                className={inputClassName}
-              >
-                <option value={1}>Δευτέρα</option>
-                <option value={0}>Κυριακή</option>
-              </select>
-            </Field>
-          </>
+        {showLocationField ? (
+          <Field label={language === "en" ? "Location" : "Τοποθεσία"}>
+            <input
+              value={value.location}
+              onChange={(event) =>
+                onChange({ ...value, location: event.target.value })
+              }
+              className={inputClassName}
+              placeholder="π.χ. Αθήνα"
+            />
+          </Field>
         ) : null}
 
-        <Field label="Γλώσσα">
+        {showWeekStartsOnField ? (
+          <Field label={language === "en" ? "Week starts on" : "Πρώτη ημέρα εβδομάδας"}>
+            <select
+              value={value.weekStartsOn}
+              onChange={(event) =>
+                onChange({
+                  ...value,
+                  weekStartsOn: Number(event.target.value) as 0 | 1
+                })
+              }
+              className={inputClassName}
+            >
+              <option value={1}>{language === "en" ? "Monday" : "Δευτέρα"}</option>
+              <option value={0}>{language === "en" ? "Sunday" : "Κυριακή"}</option>
+            </select>
+          </Field>
+        ) : null}
+
+        <Field label={language === "en" ? "Language" : "Γλώσσα"}>
           <select
             value={value.language}
             onChange={(event) =>
@@ -1239,9 +1255,11 @@ function ShiftTemplatesEditor({
 
 function BusinessSettingsEditor({
   settings,
+  language,
   onSaved
 }: {
   settings: BusinessSettings | null;
+  language: UiLanguage;
   onSaved: () => Promise<void>;
 }) {
   const [form, setForm] = useState<BusinessInfoDraft>(() =>
@@ -1277,8 +1295,24 @@ function BusinessSettingsEditor({
 
   return (
     <div className="max-w-4xl">
+      <SectionHeading
+        title={language === "en" ? "Settings" : "Ρυθμίσεις"}
+        description={
+          language === "en"
+            ? "Edit business profile settings used across the app."
+            : "Επεξεργαστείτε τις βασικές ρυθμίσεις της επιχείρησης."
+        }
+      />
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-      <BusinessInfoForm value={form} onChange={setForm} showExtendedFields />
+
+      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
+        <BusinessInfoForm
+          value={form}
+          onChange={setForm}
+          language={language}
+          showWeekStartsOnField
+        />
+      </div>
 
       <button
         type="button"
@@ -1286,7 +1320,13 @@ function BusinessSettingsEditor({
         disabled={isSaving}
         className="mt-6 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
       >
-        {isSaving ? "Αποθήκευση..." : "Αποθήκευση ρυθμίσεων"}
+        {isSaving
+          ? language === "en"
+            ? "Saving..."
+            : "Αποθήκευση..."
+          : language === "en"
+            ? "Save settings"
+            : "Αποθήκευση ρυθμίσεων"}
       </button>
     </div>
   );
@@ -1297,158 +1337,72 @@ function ProfilePage({
   language,
   isLoadingDemoData,
   onLoadDemoData,
-  onChanged
+  onOpenSettings
 }: {
   summary: DashboardSummary;
   language: UiLanguage;
   isLoadingDemoData: boolean;
   onLoadDemoData: () => void;
-  onChanged: (message: string) => Promise<void>;
+  onOpenSettings: () => void;
 }) {
   const settings = summary.businessSettings;
-  const [form, setForm] = useState<BusinessInfoDraft>(() =>
-    businessSettingsToForm(settings)
-  );
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
   const latestRun = [...summary.scheduleRuns].sort((a, b) =>
     b.created_at.localeCompare(a.created_at)
   )[0];
 
-  useEffect(() => {
-    setForm(businessSettingsToForm(settings));
-  }, [settings]);
-
-  async function saveProfile() {
-    const nextErrors = validateBusinessProfileForm(form, language);
-
-    if (nextErrors.length > 0) {
-      setErrors(nextErrors);
-      return;
-    }
-
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      await upsertBusinessSettings(form, settings?.id);
-      await onChanged(
-        language === "en"
-          ? "Business profile saved."
-          : "Το προφίλ επιχείρησης αποθηκεύτηκε."
-      );
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   return (
     <div className="max-w-7xl">
-      <SectionHeading
-        title={language === "en" ? "Profile" : "Προφίλ"}
-        description={
-          language === "en"
-            ? "Business profile and quick setup summary."
-            : "Βασικές ρυθμίσεις επιχείρησης και γρήγορη σύνοψη."
-        }
-      />
-
-      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <SectionHeading
+          title={language === "en" ? "Profile" : "Προφίλ"}
+          description={
+            language === "en"
+              ? "Current business setup and quick summary."
+              : "Τρέχουσα εικόνα επιχείρησης και γρήγορη σύνοψη."
+          }
+        />
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className={secondaryButtonClassName}
+        >
+          {language === "en" ? "Open Settings" : "Άνοιγμα ρυθμίσεων"}
+        </button>
+      </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="rounded-lg border border-slate-200 bg-white p-5">
           <h3 className="text-base font-semibold tracking-normal text-slate-950">
-            {language === "en" ? "Business settings" : "Στοιχεία επιχείρησης"}
+            {language === "en" ? "Business profile" : "Στοιχεία επιχείρησης"}
           </h3>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <Field
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <ProfileInfoItem
               label={language === "en" ? "Business name" : "Όνομα επιχείρησης"}
-              required
-            >
-              <input
-                value={form.businessName}
-                onChange={(event) =>
-                  setForm({ ...form, businessName: event.target.value })
-                }
-                className={inputClassName}
-              />
-            </Field>
-            <Field
+              value={settings?.business_name ?? "-"}
+            />
+            <ProfileInfoItem
               label={language === "en" ? "Business type" : "Τύπος επιχείρησης"}
-            >
-              <input
-                value={form.businessType}
-                onChange={(event) =>
-                  setForm({ ...form, businessType: event.target.value })
-                }
-                className={inputClassName}
-                placeholder={language === "en" ? "Cafe / bar" : "Cafe / bar"}
-              />
-            </Field>
-            <Field label={language === "en" ? "Location" : "Τοποθεσία"}>
-              <input
-                value={form.location}
-                onChange={(event) =>
-                  setForm({ ...form, location: event.target.value })
-                }
-                className={inputClassName}
-              />
-            </Field>
-            <Field
+              value={settings?.business_type ?? "-"}
+            />
+            <ProfileInfoItem
+              label={language === "en" ? "Language" : "Γλώσσα"}
+              value={settings?.language === "en" ? "English" : "Ελληνικά"}
+            />
+            <ProfileInfoItem
               label={language === "en" ? "Week starts on" : "Η εβδομάδα ξεκινά"}
-            >
-              <select
-                value={form.weekStartsOn}
-                onChange={(event) =>
-                  setForm({
-                    ...form,
-                    weekStartsOn: Number(event.target.value) as 0 | 1
-                  })
-                }
-                className={inputClassName}
-              >
-                <option value={1}>
-                  {language === "en" ? "Monday" : "Δευτέρα"}
-                </option>
-                <option value={0}>
-                  {language === "en" ? "Sunday" : "Κυριακή"}
-                </option>
-              </select>
-            </Field>
-            <Field label={language === "en" ? "Language" : "Γλώσσα"}>
-              <select
-                value={form.language}
-                onChange={(event) =>
-                  setForm({
-                    ...form,
-                    language: event.target.value as BusinessInfoDraft["language"]
-                  })
-                }
-                className={inputClassName}
-              >
-                <option value="el">Ελληνικά</option>
-                <option value="en">English</option>
-              </select>
-            </Field>
+              value={
+                settings?.week_starts_on === 0
+                  ? language === "en"
+                    ? "Sunday"
+                    : "Κυριακή"
+                  : language === "en"
+                    ? "Monday"
+                    : "Δευτέρα"
+              }
+            />
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={saveProfile}
-              disabled={isSaving}
-              className="rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-            >
-              {isSaving
-                ? language === "en"
-                  ? "Saving..."
-                  : "Αποθήκευση..."
-                : language === "en"
-                  ? "Save settings"
-                  : "Αποθήκευση ρυθμίσεων"}
-            </button>
+          <div className="mt-5 flex flex-wrap gap-3 border-t border-slate-200 pt-5">
             <button
               type="button"
               onClick={onLoadDemoData}
@@ -1495,6 +1449,17 @@ function ProfilePage({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProfileInfoItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
     </div>
   );
 }
@@ -1936,173 +1901,232 @@ function GenerateSchedulePage({
     .slice(0, 5);
 
   return (
-    <div className="max-w-7xl">
+    <div className="max-w-6xl">
       <SectionHeading
         title={language === "en" ? "Generate Program" : "Δημιουργία προγράμματος"}
         description={
           language === "en"
-            ? "Choose a week and generate a proposed schedule based on staffing needs, availability and work rules."
-            : "Επιλέξτε εβδομάδα και δημιουργήστε προτεινόμενο πρόγραμμα με βάση τις ανάγκες, τη διαθεσιμότητα και τους κανόνες εργασίας."
+            ? "Generate a proposed weekly schedule based on roles, availability and work rules."
+            : "Δημιουργήστε ένα προτεινόμενο εβδομαδιαίο πρόγραμμα με βάση ρόλους, διαθεσιμότητες και κανόνες."
         }
       />
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
-        <div className="grid gap-4 lg:grid-cols-[240px_1fr_auto] lg:items-end">
-          <Field label={language === "en" ? "Select date" : "Επιλογή ημερομηνίας"} required>
-            <input
-              type="date"
-              value={weekStartDate}
-              onChange={(event) => setWeekStartDate(event.target.value)}
-              className={inputClassName}
-            />
-          </Field>
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">
-              {language === "en" ? "Selected week:" : "Επιλεγμένη εβδομάδα:"}{" "}
-              {selectedWeekRange
-                ? formatWeekRangeWithDays(selectedWeekRange.weekStartDate, selectedWeekRange.weekEndDate)
-                : language === "en"
-                  ? "Choose a valid date"
-                  : "Επιλέξτε έγκυρη ημερομηνία"}
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              {language === "en" ? "Week starts on" : "Η εβδομάδα ξεκινά"}{" "}
-              {localizedDayName(weekStartsOn, language)}.{" "}
-              {selectedWeekRange && selectedWeekRange.weekStartDate !== weekStartDate
-                ? language === "en"
-                  ? `The selected date is adjusted to ${formatDateEu(selectedWeekRange.weekStartDate)}.`
-                  : `Η ημερομηνία προσαρμόζεται σε ${formatDateEu(selectedWeekRange.weekStartDate)}.`
-                : language === "en"
-                  ? "The selected date matches the configured week start."
-                  : "Η ημερομηνία ταιριάζει με την έναρξη εβδομάδας."}
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px_230px] lg:items-center">
+          <div>
+            <h3 className="text-lg font-semibold tracking-normal text-slate-950">
+              {language === "en" ? "New program" : "Νέο πρόγραμμα"}
+            </h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-slate-600">
+              {language === "en"
+                ? "Choose a date. The app will calculate the matching week."
+                : "Επιλέξτε μία ημερομηνία. Η εφαρμογή θα υπολογίσει την αντίστοιχη εβδομάδα."}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={generateProgram}
-            disabled={isGenerating}
-            className="rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-          >
-            {isGenerating
-              ? language === "en"
-                ? "Generating Program..."
-                : "Δημιουργία..."
-              : language === "en"
-                ? "Generate Program"
-                : "Δημιουργία προγράμματος"}
-          </button>
+
+          <div className="space-y-3">
+            <Field label={language === "en" ? "Week selection" : "Επιλογή εβδομάδας"} required>
+              <input
+                type="date"
+                value={weekStartDate}
+                onChange={(event) => setWeekStartDate(event.target.value)}
+                className={inputClassName}
+              />
+            </Field>
+            <div className="rounded-lg bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {language === "en" ? "Week" : "Εβδομάδα"}
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-5 text-slate-950">
+                {selectedWeekRange
+                  ? formatWeekRangeWithDays(
+                      selectedWeekRange.weekStartDate,
+                      selectedWeekRange.weekEndDate
+                    )
+                  : language === "en"
+                    ? "Choose a valid date"
+                    : "Επιλέξτε έγκυρη ημερομηνία"}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                {selectedWeekRange && selectedWeekRange.weekStartDate !== weekStartDate
+                  ? language === "en"
+                    ? `Adjusted to ${formatDateEu(selectedWeekRange.weekStartDate)} because weeks start on ${localizedDayName(weekStartsOn, language)}.`
+                    : `Προσαρμόζεται σε ${formatDateEu(selectedWeekRange.weekStartDate)}, επειδή η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`
+                  : language === "en"
+                    ? `Weeks start on ${localizedDayName(weekStartsOn, language)}.`
+                    : `Η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-emerald-50 p-4 ring-1 ring-emerald-100">
+            <button
+              type="button"
+              onClick={generateProgram}
+              disabled={isGenerating}
+              className="w-full rounded-md bg-emerald-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {isGenerating
+                ? language === "en"
+                  ? "Generating..."
+                  : "Δημιουργία..."
+                : language === "en"
+                  ? "Generate Program"
+                  : "Δημιουργία προγράμματος"}
+            </button>
+            <p className="mt-3 text-xs leading-5 text-emerald-900">
+              {language === "en"
+                ? "Creates a proposed schedule and opens it for review."
+                : "Δημιουργεί προτεινόμενο πρόγραμμα και το ανοίγει για έλεγχο."}
+            </p>
+          </div>
         </div>
-        <p className="mt-3 text-sm text-slate-500">
-          {language === "en"
-            ? "The app creates demand, assigns employees, records warnings and opens the proposed program for review."
-            : "Η εφαρμογή δημιουργεί θέσεις, αναθέτει εργαζομένους, καταγράφει προειδοποιήσεις και ανοίγει το προτεινόμενο πρόγραμμα."}
-        </p>
       </div>
 
-      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h3 className="text-base font-semibold tracking-normal text-slate-900">
-            {language === "en" ? "Recent programs" : "Πρόσφατα προγράμματα"}
-          </h3>
-        </div>
-        <div className="overflow-x-auto">
-          <div className="min-w-[1180px]">
-            <div className="grid grid-cols-[120px_220px_150px_80px_90px_90px_100px_220px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <span className="whitespace-nowrap">{language === "en" ? "Type" : "Τύπος"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Period" : "Περίοδος"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Status" : "Κατάσταση"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Slots" : "Θέσεις"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Assigned" : "Ανατέθηκαν"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Unfilled" : "Κενές"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Warnings" : "Προειδοποιήσεις"}</span>
-              <span className="whitespace-nowrap">{language === "en" ? "Action" : "Ενέργεια"}</span>
-            </div>
-            {recentRuns.length === 0 ? (
-              <p className="px-5 py-5 text-sm text-slate-500">
-                {language === "en" ? "No programs generated yet." : "Δεν έχουν δημιουργηθεί προγράμματα ακόμα."}
-              </p>
-            ) : (
-              recentRuns.map((run) => {
-                const runSlots = scheduleSlots.filter(
-                  (slot) => slot.schedule_run_id === run.id
-                );
-                const runWarnings = scheduleWarnings.filter(
-                  (warning) => warning.schedule_run_id === run.id
-                );
-                const runAssignments = scheduleAssignments.filter(
-                  (assignment) =>
-                    assignment.schedule_run_id === run.id &&
-                    assignment.status !== "cancelled"
-                );
-                const assignedSlotIds = new Set(
-                  runAssignments.map((assignment) => assignment.schedule_slot_id)
-                );
-                const unfilledSlotCount = runSlots.filter(
-                  (slot) =>
-                    slot.status !== "filled" && !assignedSlotIds.has(slot.id)
-                ).length;
-                return (
-                  <div key={run.id} className="border-t border-slate-200">
-                    <div className="grid grid-cols-[120px_220px_150px_80px_90px_90px_100px_220px] items-center gap-0 px-5 py-4">
-                      <p className="whitespace-nowrap text-sm font-medium text-slate-900">
-                        {scheduleRunTypeLabel(run)}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {formatDateRangeEu(run.start_date, run.end_date)}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {programStatusLabel(run.status)}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {runSlots.length}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {assignedSlotIds.size}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {unfilledSlotCount}
-                      </p>
-                      <p className="whitespace-nowrap text-sm text-slate-600">
-                        {runWarnings.length}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => onViewProgram(run.id)}
-                          className={`${secondaryButtonClassName} whitespace-nowrap`}
-                        >
-                          {language === "en" ? "View Program" : "Προβολή"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void deleteProgram(run)}
-                          disabled={deletingRunId === run.id}
-                          className="whitespace-nowrap rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
-                        >
-                          {deletingRunId === run.id
-                            ? language === "en"
-                              ? "Deleting..."
-                              : "Διαγραφή..."
-                            : language === "en"
-                              ? "Delete"
-                              : "Διαγραφή"}
-                        </button>
-                      </div>
-                    </div>
-                    {runSlots.length > 0 ? (
-                      <div className="px-5 pb-4 text-xs text-slate-500">
-                        {language === "en" ? "Role coverage:" : "Κάλυψη ρόλων:"}{" "}
-                        {roleCoverageSummary(runSlots, roles)}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })
-            )}
+      <div className="mt-6">
+        <div className="mb-4 flex items-end justify-between gap-4">
+          <div>
+            <h3 className="text-base font-semibold tracking-normal text-slate-950">
+              {language === "en" ? "Recent programs" : "Πρόσφατα προγράμματα"}
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              {language === "en"
+                ? "Review, open or delete recently generated schedules."
+                : "Δείτε, ανοίξτε ή διαγράψτε πρόσφατα προγράμματα."}
+            </p>
           </div>
         </div>
+
+        {recentRuns.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+            <h4 className="text-base font-semibold tracking-normal text-slate-950">
+              {language === "en"
+                ? "No programs yet"
+                : "Δεν υπάρχουν προγράμματα ακόμα"}
+            </h4>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+              {language === "en"
+                ? "Generate the first weekly program to see it here."
+                : "Δημιουργήστε το πρώτο εβδομαδιαίο πρόγραμμα για να εμφανιστεί εδώ."}
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {recentRuns.map((run) => {
+              const runSlots = scheduleSlots.filter(
+                (slot) => slot.schedule_run_id === run.id
+              );
+              const runWarnings = scheduleWarnings.filter(
+                (warning) => warning.schedule_run_id === run.id
+              );
+              const runAssignments = scheduleAssignments.filter(
+                (assignment) =>
+                  assignment.schedule_run_id === run.id &&
+                  assignment.status !== "cancelled"
+              );
+              const assignedSlotIds = new Set(
+                runAssignments.map((assignment) => assignment.schedule_slot_id)
+              );
+              const unfilledSlotCount = runSlots.filter(
+                (slot) => slot.status !== "filled" && !assignedSlotIds.has(slot.id)
+              ).length;
+
+              const metrics = [
+                {
+                  label: language === "en" ? "Slots" : "Θέσεις",
+                  value: runSlots.length,
+                  className: "bg-slate-50 text-slate-700 ring-slate-200"
+                },
+                {
+                  label: language === "en" ? "Assigned" : "Ανατέθηκαν",
+                  value: assignedSlotIds.size,
+                  className: "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                },
+                {
+                  label: language === "en" ? "Unfilled" : "Κενές",
+                  value: unfilledSlotCount,
+                  className:
+                    unfilledSlotCount > 0
+                      ? "bg-amber-50 text-amber-800 ring-amber-200"
+                      : "bg-slate-50 text-slate-600 ring-slate-200"
+                },
+                {
+                  label: language === "en" ? "Warnings" : "Προειδοποιήσεις",
+                  value: runWarnings.length,
+                  className:
+                    runWarnings.length > 0
+                      ? "bg-red-50 text-red-700 ring-red-200"
+                      : "bg-slate-50 text-slate-600 ring-slate-200"
+                }
+              ];
+
+              return (
+                <div
+                  key={run.id}
+                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                        {scheduleRunTypeLabel(run)}
+                      </span>
+                      <h4 className="mt-3 text-base font-semibold tracking-normal text-slate-950">
+                        {formatDateRangeEu(run.start_date, run.end_date)}
+                      </h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {programStatusLabel(run.status)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onViewProgram(run.id)}
+                        className={secondaryButtonClassName}
+                      >
+                        {language === "en" ? "View" : "Προβολή"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void deleteProgram(run)}
+                        disabled={deletingRunId === run.id}
+                        className="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        {deletingRunId === run.id
+                          ? language === "en"
+                            ? "Deleting..."
+                            : "Διαγραφή..."
+                          : language === "en"
+                            ? "Delete"
+                            : "Διαγραφή"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {metrics.map((metric) => (
+                      <div
+                        key={metric.label}
+                        className={`rounded-lg px-3 py-2 ring-1 ${metric.className}`}
+                      >
+                        <p className="text-xs font-medium">{metric.label}</p>
+                        <p className="mt-1 text-lg font-semibold">{metric.value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {runSlots.length > 0 ? (
+                    <p className="mt-4 text-xs leading-5 text-slate-500">
+                      {language === "en" ? "Role coverage:" : "Κάλυψη ρόλων:"}{" "}
+                      {roleCoverageSummary(runSlots, roles)}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5251,6 +5275,7 @@ function StaffingRequirementsPage({
   const [form, setForm] = useState<StaffingRequirementForm>(() =>
     createStaffingRequirementForm(roles, shiftTemplates)
   );
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null);
   const [copySourceDay, setCopySourceDay] = useState<DayOfWeek>(1);
   const [copyTargetDay, setCopyTargetDay] = useState<DayOfWeek>(2);
@@ -5357,8 +5382,7 @@ function StaffingRequirementsPage({
           ? "Οι ανάγκες βάρδιας ενημερώθηκαν."
           : "Οι ανάγκες βάρδιας αποθηκεύτηκαν."
       );
-      setEditingGroupKey(null);
-      setForm(createStaffingRequirementForm(roles, shiftTemplates));
+      closeForm();
     } catch (error) {
       setErrors([getErrorMessage(error)]);
     } finally {
@@ -5390,7 +5414,7 @@ function StaffingRequirementsPage({
       }
 
       if (editingGroupKey === group.key) {
-        resetForm();
+        closeForm();
       }
       await onChanged("Οι ανάγκες βάρδιας διαγράφηκαν.");
     } catch (error) {
@@ -5461,6 +5485,7 @@ function StaffingRequirementsPage({
 
   function startEditingGroup(group: StaffingRequirementGroup) {
     setErrors([]);
+    setIsFormOpen(true);
     setEditingGroupKey(group.key);
     setForm({
       dayOfWeek: group.dayOfWeek,
@@ -5469,10 +5494,18 @@ function StaffingRequirementsPage({
     });
   }
 
-  function resetForm() {
+  function openAddForm() {
     setErrors([]);
     setEditingGroupKey(null);
     setForm(createStaffingRequirementForm(roles, shiftTemplates));
+    setIsFormOpen(true);
+  }
+
+  function closeForm() {
+    setErrors([]);
+    setEditingGroupKey(null);
+    setForm(createStaffingRequirementForm(roles, shiftTemplates));
+    setIsFormOpen(false);
   }
 
   function updateRoleCount(roleId: string, value: string) {
@@ -5487,10 +5520,20 @@ function StaffingRequirementsPage({
 
   return (
     <div className="max-w-7xl">
-      <SectionHeading
-        title="Ανάγκες Προσωπικού"
-        description="Ορίστε πόσα άτομα χρειάζονται ανά ημέρα, βάρδια και ρόλο."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <SectionHeading
+          title="Ανάγκες Προσωπικού"
+          description="Δείτε και επεξεργαστείτε τους κανόνες στελέχωσης ανά βάρδια."
+        />
+        <button
+          type="button"
+          onClick={openAddForm}
+          disabled={activeRoles.length === 0 || activeShiftTemplates.length === 0}
+          className={secondaryButtonClassName}
+        >
+          Προσθήκη ανάγκης
+        </button>
+      </div>
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
@@ -5501,6 +5544,7 @@ function StaffingRequirementsPage({
         </div>
       ) : null}
 
+      {isFormOpen ? (
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
@@ -5508,15 +5552,13 @@ function StaffingRequirementsPage({
               ? "Επεξεργασία αναγκών βάρδιας"
               : "Προσθήκη αναγκών βάρδιας"}
           </h3>
-          {editingGroupKey ? (
-            <button
-              type="button"
-              onClick={resetForm}
-              className={secondaryButtonClassName}
-            >
-              Ακύρωση
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={closeForm}
+            className={secondaryButtonClassName}
+          >
+            Ακύρωση
+          </button>
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[180px_1fr]">
@@ -5611,6 +5653,7 @@ function StaffingRequirementsPage({
               : "Αποθήκευση αναγκών"}
         </button>
       </div>
+      ) : null}
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <h3 className="text-base font-semibold tracking-normal">
@@ -5767,6 +5810,7 @@ function RolesCrudPage({
   onChanged: (message: string) => Promise<void>;
 }) {
   const [form, setForm] = useState<RoleCrudForm>(() => createRoleCrudForm());
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -5798,8 +5842,7 @@ function RolesCrudPage({
         await onChanged("Role added.");
       }
 
-      setForm(createRoleCrudForm());
-      setEditingRoleId(null);
+      closeForm();
     } catch (error) {
       setErrors([getErrorMessage(error)]);
     } finally {
@@ -5830,6 +5873,7 @@ function RolesCrudPage({
 
   function startEditing(role: Role) {
     setErrors([]);
+    setIsFormOpen(true);
     setEditingRoleId(role.id);
     setForm({
       name: role.name,
@@ -5839,35 +5883,51 @@ function RolesCrudPage({
     });
   }
 
-  function resetForm() {
+  function openAddForm() {
     setErrors([]);
     setEditingRoleId(null);
     setForm(createRoleCrudForm());
+    setIsFormOpen(true);
+  }
+
+  function closeForm() {
+    setErrors([]);
+    setEditingRoleId(null);
+    setForm(createRoleCrudForm());
+    setIsFormOpen(false);
   }
 
   return (
     <div className="max-w-6xl">
-      <SectionHeading
-        title="Roles"
-        description="Create and maintain custom roles. There are no mandatory fixed roles."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <SectionHeading
+          title="Roles"
+          description="Manage the roles used in schedules."
+        />
+        <button
+          type="button"
+          onClick={openAddForm}
+          className={secondaryButtonClassName}
+        >
+          Προσθήκη ρόλου
+        </button>
+      </div>
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
+      {isFormOpen ? (
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
             {editingRoleId ? "Edit role" : "Add role"}
           </h3>
-          {editingRoleId ? (
-            <button
-              type="button"
-              onClick={resetForm}
-              className={secondaryButtonClassName}
-            >
-              Cancel edit
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={closeForm}
+            className={secondaryButtonClassName}
+          >
+            Cancel
+          </button>
         </div>
 
         <div className="mt-4 grid grid-cols-[1fr_180px_1.5fr_120px] gap-4">
@@ -5921,6 +5981,7 @@ function RolesCrudPage({
           {isSaving ? "Saving..." : editingRoleId ? "Save role" : "Add role"}
         </button>
       </div>
+      ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid grid-cols-[1.2fr_1.6fr_120px_190px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -5987,6 +6048,7 @@ function ShiftTemplatesCrudPage({
   const [form, setForm] = useState<ShiftTemplateCrudForm>(() =>
     createShiftTemplateCrudForm()
   );
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -6029,8 +6091,7 @@ function ShiftTemplatesCrudPage({
         await onChanged("Shift template added.");
       }
 
-      setForm(createShiftTemplateCrudForm());
-      setEditingShiftId(null);
+      closeForm();
     } catch (error) {
       setErrors([getErrorMessage(error)]);
     } finally {
@@ -6065,6 +6126,7 @@ function ShiftTemplatesCrudPage({
 
   function startEditing(template: ShiftTemplate) {
     setErrors([]);
+    setIsFormOpen(true);
     setEditingShiftId(template.id);
     setForm({
       name: template.name,
@@ -6077,35 +6139,51 @@ function ShiftTemplatesCrudPage({
     });
   }
 
-  function resetForm() {
+  function openAddForm() {
     setErrors([]);
     setEditingShiftId(null);
     setForm(createShiftTemplateCrudForm());
+    setIsFormOpen(true);
+  }
+
+  function closeForm() {
+    setErrors([]);
+    setEditingShiftId(null);
+    setForm(createShiftTemplateCrudForm());
+    setIsFormOpen(false);
   }
 
   return (
     <div className="max-w-6xl">
-      <SectionHeading
-        title="Shift Templates"
-        description="Create reusable shifts for future programs."
-      />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <SectionHeading
+          title="Shift Templates"
+          description="Manage reusable shifts for future programs."
+        />
+        <button
+          type="button"
+          onClick={openAddForm}
+          className={secondaryButtonClassName}
+        >
+          Προσθήκη βάρδιας
+        </button>
+      </div>
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
+      {isFormOpen ? (
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
             {editingShiftId ? "Edit shift template" : "Add shift template"}
           </h3>
-          {editingShiftId ? (
-            <button
-              type="button"
-              onClick={resetForm}
-              className={secondaryButtonClassName}
-            >
-              Cancel edit
-            </button>
-          ) : null}
+          <button
+            type="button"
+            onClick={closeForm}
+            className={secondaryButtonClassName}
+          >
+            Cancel
+          </button>
         </div>
 
         <div className="mt-4 grid grid-cols-[1fr_130px_130px_120px_180px_120px] gap-4">
@@ -6197,6 +6275,7 @@ function ShiftTemplatesCrudPage({
               : "Add shift template"}
         </button>
       </div>
+      ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid grid-cols-[1.1fr_140px_110px_1.3fr_120px_210px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -8457,6 +8536,7 @@ function renderPage(
     onDataChanged: (message: string) => Promise<void>;
     onLoadDemoData: () => void;
     onResetLocalData: () => void;
+    onOpenSettings: () => void;
     onProgramGenerated: (runId: string, message: string) => Promise<void>;
     onProgramDeleted: (message: string) => Promise<void>;
     onViewProgram: (runId: string) => void;
@@ -8471,7 +8551,7 @@ function renderPage(
         language={appLanguage(summary.businessSettings)}
         isLoadingDemoData={actions.isLoadingDemoData}
         onLoadDemoData={actions.onLoadDemoData}
-        onChanged={(message) => onDataChanged(message)}
+        onOpenSettings={actions.onOpenSettings}
       />
     );
   }
@@ -8490,7 +8570,14 @@ function renderPage(
     return (
       <BusinessSettingsEditor
         settings={summary.businessSettings}
-        onSaved={() => onDataChanged("Business settings saved.")}
+        language={appLanguage(summary.businessSettings)}
+        onSaved={() =>
+          onDataChanged(
+            appLanguage(summary.businessSettings) === "en"
+              ? "Settings saved."
+              : "Οι ρυθμίσεις αποθηκεύτηκαν."
+          )
+        }
       />
     );
   }
