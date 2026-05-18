@@ -47,11 +47,14 @@ export const experienceLevelOptions: Array<{
   label: string;
 }> = [
   { value: "no_experience", label: "Χωρίς προϋπηρεσία" },
-  { value: "some_experience", label: "Με προϋπηρεσία" },
-  { value: "experienced", label: "Έμπειρος" }
+  { value: "some_experience", label: "Με προϋπηρεσία" }
 ];
 
 export function normalizeExperienceLevel(value: unknown): ExperienceLevel {
+  if (value === "experienced") {
+    return "some_experience";
+  }
+
   return experienceLevelValues.includes(value as ExperienceLevel)
     ? (value as ExperienceLevel)
     : "some_experience";
@@ -66,7 +69,7 @@ export function skillLevelToExperienceLevel(value: unknown): ExperienceLevel {
     }
 
     if (numericValue >= 4) {
-      return "experienced";
+      return "some_experience";
     }
   }
 
@@ -82,10 +85,6 @@ export function experienceLevelToLegacySkillLevel(
     return 1;
   }
 
-  if (normalizedLevel === "experienced") {
-    return 5;
-  }
-
   return 3;
 }
 
@@ -94,10 +93,6 @@ export function experienceLevelRank(level: ExperienceLevel): number {
 
   if (normalizedLevel === "no_experience") {
     return 1;
-  }
-
-  if (normalizedLevel === "experienced") {
-    return 3;
   }
 
   return 2;
@@ -110,21 +105,14 @@ export function experienceLevelToLabel(
   const normalizedLevel = normalizeExperienceLevel(level);
 
   if (language === "en") {
-    if (normalizedLevel === "no_experience") {
-      return "no experience";
-    }
-
-    if (normalizedLevel === "experienced") {
-      return "experienced";
-    }
-
-    return "some experience";
+    return normalizedLevel === "no_experience"
+      ? "No experience"
+      : "Experienced";
   }
 
-  return (
-    experienceLevelOptions.find((option) => option.value === normalizedLevel)
-      ?.label ?? "Με προϋπηρεσία"
-  );
+  return normalizedLevel === "no_experience"
+    ? "Χωρίς προϋπηρεσία"
+    : "Με προϋπηρεσία";
 }
 
 export function meetsMinimumExperience(

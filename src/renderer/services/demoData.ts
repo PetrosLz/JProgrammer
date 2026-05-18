@@ -316,33 +316,33 @@ async function createEmployeeRoles(
     {
       employee: "maria",
       roles: [
-        { role: "cashier", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true },
+        { role: "cashier", experienceLevel: "some_experience", canLeadRole: true, isPreferredRole: true },
         { role: "bar", experienceLevel: "some_experience" }
       ]
     },
     {
       employee: "giorgos",
       roles: [
-        { role: "bar", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
+        { role: "bar", experienceLevel: "some_experience", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "eleni",
       roles: [
-        { role: "waiter", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
+        { role: "waiter", experienceLevel: "some_experience", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "nikos",
       roles: [
-        { role: "kitchen", experienceLevel: "experienced", canLeadRole: true, isPreferredRole: true }
+        { role: "kitchen", experienceLevel: "some_experience", canLeadRole: true, isPreferredRole: true }
       ]
     },
     {
       employee: "anna",
       roles: [
         { role: "bar", experienceLevel: "some_experience", isPreferredRole: true },
-        { role: "manager", experienceLevel: "experienced", canLeadRole: true }
+        { role: "manager", experienceLevel: "some_experience", canLeadRole: true }
       ]
     },
     {
@@ -593,7 +593,7 @@ async function createStaffingRequirements(
   await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "waiter", requiredCount: 3, experiencedRequiredCount: 1, priority: "high" });
   await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "kitchen", requiredCount: 2, minimumExperienceLevel: "some_experience", experiencedRequiredCount: 1, priority: "high" });
   await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "cashier", requiredCount: 1, minimumExperienceLevel: "some_experience" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, minimumExperienceLevel: "experienced", priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, minimumExperienceLevel: "some_experience", priority: "high" });
 
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "bar", requiredCount: 1 });
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "waiter", requiredCount: 1 });

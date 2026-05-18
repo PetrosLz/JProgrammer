@@ -352,13 +352,13 @@ export function scoreCandidate({
 
     const groupExperienceLevels = context.roleGroupAssignedExperienceLevels;
     const groupHasExperienced = groupExperienceLevels.some(
-      (experienceLevel) => experienceLevel === "experienced"
+      (experienceLevel) => experienceLevelRank(experienceLevel) >= 2
     );
     const groupHasExperience = groupExperienceLevels.some(
       (experienceLevel) => experienceLevelRank(experienceLevel) >= 2
     );
     const experiencedAssignedCount = groupExperienceLevels.filter(
-      (experienceLevel) => experienceLevel === "experienced"
+      (experienceLevel) => experienceLevelRank(experienceLevel) >= 2
     ).length;
     const groupAverageExperience =
       groupExperienceLevels.length > 0
@@ -368,7 +368,7 @@ export function scoreCandidate({
             0
           ) / groupExperienceLevels.length
         : 2;
-    const candidateIsExperienced = context.roleExperienceLevel === "experienced";
+    const candidateIsExperienced = context.roleExperienceRank >= 2;
     const candidateHasNoExperience =
       context.roleExperienceLevel === "no_experience";
 
@@ -388,7 +388,7 @@ export function scoreCandidate({
       candidateIsExperienced
     ) {
       add(
-        "Helps meet experienced employee requirement",
+        "Helps meet prior-experience requirement",
         scoreWeights.experiencedEmployeeNeeded
       );
     }
@@ -428,14 +428,14 @@ export function scoreCandidate({
       experiencedAssignedCount >= Math.max(1, context.experiencedRequiredCount)
     ) {
       add(
-        "Avoid stacking experienced employees",
+        "Avoid stacking prior-experience employees",
         scoreWeights.experiencedOverStacking
       );
     }
 
     if (context.highExperienceScarcityPenalty < 0) {
       add(
-        "Protect scarce experienced employee",
+        "Protect scarce prior-experience employee",
         context.highExperienceScarcityPenalty
       );
     }

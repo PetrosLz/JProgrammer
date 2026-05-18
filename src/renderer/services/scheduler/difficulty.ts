@@ -141,7 +141,7 @@ export function buildSlotDifficultyMap({
     }
 
     if (experiencedRequiredCount > 0) {
-      add("Experienced coverage needed", experiencedRequiredCount * 60);
+      add("Prior-experience coverage needed", experiencedRequiredCount * 60);
     }
 
     if (isNightOrDifficultShift(slot.start_time, slot.end_time)) {

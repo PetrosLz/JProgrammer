@@ -54,6 +54,10 @@ const api = {
       ipcRenderer.invoke("database:deleteRecord", tableName, id) as Promise<
         DatabaseResult<boolean>
       >,
+    resetLocalData: () =>
+      ipcRenderer.invoke("database:resetLocalData") as Promise<
+        DatabaseResult<DatabaseStatus>
+      >,
     getSetting: (key: string) =>
       ipcRenderer.invoke("database:getSetting", key) as Promise<
         DatabaseResult<SettingRecord | null>

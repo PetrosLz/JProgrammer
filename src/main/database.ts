@@ -410,6 +410,26 @@ export function deleteRecord(tableName: CrudTableName, id: string): boolean {
   return result.changes > 0;
 }
 
+export function resetLocalData(): DatabaseStatus {
+  const db = getDatabase();
+
+  db.pragma("foreign_keys = OFF");
+
+  try {
+    const clearTables = db.transaction(() => {
+      for (const tableName of databaseTableNames) {
+        db.prepare(`DELETE FROM ${tableName}`).run();
+      }
+    });
+
+    clearTables();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+
+  return getDatabaseStatus();
+}
+
 export function getSetting(key: string): SettingRecord | null {
   validateSettingKey(key);
 

@@ -54,6 +54,9 @@ export const databaseApi = {
   ): Promise<boolean> =>
     unwrap(await window.jprogrammer.database.deleteRecord(tableName, id)),
 
+  resetLocalData: async (): Promise<DatabaseStatus> =>
+    unwrap(await window.jprogrammer.database.resetLocalData()),
+
   getSetting: async (key: string): Promise<SettingRecord | null> =>
     unwrap(await window.jprogrammer.database.getSetting(key)),
 

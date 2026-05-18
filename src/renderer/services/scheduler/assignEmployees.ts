@@ -1825,7 +1825,7 @@ function scoreCandidateSchedule({
       quality.experiencedRequiredCount > 0 &&
       quality.experiencedAssignedCount >= quality.experiencedRequiredCount
     ) {
-      add("Experienced requirement covered", 350);
+      add("Prior-experience requirement covered", 350);
     }
   }
 
@@ -3180,7 +3180,7 @@ function getHighExperienceScarcityPenalty({
     data.employeeRoles
   );
 
-  if (roleExperienceLevel !== "experienced" || currentDifficulty >= 250) {
+  if (experienceLevelRank(roleExperienceLevel) < 2 || currentDifficulty >= 250) {
     return 0;
   }
 
@@ -3220,11 +3220,13 @@ function getHighExperienceScarcityPenalty({
 
     const strongCandidateCount = activeEmployees.filter(
       (candidate) =>
-        getEmployeeRoleExperience(
-          candidate.id,
-          futureSlot.role_id,
-          data.employeeRoles
-        ) === "experienced" &&
+        experienceLevelRank(
+          getEmployeeRoleExperience(
+            candidate.id,
+            futureSlot.role_id,
+            data.employeeRoles
+          )
+        ) >= 2 &&
         checkHardConstraints({
           employee: candidate,
           slot: futureSlot,
@@ -3366,8 +3368,9 @@ function buildDiagnosticUnfilledSlotMessage({
   );
   const experiencedAssignedCount = assignedEmployeeIds.filter(
     (employeeId) =>
-      getEmployeeRoleExperience(employeeId, slot.role_id, data.employeeRoles) ===
-      "experienced"
+      experienceLevelRank(
+        getEmployeeRoleExperience(employeeId, slot.role_id, data.employeeRoles)
+      ) >= 2
   ).length;
   const missingExperienceLabel =
     minimumExperienceLevel === "no_experience"
@@ -3382,7 +3385,7 @@ function buildDiagnosticUnfilledSlotMessage({
     })} ${slot.start_time}-${slot.end_time} ${roleName}.`,
     `Missing: 1 employee for ${roleName} ${missingExperienceLabel}.`,
     `Required total: ${groupSlots.length}. Assigned: ${assignedEmployeeIds.length}.`,
-    `Required experienced: ${experiencedRequiredCount}. Assigned experienced: ${experiencedAssignedCount}.`,
+    `Required prior-experience employees: ${experiencedRequiredCount}. Assigned prior-experience employees: ${experiencedAssignedCount}.`,
     `Employees with role: ${employeesWithRole.length}.`,
     `Blocked by insufficient experience: ${blocked.insufficientExperience}.`,
     `Blocked by time off: ${blocked.timeOff}.`,

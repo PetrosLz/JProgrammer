@@ -6,6 +6,7 @@ import {
   getRecord,
   getSetting,
   listRecords,
+  resetLocalData,
   setSetting,
   updateRecord,
   DatabaseOperationError
@@ -26,6 +27,7 @@ const databaseChannels = [
   "database:createRecord",
   "database:updateRecord",
   "database:deleteRecord",
+  "database:resetLocalData",
   "database:getSetting",
   "database:setSetting"
 ] as const;
@@ -71,6 +73,10 @@ export function registerDatabaseIpc(): void {
     "database:deleteRecord",
     (_event, tableName: CrudTableName, id: string) =>
       handleDatabaseOperation(() => deleteRecord(tableName, id))
+  );
+
+  ipcMain.handle("database:resetLocalData", () =>
+    handleDatabaseOperation(() => resetLocalData())
   );
 
   ipcMain.handle("database:getSetting", (_event, key: string) =>

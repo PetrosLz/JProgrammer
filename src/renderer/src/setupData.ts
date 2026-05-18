@@ -65,7 +65,21 @@ export const roleColors = [
   "#9333ea",
   "#dc2626",
   "#ca8a04",
-  "#475569"
+  "#475569",
+  "#0891b2",
+  "#16a34a",
+  "#ea580c",
+  "#7c3aed",
+  "#be123c",
+  "#0369a1",
+  "#65a30d",
+  "#c2410c",
+  "#4f46e5",
+  "#0d9488",
+  "#a21caf",
+  "#b45309",
+  "#15803d",
+  "#334155"
 ];
 
 export function createInitialSetupDraft(): SetupDraft {
@@ -137,10 +151,6 @@ export function validateBusinessInfo(info: BusinessInfoDraft): string[] {
 
   if (!info.businessName.trim()) {
     errors.push("Το όνομα επιχείρησης είναι υποχρεωτικό.");
-  }
-
-  if (![0, 1].includes(info.weekStartsOn)) {
-    errors.push("Επιλέξτε πρώτη ημέρα εβδομάδας.");
   }
 
   if (!["el", "en"].includes(info.language)) {

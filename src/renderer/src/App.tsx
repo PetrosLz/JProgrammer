@@ -5,7 +5,6 @@ import { databaseApi } from "../services/databaseApi";
 import { loadDemoData } from "../services/demoData";
 import { pdfExportApi, PdfExportError } from "../services/pdfExportApi";
 import {
-  experienceLevelOptions,
   experienceLevelToLegacySkillLevel,
   normalizeExperienceLevel,
   skillLevelToExperienceLevel
@@ -50,6 +49,14 @@ import {
   type ShiftTemplateDraft
 } from "./setupData";
 import {
+  businessTypePresets,
+  createRoleDraftsFromBusinessTypePreset,
+  getBusinessTypePresetById,
+  getBusinessTypePresetIdForValue,
+  isRoleDraftListEffectivelyEmpty,
+  type BusinessTypePresetId
+} from "./businessTypePresets";
+import {
   addDays,
   assignEmployeesToRun,
   buildScheduleGenerationPlan,
@@ -67,6 +74,7 @@ import {
 const setupCompletedKey = "setup.completedAt";
 
 type PageId =
+  | "profile"
   | "dashboard"
   | "business-settings"
   | "opening-hours"
@@ -197,6 +205,14 @@ const emptySummary: DashboardSummary = {
 
 type UiLanguage = "el" | "en";
 
+type NavigationGroup = {
+  title: string;
+  items: Array<{
+    id: PageId;
+    title: string;
+  }>;
+};
+
 function appLanguage(settings: BusinessSettings | null): UiLanguage {
   return settings?.language === "en" ? "en" : "el";
 }
@@ -209,11 +225,75 @@ function pageTitle(page: Page, language: UiLanguage): string {
   return page.title;
 }
 
+function pageLabel(pageId: PageId, language: UiLanguage): string | null {
+  return (
+    navigationGroups(language)
+      .flatMap((group) => group.items)
+      .find((item) => item.id === pageId)?.title ?? null
+  );
+}
+
+function navigationGroups(language: UiLanguage): NavigationGroup[] {
+  if (language === "en") {
+    return [
+      {
+        title: "Setup",
+        items: [
+          { id: "profile", title: "Profile" },
+          { id: "opening-hours", title: "Opening Hours" },
+          { id: "roles", title: "Roles" },
+          { id: "shift-templates", title: "Shift Templates" },
+          { id: "staffing-requirements", title: "Staffing Requirements" }
+        ]
+      },
+      { title: "Team", items: [{ id: "employees", title: "Employees" }] },
+      {
+        title: "Schedule",
+        items: [
+          { id: "generate-schedule", title: "Generate Program" },
+          { id: "schedule-view", title: "Schedule View" }
+        ]
+      },
+      { title: "Output", items: [{ id: "reports", title: "Reports" }] },
+      {
+        title: "Advanced",
+        items: [{ id: "backup-restore", title: "Backup / Restore" }]
+      }
+    ];
+  }
+
+  return [
+    {
+      title: "Ρυθμίσεις",
+      items: [
+        { id: "profile", title: "Προφίλ" },
+        { id: "opening-hours", title: "Ώρες λειτουργίας" },
+        { id: "roles", title: "Ρόλοι" },
+        { id: "shift-templates", title: "Βάρδιες" },
+        { id: "staffing-requirements", title: "Ανάγκες προσωπικού" }
+      ]
+    },
+    { title: "Ομάδα", items: [{ id: "employees", title: "Εργαζόμενοι" }] },
+    {
+      title: "Πρόγραμμα",
+      items: [
+        { id: "generate-schedule", title: "Δημιουργία προγράμματος" },
+        { id: "schedule-view", title: "Προβολή προγράμματος" }
+      ]
+    },
+    { title: "Έξοδοι", items: [{ id: "reports", title: "Αναφορές" }] },
+    {
+      title: "Για προχωρημένους",
+      items: [{ id: "backup-restore", title: "Backup / Restore" }]
+    }
+  ];
+}
+
 export function App() {
   const [appState, setAppState] = useState<"loading" | "setup" | "ready">(
     "loading"
   );
-  const [activePageId, setActivePageId] = useState<PageId>("dashboard");
+  const [activePageId, setActivePageId] = useState<PageId>("profile");
   const [activeStep, setActiveStep] = useState(0);
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(() =>
     createInitialSetupDraft()
@@ -222,22 +302,21 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingDemoData, setIsLoadingDemoData] = useState(false);
+  const [isResettingApp, setIsResettingApp] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [selectedScheduleRunId, setSelectedScheduleRunId] = useState<
     string | null
   >(null);
 
   const language = appLanguage(summary.businessSettings);
-  const visiblePages = useMemo(
-    () =>
-      pages.filter(
-        (page) => page.id !== "employee-constraints" && page.id !== "time-off"
-      ),
-    []
+  const sidebarGroups = useMemo(() => navigationGroups(language), [language]);
+  const sidebarItems = useMemo(
+    () => sidebarGroups.flatMap((group) => group.items),
+    [sidebarGroups]
   );
-  const activePage =
-    visiblePages.find((page) => page.id === activePageId) ?? visiblePages[0];
-  const activePageTitle = pageTitle(activePage, language);
+  const activeNavItem =
+    sidebarItems.find((item) => item.id === activePageId) ?? sidebarItems[0];
+  const activePageTitle = activeNavItem.title;
   const today = useMemo(() => format(new Date(), "EEEE, MMMM d, yyyy"), []);
 
   const refreshSummary = useCallback(async () => {
@@ -394,6 +473,34 @@ export function App() {
     }
   }
 
+  async function handleResetLocalData() {
+    const confirmed = window.confirm(
+      "Αυτό θα διαγράψει οριστικά όλα τα τοπικά δεδομένα της εφαρμογής, όπως εργαζόμενους, ρόλους, βάρδιες, προγράμματα, προειδοποιήσεις και ρυθμίσεις. Δεν μπορεί να αναιρεθεί. Συνέχεια;"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setErrors([]);
+    setNotice("");
+    setIsResettingApp(true);
+
+    try {
+      await databaseApi.resetLocalData();
+      setSummary(emptySummary);
+      setSetupDraft(createInitialSetupDraft());
+      setSelectedScheduleRunId(null);
+      setActiveStep(0);
+      setActivePageId("profile");
+      setAppState("setup");
+    } catch (error) {
+      setErrors([getErrorMessage(error)]);
+    } finally {
+      setIsResettingApp(false);
+    }
+  }
+
   if (appState === "loading") {
     return <LoadingScreen />;
   }
@@ -425,29 +532,38 @@ export function App() {
           <p className="mt-1 text-sm text-slate-500">Τοπικός προγραμματισμός</p>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {visiblePages.map((page) => {
-            const isActive = page.id === activePage.id;
+        <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
+          {sidebarGroups.map((group) => (
+            <div key={group.title}>
+              <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                {group.title}
+              </p>
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const isActive = item.id === activeNavItem.id;
 
-            return (
-              <button
-                key={page.id}
-                type="button"
-                onClick={() => {
-                  setNotice("");
-                  setActivePageId(page.id);
-                }}
-                className={[
-                  "w-full rounded-md px-3 py-2 text-left text-sm font-medium transition",
-                  isActive
-                    ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                ].join(" ")}
-              >
-                {pageTitle(page, language)}
-              </button>
-            );
-          })}
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setNotice("");
+                        setActivePageId(item.id);
+                      }}
+                      className={[
+                        "w-full rounded-md px-3 py-2 text-left text-sm font-medium transition",
+                        isActive
+                          ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                      ].join(" ")}
+                    >
+                      {item.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
       </aside>
 
@@ -460,7 +576,7 @@ export function App() {
             </h2>
           </div>
           <span className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600">
-            Offline SQLite
+            {language === "en" ? "Offline SQLite" : "Τοπική SQLite"}
           </span>
         </header>
 
@@ -471,14 +587,16 @@ export function App() {
             </div>
           ) : null}
 
-          {renderPage(activePage.id, summary, {
+          {renderPage(activeNavItem.id, summary, {
             selectedScheduleRunId,
             isLoadingDemoData,
+            isResettingApp,
             onDataChanged: async (message) => {
               await refreshSummary();
               setNotice(message);
             },
             onLoadDemoData: () => void handleLoadDemoData(),
+            onResetLocalData: () => void handleResetLocalData(),
             onProgramGenerated: async (runId, message) => {
               await refreshSummary();
               setSelectedScheduleRunId(runId);
@@ -524,69 +642,161 @@ function SetupWizard({
   onLoadDemoData: () => void;
   onNext: () => void;
 }) {
-  return (
-    <div className="min-h-screen bg-slate-50 px-8 py-8 text-slate-950">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-8">
-          <p className="text-sm font-semibold uppercase tracking-widest text-emerald-700">
-            Πρώτη ρύθμιση
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-normal">
-            Ρύθμιση επιχείρησης
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-            Συμπληρώστε τα βασικά στοιχεία για να ξεκινήσει η τοπική βάση
-            δεδομένων. Μπορείτε να αλλάξετε τις επιχειρησιακές ρυθμίσεις
-            αργότερα.
-          </p>
-        </div>
+  const setupStepLabels = [
+    { title: "Στοιχεία", detail: "Επιχείρηση" },
+    { title: "Ωράριο", detail: "Λειτουργία" },
+    { title: "Ρόλοι", detail: "Ομάδα" },
+    { title: "Βάρδιες", detail: "Πρότυπα" }
+  ];
+  const currentStep = setupStepLabels[activeStep] ?? setupStepLabels[0];
 
-        <div className="mb-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-base font-semibold tracking-normal text-emerald-950">
-                Δοκιμαστικά δεδομένα
-              </h2>
-              <p className="mt-1 text-sm text-emerald-800">
-                Φορτώστε το Demo Cafe με ρόλους, εργαζομένους, λίγους καθαρούς
-                περιορισμούς και ανάγκες προσωπικού.
-              </p>
+  function handleBusinessTypePresetChange(presetId: BusinessTypePresetId) {
+    const preset = getBusinessTypePresetById(presetId);
+    const nextBusinessInfo = {
+      ...draft.businessInfo,
+      businessType: preset.businessTypeValue
+    };
+    let nextRoles = draft.roles;
+    const rolesAreEmpty = isRoleDraftListEffectivelyEmpty(draft.roles);
+
+    if (preset.id === "custom") {
+      if (rolesAreEmpty) {
+        nextRoles = [createBlankRole()];
+      } else if (
+        window.confirm(
+          "Η επιλογή Custom μπορεί να καθαρίσει τους προτεινόμενους ρόλους. Θέλετε να ξεκινήσετε από κενή λίστα;"
+        )
+      ) {
+        nextRoles = [createBlankRole()];
+      }
+
+      onChange({
+        ...draft,
+        businessInfo: nextBusinessInfo,
+        roles: nextRoles
+      });
+      return;
+    }
+
+    const presetRoles = createRoleDraftsFromBusinessTypePreset(preset);
+
+    if (rolesAreEmpty) {
+      nextRoles = presetRoles;
+    } else if (
+      window.confirm(
+        "Η αλλαγή τύπου επιχείρησης μπορεί να αντικαταστήσει τους προτεινόμενους ρόλους. Θέλετε να εφαρμοστεί το νέο preset;"
+      )
+    ) {
+      nextRoles = presetRoles;
+    }
+
+    onChange({
+      ...draft,
+      businessInfo: nextBusinessInfo,
+      roles: nextRoles
+    });
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 px-6 py-8 text-slate-950">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700">
+              Πρώτη ρύθμιση
+            </p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-normal text-slate-950">
+              Ρύθμιση επιχείρησης
+            </h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Λίγα βασικά στοιχεία για να ξεκινήσει το πρόγραμμα.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-emerald-200 bg-white px-4 py-3 shadow-sm lg:w-[340px]">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold tracking-normal text-slate-950">
+                  Demo Cafe
+                </h2>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Γρήγορη φόρτωση δοκιμαστικών δεδομένων.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onLoadDemoData}
+                disabled={isLoadingDemoData}
+                className="whitespace-nowrap rounded-md border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isLoadingDemoData ? "Φόρτωση..." : "Φόρτωση"}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={onLoadDemoData}
-              disabled={isLoadingDemoData}
-              className={secondaryButtonClassName}
-            >
-              {isLoadingDemoData ? "Φόρτωση demo..." : "Φόρτωση demo δεδομένων"}
-            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-[260px_1fr] gap-6">
-          <aside className="rounded-lg border border-slate-200 bg-white p-3">
-            {setupSteps.map((step, index) => (
-              <div
-                key={step}
-                className={[
-                  "rounded-md px-3 py-3 text-sm",
-                  index === activeStep
-                    ? "bg-emerald-50 text-emerald-800"
-                    : "text-slate-600"
-                ].join(" ")}
-              >
-                <span className="font-semibold">{index + 1}.</span> {step}
-              </div>
-            ))}
-          </aside>
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-6 py-5">
+            <div className="flex items-center gap-3">
+              {setupSteps.map((step, index) => {
+                const isActive = index === activeStep;
+                const isComplete = index < activeStep;
 
-          <section className="rounded-lg border border-slate-200 bg-white p-6">
+                return (
+                  <div key={step} className="flex items-center gap-3">
+                    <div
+                      className={[
+                        "flex h-9 min-w-9 items-center justify-center rounded-full border text-sm font-semibold transition",
+                        isActive
+                          ? "border-emerald-700 bg-emerald-700 text-white"
+                          : isComplete
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-slate-200 bg-white text-slate-400"
+                      ].join(" ")}
+                    >
+                      {isComplete ? "✓" : index + 1}
+                    </div>
+                    {isActive ? (
+                      <div className="mr-2 hidden sm:block">
+                        <p className="text-sm font-semibold text-slate-950">
+                          {setupStepLabels[index]?.title}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {setupStepLabels[index]?.detail}
+                        </p>
+                      </div>
+                    ) : null}
+                    {index < setupSteps.length - 1 ? (
+                      <div className="h-px w-8 bg-slate-200 sm:w-12" />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Βήμα {activeStep + 1} από {setupSteps.length}
+                </p>
+                <h2 className="mt-1 text-xl font-semibold tracking-normal text-slate-950">
+                  {currentStep.title}
+                </h2>
+              </div>
+              <span className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
+                Τοπική SQLite
+              </span>
+            </div>
+          </div>
+
+          <section className="px-6 py-6">
             {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
             {activeStep === 0 ? (
               <BusinessInfoForm
                 value={draft.businessInfo}
                 onChange={(businessInfo) => onChange({ ...draft, businessInfo })}
+                onBusinessTypePresetChange={handleBusinessTypePresetChange}
               />
             ) : null}
 
@@ -618,7 +828,7 @@ function SetupWizard({
                 type="button"
                 onClick={onBack}
                 disabled={activeStep === 0 || isSaving}
-                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Πίσω
               </button>
@@ -644,19 +854,25 @@ function SetupWizard({
 
 function BusinessInfoForm({
   value,
-  onChange
+  onChange,
+  onBusinessTypePresetChange,
+  showExtendedFields = false
 }: {
   value: BusinessInfoDraft;
   onChange: (value: BusinessInfoDraft) => void;
+  onBusinessTypePresetChange?: (presetId: BusinessTypePresetId) => void;
+  showExtendedFields?: boolean;
 }) {
+  const selectedPresetId = getBusinessTypePresetIdForValue(value.businessType);
+
   return (
     <div>
       <SectionHeading
         title="Στοιχεία επιχείρησης"
-        description="Τα στοιχεία αυτά αποθηκεύονται τοπικά και χρησιμοποιούνται ως βάση για τις επόμενες φάσεις."
+        description="Όνομα, τύπος επιχείρησης και γλώσσα εφαρμογής."
       />
 
-      <div className="mt-6 grid grid-cols-2 gap-4">
+      <div className="mt-6 grid max-w-3xl gap-4 md:grid-cols-2">
         <Field label="Όνομα επιχείρησης" required>
           <input
             value={value.businessName}
@@ -669,42 +885,78 @@ function BusinessInfoForm({
         </Field>
 
         <Field label="Τύπος επιχείρησης">
-          <input
-            value={value.businessType}
-            onChange={(event) =>
-              onChange({ ...value, businessType: event.target.value })
-            }
-            className={inputClassName}
-            placeholder="π.χ. Cafe, Restaurant, Retail"
-          />
-        </Field>
-
-        <Field label="Τοποθεσία">
-          <input
-            value={value.location}
-            onChange={(event) =>
-              onChange({ ...value, location: event.target.value })
-            }
-            className={inputClassName}
-            placeholder="π.χ. Αθήνα"
-          />
-        </Field>
-
-        <Field label="Πρώτη ημέρα εβδομάδας">
           <select
-            value={value.weekStartsOn}
-            onChange={(event) =>
+            value={selectedPresetId}
+            onChange={(event) => {
+              const presetId = event.target.value as BusinessTypePresetId;
+
+              if (onBusinessTypePresetChange) {
+                onBusinessTypePresetChange(presetId);
+                return;
+              }
+
               onChange({
                 ...value,
-                weekStartsOn: Number(event.target.value) as 0 | 1
-              })
-            }
+                businessType: getBusinessTypePresetById(presetId)
+                  .businessTypeValue
+              });
+            }}
             className={inputClassName}
           >
-            <option value={1}>Δευτέρα</option>
-            <option value={0}>Κυριακή</option>
+            {businessTypePresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label}
+              </option>
+            ))}
           </select>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Προτείνει ρόλους που μπορείτε να αλλάξετε στο επόμενο βήμα.
+          </p>
         </Field>
+
+        {selectedPresetId === "custom" ? (
+          <Field label="Προσαρμοσμένος τύπος">
+            <input
+              value={value.businessType}
+              onChange={(event) =>
+                onChange({ ...value, businessType: event.target.value })
+              }
+              className={inputClassName}
+              placeholder="π.χ. Bakery, Pharmacy, Salon"
+            />
+          </Field>
+        ) : null}
+
+        {showExtendedFields ? (
+          <>
+            <Field label="Τοποθεσία">
+              <input
+                value={value.location}
+                onChange={(event) =>
+                  onChange({ ...value, location: event.target.value })
+                }
+                className={inputClassName}
+                placeholder="π.χ. Αθήνα"
+              />
+            </Field>
+
+            <Field label="Πρώτη ημέρα εβδομάδας">
+              <select
+                value={value.weekStartsOn}
+                onChange={(event) =>
+                  onChange({
+                    ...value,
+                    weekStartsOn: Number(event.target.value) as 0 | 1
+                  })
+                }
+                className={inputClassName}
+              >
+                <option value={1}>Δευτέρα</option>
+                <option value={0}>Κυριακή</option>
+              </select>
+            </Field>
+          </>
+        ) : null}
 
         <Field label="Γλώσσα">
           <select
@@ -745,7 +997,7 @@ function OpeningHoursGrid({
     <div>
       <SectionHeading
         title="Ώρες λειτουργίας"
-        description="Ορίστε το εβδομαδιαίο ωράριο. Οι κλειστές ημέρες δεν χρειάζονται ώρες."
+        description="Ορίστε το βασικό εβδομαδιαίο ωράριο."
       />
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200">
@@ -828,7 +1080,7 @@ function RolesEditor({
     <div>
       <SectionHeading
         title="Προσαρμοσμένοι ρόλοι"
-        description="Προσθέστε όσους ρόλους χρειάζεται η επιχείρηση. Δεν υπάρχουν υποχρεωτικοί προεπιλεγμένοι ρόλοι."
+        description="Επεξεργαστείτε τους προτεινόμενους ρόλους ή προσθέστε δικούς σας."
       />
 
       <div className="mt-6 space-y-4">
@@ -904,7 +1156,7 @@ function ShiftTemplatesEditor({
     <div>
       <SectionHeading
         title="Πρότυπα βαρδιών"
-        description="Δημιουργήστε απλά πρότυπα για μελλοντική χρήση. Δεν συνδέονται ακόμα με απαιτήσεις προσωπικού."
+        description="Δημιουργήστε τις βασικές βάρδιες που χρησιμοποιείτε συχνά."
       />
 
       <div className="mt-6 space-y-4">
@@ -1026,7 +1278,7 @@ function BusinessSettingsEditor({
   return (
     <div className="max-w-4xl">
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-      <BusinessInfoForm value={form} onChange={setForm} />
+      <BusinessInfoForm value={form} onChange={setForm} showExtendedFields />
 
       <button
         type="button"
@@ -1035,6 +1287,386 @@ function BusinessSettingsEditor({
         className="mt-6 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
       >
         {isSaving ? "Αποθήκευση..." : "Αποθήκευση ρυθμίσεων"}
+      </button>
+    </div>
+  );
+}
+
+function ProfilePage({
+  summary,
+  language,
+  isLoadingDemoData,
+  onLoadDemoData,
+  onChanged
+}: {
+  summary: DashboardSummary;
+  language: UiLanguage;
+  isLoadingDemoData: boolean;
+  onLoadDemoData: () => void;
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const settings = summary.businessSettings;
+  const [form, setForm] = useState<BusinessInfoDraft>(() =>
+    businessSettingsToForm(settings)
+  );
+  const [errors, setErrors] = useState<string[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const latestRun = [...summary.scheduleRuns].sort((a, b) =>
+    b.created_at.localeCompare(a.created_at)
+  )[0];
+
+  useEffect(() => {
+    setForm(businessSettingsToForm(settings));
+  }, [settings]);
+
+  async function saveProfile() {
+    const nextErrors = validateBusinessProfileForm(form, language);
+
+    if (nextErrors.length > 0) {
+      setErrors(nextErrors);
+      return;
+    }
+
+    setErrors([]);
+    setIsSaving(true);
+
+    try {
+      await upsertBusinessSettings(form, settings?.id);
+      await onChanged(
+        language === "en"
+          ? "Business profile saved."
+          : "Το προφίλ επιχείρησης αποθηκεύτηκε."
+      );
+    } catch (error) {
+      setErrors([getErrorMessage(error)]);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="max-w-7xl">
+      <SectionHeading
+        title={language === "en" ? "Profile" : "Προφίλ"}
+        description={
+          language === "en"
+            ? "Business profile and quick setup summary."
+            : "Βασικές ρυθμίσεις επιχείρησης και γρήγορη σύνοψη."
+        }
+      />
+
+      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
+
+      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="rounded-lg border border-slate-200 bg-white p-5">
+          <h3 className="text-base font-semibold tracking-normal text-slate-950">
+            {language === "en" ? "Business settings" : "Στοιχεία επιχείρησης"}
+          </h3>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field
+              label={language === "en" ? "Business name" : "Όνομα επιχείρησης"}
+              required
+            >
+              <input
+                value={form.businessName}
+                onChange={(event) =>
+                  setForm({ ...form, businessName: event.target.value })
+                }
+                className={inputClassName}
+              />
+            </Field>
+            <Field
+              label={language === "en" ? "Business type" : "Τύπος επιχείρησης"}
+            >
+              <input
+                value={form.businessType}
+                onChange={(event) =>
+                  setForm({ ...form, businessType: event.target.value })
+                }
+                className={inputClassName}
+                placeholder={language === "en" ? "Cafe / bar" : "Cafe / bar"}
+              />
+            </Field>
+            <Field label={language === "en" ? "Location" : "Τοποθεσία"}>
+              <input
+                value={form.location}
+                onChange={(event) =>
+                  setForm({ ...form, location: event.target.value })
+                }
+                className={inputClassName}
+              />
+            </Field>
+            <Field
+              label={language === "en" ? "Week starts on" : "Η εβδομάδα ξεκινά"}
+            >
+              <select
+                value={form.weekStartsOn}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    weekStartsOn: Number(event.target.value) as 0 | 1
+                  })
+                }
+                className={inputClassName}
+              >
+                <option value={1}>
+                  {language === "en" ? "Monday" : "Δευτέρα"}
+                </option>
+                <option value={0}>
+                  {language === "en" ? "Sunday" : "Κυριακή"}
+                </option>
+              </select>
+            </Field>
+            <Field label={language === "en" ? "Language" : "Γλώσσα"}>
+              <select
+                value={form.language}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    language: event.target.value as BusinessInfoDraft["language"]
+                  })
+                }
+                className={inputClassName}
+              >
+                <option value="el">Ελληνικά</option>
+                <option value="en">English</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={saveProfile}
+              disabled={isSaving}
+              className="rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {isSaving
+                ? language === "en"
+                  ? "Saving..."
+                  : "Αποθήκευση..."
+                : language === "en"
+                  ? "Save settings"
+                  : "Αποθήκευση ρυθμίσεων"}
+            </button>
+            <button
+              type="button"
+              onClick={onLoadDemoData}
+              disabled={isLoadingDemoData}
+              className={secondaryButtonClassName}
+            >
+              {isLoadingDemoData
+                ? language === "en"
+                  ? "Loading demo..."
+                  : "Φόρτωση demo..."
+                : language === "en"
+                  ? "Load Demo Data"
+                  : "Φόρτωση Demo Data"}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          <SummaryTile
+            label={language === "en" ? "Opening days" : "Ημέρες λειτουργίας"}
+            value={openDayCount(summary.openingHours)}
+          />
+          <SummaryTile
+            label={language === "en" ? "Roles" : "Ρόλοι"}
+            value={summary.roles.length}
+          />
+          <SummaryTile
+            label={language === "en" ? "Shifts" : "Βάρδιες"}
+            value={summary.shiftTemplates.length}
+          />
+          <SummaryTile
+            label={language === "en" ? "Employees" : "Εργαζόμενοι"}
+            value={summary.employees.length}
+          />
+          <SummaryTile
+            label={language === "en" ? "Latest program" : "Τελευταίο πρόγραμμα"}
+            value={
+              latestRun
+                ? formatDateRangeEu(latestRun.start_date, latestRun.end_date)
+                : language === "en"
+                  ? "None yet"
+                  : "Δεν υπάρχει ακόμα"
+            }
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpeningHoursPage({
+  openingHours,
+  language,
+  shiftTemplates,
+  staffingRequirements,
+  onChanged
+}: {
+  openingHours: OpeningHours[];
+  language: UiLanguage;
+  shiftTemplates: ShiftTemplate[];
+  staffingRequirements: StaffingRequirement[];
+  onChanged: (message: string) => Promise<void>;
+}) {
+  const [form, setForm] = useState<OpeningHoursFormRow[]>(() =>
+    openingHoursToDraft(openingHours, language)
+  );
+  const [errors, setErrors] = useState<string[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setForm(openingHoursToDraft(openingHours, language));
+  }, [openingHours, language]);
+
+  function updateDay(dayOfWeek: DayOfWeek, value: Partial<OpeningHoursFormRow>) {
+    setForm((current) =>
+      current.map((day) =>
+        day.dayOfWeek === dayOfWeek ? { ...day, ...value } : day
+      )
+    );
+  }
+
+  async function saveHours() {
+    const nextErrors = validateOpeningHoursForm(form, language);
+
+    if (nextErrors.length > 0) {
+      setErrors(nextErrors);
+      return;
+    }
+
+    setErrors([]);
+    setIsSaving(true);
+
+    try {
+      await saveOpeningHours(form);
+      await onChanged(
+        language === "en"
+          ? "Opening hours saved."
+          : "Το ωράριο λειτουργίας αποθηκεύτηκε."
+      );
+    } catch (error) {
+      setErrors([getErrorMessage(error)]);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  const mayHavePlanningOutsideHours =
+    shiftTemplates.length > 0 || staffingRequirements.length > 0;
+
+  return (
+    <div className="max-w-6xl">
+      <SectionHeading
+        title={language === "en" ? "Opening Hours" : "Ώρες λειτουργίας"}
+        description={
+          language === "en"
+            ? "Edit the weekly operating hours used by future schedule generation."
+            : "Επεξεργαστείτε το εβδομαδιαίο ωράριο που χρησιμοποιείται σε μελλοντικά προγράμματα."
+        }
+      />
+
+      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
+
+      {mayHavePlanningOutsideHours ? (
+        <div className="mt-6 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {language === "en"
+            ? "Some shifts or staffing requirements may be outside opening hours."
+            : "Υπάρχουν βάρδιες ή ανάγκες προσωπικού που μπορεί να είναι εκτός ωραρίου."}
+        </div>
+      ) : null}
+
+      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="grid grid-cols-[1.2fr_0.8fr_1fr_1fr_0.9fr_1.4fr] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <span>{language === "en" ? "Day" : "Ημέρα"}</span>
+          <span>{language === "en" ? "Open" : "Ανοιχτά"}</span>
+          <span>{language === "en" ? "Opens" : "Άνοιγμα"}</span>
+          <span>{language === "en" ? "Closes" : "Κλείσιμο"}</span>
+          <span>{language === "en" ? "Overnight" : "Μεσάνυχτα"}</span>
+          <span>{language === "en" ? "Notes" : "Σημειώσεις"}</span>
+        </div>
+
+        {form.map((day) => (
+          <div
+            key={day.dayOfWeek}
+            className="grid grid-cols-[1.2fr_0.8fr_1fr_1fr_0.9fr_1.4fr] items-center gap-4 border-t border-slate-200 px-5 py-4"
+          >
+            <p className="text-sm font-semibold text-slate-900">{day.label}</p>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={day.isOpen}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, { isOpen: event.target.checked })
+                }
+              />
+              {day.isOpen
+                ? language === "en"
+                  ? "Open"
+                  : "Ανοιχτά"
+                : language === "en"
+                  ? "Closed"
+                  : "Κλειστά"}
+            </label>
+            <input
+              type="time"
+              value={day.openTime}
+              disabled={!day.isOpen}
+              onChange={(event) =>
+                updateDay(day.dayOfWeek, { openTime: event.target.value })
+              }
+              className={inputClassName}
+            />
+            <input
+              type="time"
+              value={day.closeTime}
+              disabled={!day.isOpen}
+              onChange={(event) =>
+                updateDay(day.dayOfWeek, { closeTime: event.target.value })
+              }
+              className={inputClassName}
+            />
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={day.isOvernight}
+                disabled={!day.isOpen}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, {
+                    isOvernight: event.target.checked
+                  })
+                }
+              />
+              {language === "en" ? "Overnight" : "Περνάει"}
+            </label>
+            <input
+              value={day.notes}
+              onChange={(event) =>
+                updateDay(day.dayOfWeek, { notes: event.target.value })
+              }
+              className={inputClassName}
+              placeholder={language === "en" ? "Optional" : "Προαιρετικά"}
+            />
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={saveHours}
+        disabled={isSaving}
+        className="mt-5 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+      >
+        {isSaving
+          ? language === "en"
+            ? "Saving..."
+            : "Αποθήκευση..."
+          : language === "en"
+            ? "Save opening hours"
+            : "Αποθήκευση ωραρίου"}
       </button>
     </div>
   );
@@ -1122,6 +1754,10 @@ type TimeOffForm = {
   reason: string;
 };
 
+type OpeningHoursFormRow = OpeningHoursDraft & {
+  notes: string;
+};
+
 function GenerateSchedulePage({
   businessSettings,
   openingHours,
@@ -1167,6 +1803,7 @@ function GenerateSchedulePage({
   const [errors, setErrors] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const language = appLanguage(businessSettings);
   const weekStartsOn: DayOfWeek = businessSettings?.week_starts_on ?? 1;
   const selectedWeekRange = isDateInputValue(weekStartDate)
     ? getWeekRangeForDate({
@@ -1301,15 +1938,19 @@ function GenerateSchedulePage({
   return (
     <div className="max-w-7xl">
       <SectionHeading
-        title="Generate Program"
-        description="Choose a week, generate a proposed program, then review and edit it in Schedule View."
+        title={language === "en" ? "Generate Program" : "Δημιουργία προγράμματος"}
+        description={
+          language === "en"
+            ? "Choose a week and generate a proposed schedule based on staffing needs, availability and work rules."
+            : "Επιλέξτε εβδομάδα και δημιουργήστε προτεινόμενο πρόγραμμα με βάση τις ανάγκες, τη διαθεσιμότητα και τους κανόνες εργασίας."
+        }
       />
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="grid gap-4 lg:grid-cols-[240px_1fr_auto] lg:items-end">
-          <Field label="Select date" required>
+          <Field label={language === "en" ? "Select date" : "Επιλογή ημερομηνίας"} required>
             <input
               type="date"
               value={weekStartDate}
@@ -1319,16 +1960,23 @@ function GenerateSchedulePage({
           </Field>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-sm font-semibold text-slate-900">
-              Selected week:{" "}
+              {language === "en" ? "Selected week:" : "Επιλεγμένη εβδομάδα:"}{" "}
               {selectedWeekRange
                 ? formatWeekRangeWithDays(selectedWeekRange.weekStartDate, selectedWeekRange.weekEndDate)
-                : "Choose a valid date"}
+                : language === "en"
+                  ? "Choose a valid date"
+                  : "Επιλέξτε έγκυρη ημερομηνία"}
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              Week starts on {dayLabel(weekStartsOn)}.{" "}
+              {language === "en" ? "Week starts on" : "Η εβδομάδα ξεκινά"}{" "}
+              {localizedDayName(weekStartsOn, language)}.{" "}
               {selectedWeekRange && selectedWeekRange.weekStartDate !== weekStartDate
-                ? `The selected date is adjusted to ${formatDateEu(selectedWeekRange.weekStartDate)}.`
-                : "The selected date matches the configured week start."}
+                ? language === "en"
+                  ? `The selected date is adjusted to ${formatDateEu(selectedWeekRange.weekStartDate)}.`
+                  : `Η ημερομηνία προσαρμόζεται σε ${formatDateEu(selectedWeekRange.weekStartDate)}.`
+                : language === "en"
+                  ? "The selected date matches the configured week start."
+                  : "Η ημερομηνία ταιριάζει με την έναρξη εβδομάδας."}
             </p>
           </div>
           <button
@@ -1337,36 +1985,43 @@ function GenerateSchedulePage({
             disabled={isGenerating}
             className="rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
           >
-            {isGenerating ? "Generating Program..." : "Generate Program"}
+            {isGenerating
+              ? language === "en"
+                ? "Generating Program..."
+                : "Δημιουργία..."
+              : language === "en"
+                ? "Generate Program"
+                : "Δημιουργία προγράμματος"}
           </button>
         </div>
         <p className="mt-3 text-sm text-slate-500">
-          The app creates demand, assigns employees, records warnings and opens
-          the proposed program for review.
+          {language === "en"
+            ? "The app creates demand, assigns employees, records warnings and opens the proposed program for review."
+            : "Η εφαρμογή δημιουργεί θέσεις, αναθέτει εργαζομένους, καταγράφει προειδοποιήσεις και ανοίγει το προτεινόμενο πρόγραμμα."}
         </p>
       </div>
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-5 py-4">
           <h3 className="text-base font-semibold tracking-normal text-slate-900">
-            Recent programs
+            {language === "en" ? "Recent programs" : "Πρόσφατα προγράμματα"}
           </h3>
         </div>
         <div className="overflow-x-auto">
           <div className="min-w-[1180px]">
             <div className="grid grid-cols-[120px_220px_150px_80px_90px_90px_100px_220px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <span className="whitespace-nowrap">Type</span>
-              <span className="whitespace-nowrap">Period</span>
-              <span className="whitespace-nowrap">Status</span>
-              <span className="whitespace-nowrap">Slots</span>
-              <span className="whitespace-nowrap">Assigned</span>
-              <span className="whitespace-nowrap">Unfilled</span>
-              <span className="whitespace-nowrap">Warnings</span>
-              <span className="whitespace-nowrap">Action</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Type" : "Τύπος"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Period" : "Περίοδος"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Status" : "Κατάσταση"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Slots" : "Θέσεις"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Assigned" : "Ανατέθηκαν"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Unfilled" : "Κενές"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Warnings" : "Προειδοποιήσεις"}</span>
+              <span className="whitespace-nowrap">{language === "en" ? "Action" : "Ενέργεια"}</span>
             </div>
             {recentRuns.length === 0 ? (
               <p className="px-5 py-5 text-sm text-slate-500">
-                No programs generated yet.
+                {language === "en" ? "No programs generated yet." : "Δεν έχουν δημιουργηθεί προγράμματα ακόμα."}
               </p>
             ) : (
               recentRuns.map((run) => {
@@ -1418,7 +2073,7 @@ function GenerateSchedulePage({
                           onClick={() => onViewProgram(run.id)}
                           className={`${secondaryButtonClassName} whitespace-nowrap`}
                         >
-                          View Program
+                          {language === "en" ? "View Program" : "Προβολή"}
                         </button>
                         <button
                           type="button"
@@ -1426,13 +2081,20 @@ function GenerateSchedulePage({
                           disabled={deletingRunId === run.id}
                           className="whitespace-nowrap rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
                         >
-                          {deletingRunId === run.id ? "Deleting..." : "Delete"}
+                          {deletingRunId === run.id
+                            ? language === "en"
+                              ? "Deleting..."
+                              : "Διαγραφή..."
+                            : language === "en"
+                              ? "Delete"
+                              : "Διαγραφή"}
                         </button>
                       </div>
                     </div>
                     {runSlots.length > 0 ? (
                       <div className="px-5 pb-4 text-xs text-slate-500">
-                        Role coverage: {roleCoverageSummary(runSlots, roles)}
+                        {language === "en" ? "Role coverage:" : "Κάλυψη ρόλων:"}{" "}
+                        {roleCoverageSummary(runSlots, roles)}
                       </div>
                     ) : null}
                   </div>
@@ -1534,6 +2196,7 @@ function ScheduleViewPage({
     "team" | "manager" | null
   >(null);
   const [isDeletingProgram, setIsDeletingProgram] = useState(false);
+  const language = appLanguage(businessSettings);
   const selectedRun =
     scheduleRuns.find((run) => run.id === selectedRunId) ??
     [...scheduleRuns].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ??
@@ -1543,11 +2206,17 @@ function ScheduleViewPage({
     return (
       <div className="max-w-4xl">
         <SectionHeading
-          title="Proposed Program"
-          description="Generate a program first, then review and edit it here."
+          title={language === "en" ? "Proposed Program" : "Προτεινόμενο πρόγραμμα"}
+          description={
+            language === "en"
+              ? "Generate a program first, then review and edit it here."
+              : "Δημιουργήστε πρώτα πρόγραμμα και μετά επεξεργαστείτε το εδώ."
+          }
         />
         <div className="mt-6 rounded-lg border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-          No proposed program exists yet.
+          {language === "en"
+            ? "No proposed program exists yet."
+            : "Δεν υπάρχει ακόμα προτεινόμενο πρόγραμμα."}
         </div>
       </div>
     );
@@ -1804,11 +2473,15 @@ function ScheduleViewPage({
     <div className="max-w-[1600px]">
       <div className="flex items-start justify-between gap-4">
         <SectionHeading
-          title="Proposed Program"
-          description="Review assigned employees, unfilled needs, warnings and explanations before export."
+          title={language === "en" ? "Proposed Program" : "Προτεινόμενο πρόγραμμα"}
+          description={
+            language === "en"
+              ? "Review assigned employees, unfilled needs and warnings before export."
+              : "Ελέγξτε αναθέσεις, κενές βάρδιες και προειδοποιήσεις πριν την εξαγωγή."
+          }
         />
         <div className="flex items-end gap-3">
-          <Field label="View program">
+          <Field label={language === "en" ? "View program" : "Προβολή προγράμματος"}>
             <select
               value={selectedRun.id}
               onChange={(event) => onSelectRun(event.target.value)}
@@ -1859,7 +2532,13 @@ function ScheduleViewPage({
             disabled={isDeletingProgram}
             className="rounded-md border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
-            {isDeletingProgram ? "Deleting..." : "Delete"}
+            {isDeletingProgram
+              ? language === "en"
+                ? "Deleting..."
+                : "Διαγραφή..."
+              : language === "en"
+                ? "Delete"
+                : "Διαγραφή"}
           </button>
         </div>
       </div>
@@ -1872,26 +2551,27 @@ function ScheduleViewPage({
       ) : null}
 
       <div className="mt-5 grid grid-cols-6 gap-4">
-        <SummaryTile label="Business" value={businessName} />
+        <SummaryTile label={language === "en" ? "Business" : "Επιχείρηση"} value={businessName} />
         <SummaryTile
-          label="Period"
+          label={language === "en" ? "Period" : "Περίοδος"}
           value={formatDateRangeEu(selectedRun.start_date, selectedRun.end_date)}
         />
-        <SummaryTile label="Slots" value={runSlots.length} />
-        <SummaryTile label="Assigned" value={runAssignments.length} />
-        <SummaryTile label="Unfilled" value={unfilledSlotCount} />
-        <SummaryTile label="Warnings" value={runWarnings.length} />
+        <SummaryTile label={language === "en" ? "Slots" : "Θέσεις"} value={runSlots.length} />
+        <SummaryTile label={language === "en" ? "Assigned" : "Ανατέθηκαν"} value={runAssignments.length} />
+        <SummaryTile label={language === "en" ? "Unfilled" : "Κενές"} value={unfilledSlotCount} />
+        <SummaryTile label={language === "en" ? "Warnings" : "Προειδοποιήσεις"} value={runWarnings.length} />
       </div>
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white">
         <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
             <h3 className="text-base font-semibold tracking-normal text-slate-900">
-              Weekly program
+              {language === "en" ? "Weekly schedule" : "Εβδομαδιαίο πρόγραμμα"}
             </h3>
             <p className="mt-1 text-sm text-slate-500">
-              TODO: drag and drop can reuse the same click-to-edit validation
-              path later.
+              {language === "en"
+                ? "Review the proposed weekly schedule and make manual changes where needed."
+                : "Ελέγξτε το προτεινόμενο εβδομαδιαίο πρόγραμμα και κάντε αλλαγές όπου χρειάζεται."}
             </p>
           </div>
           <div className="inline-flex rounded-md border border-slate-300 bg-white p-1">
@@ -4290,7 +4970,7 @@ function EmployeesPage({
                               }
                               className={inputClassName}
                             >
-                              {experienceLevelOptions.map((option) => (
+                              {experienceOptions("el").map((option) => (
                                 <option key={option.value} value={option.value}>
                                   {option.label}
                                 </option>
@@ -5407,7 +6087,7 @@ function ShiftTemplatesCrudPage({
     <div className="max-w-6xl">
       <SectionHeading
         title="Shift Templates"
-        description="Create reusable shifts for later scheduling phases. Staffing requirements and employees are not part of this phase."
+        description="Create reusable shifts for future programs."
       />
 
       {errors.length > 0 ? <ErrorList errors={errors} /> : null}
@@ -6955,15 +7635,13 @@ function experienceOptions(language: UiLanguage): Array<{
   if (language === "en") {
     return [
       { value: "no_experience", label: "No experience" },
-      { value: "some_experience", label: "Some experience" },
-      { value: "experienced", label: "Experienced" }
+      { value: "some_experience", label: "Experienced" }
     ];
   }
 
   return [
     { value: "no_experience", label: "Χωρίς προϋπηρεσία" },
-    { value: "some_experience", label: "Με προϋπηρεσία" },
-    { value: "experienced", label: "Έμπειρος" }
+    { value: "some_experience", label: "Με προϋπηρεσία" }
   ];
 }
 
@@ -7775,14 +8453,28 @@ function renderPage(
   actions: {
     selectedScheduleRunId: string | null;
     isLoadingDemoData: boolean;
+    isResettingApp: boolean;
     onDataChanged: (message: string) => Promise<void>;
     onLoadDemoData: () => void;
+    onResetLocalData: () => void;
     onProgramGenerated: (runId: string, message: string) => Promise<void>;
     onProgramDeleted: (message: string) => Promise<void>;
     onViewProgram: (runId: string) => void;
   }
 ) {
   const { onDataChanged } = actions;
+
+  if (pageId === "profile") {
+    return (
+      <ProfilePage
+        summary={summary}
+        language={appLanguage(summary.businessSettings)}
+        isLoadingDemoData={actions.isLoadingDemoData}
+        onLoadDemoData={actions.onLoadDemoData}
+        onChanged={(message) => onDataChanged(message)}
+      />
+    );
+  }
 
   if (pageId === "dashboard") {
     return (
@@ -7804,6 +8496,18 @@ function renderPage(
   }
 
   if (pageId === "opening-hours") {
+    return (
+      <OpeningHoursPage
+        openingHours={summary.openingHours}
+        language={appLanguage(summary.businessSettings)}
+        shiftTemplates={summary.shiftTemplates}
+        staffingRequirements={summary.staffingRequirements}
+        onChanged={(message) => onDataChanged(message)}
+      />
+    );
+  }
+
+  if (false && pageId === "opening-hours") {
     return (
       <RecordListPage
         title="Ώρες λειτουργίας"
@@ -7939,6 +8643,33 @@ function renderPage(
     );
   }
 
+  if (pageId === "reports") {
+    const language = appLanguage(summary.businessSettings);
+
+    return (
+      <SimpleInfoPage
+        title={language === "en" ? "Reports" : "Αναφορές"}
+        description={
+          language === "en"
+            ? "Schedule PDF exports are available from Schedule View."
+            : "Οι εξαγωγές PDF του προγράμματος είναι διαθέσιμες από την Προβολή προγράμματος."
+        }
+      />
+    );
+  }
+
+  if (pageId === "backup-restore") {
+    const language = appLanguage(summary.businessSettings);
+
+    return (
+      <BackupRestorePage
+        language={language}
+        isResetting={actions.isResettingApp}
+        onResetLocalData={actions.onResetLocalData}
+      />
+    );
+  }
+
   const page = pages.find((item) => item.id === pageId);
 
   return (
@@ -8046,6 +8777,77 @@ function RecordListPage({
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+function SimpleInfoPage({
+  title,
+  description
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="max-w-3xl">
+      <SectionHeading title={title} description={description} />
+      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 text-sm leading-6 text-slate-600">
+        {description}
+      </div>
+    </div>
+  );
+}
+
+function BackupRestorePage({
+  language,
+  isResetting,
+  onResetLocalData
+}: {
+  language: UiLanguage;
+  isResetting: boolean;
+  onResetLocalData: () => void;
+}) {
+  return (
+    <div className="max-w-4xl">
+      <SectionHeading
+        title={
+          language === "en"
+            ? "Backup / Restore"
+            : "Αντίγραφα ασφαλείας / Επαναφορά"
+        }
+        description={
+          language === "en"
+            ? "Local backup, restore and reset tools for the SQLite database."
+            : "Τοπικά εργαλεία αντιγράφων ασφαλείας, επαναφοράς και καθαρισμού της βάσης SQLite."
+        }
+      />
+
+      <div className="mt-6 rounded-lg border border-red-200 bg-white p-5">
+        <h3 className="text-base font-semibold tracking-normal text-red-900">
+          {language === "en"
+            ? "Reset app / Clear local database"
+            : "Επαναφορά εφαρμογής / Καθαρισμός τοπικής βάσης"}
+        </h3>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {language === "en"
+            ? "This permanently deletes all local app data and returns the app to first setup. It does not delete project files."
+            : "Διαγράφει οριστικά όλα τα τοπικά δεδομένα της εφαρμογής και επιστρέφει στην πρώτη ρύθμιση. Δεν διαγράφει αρχεία του project."}
+        </p>
+        <button
+          type="button"
+          onClick={onResetLocalData}
+          disabled={isResetting}
+          className="mt-4 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isResetting
+            ? language === "en"
+              ? "Resetting..."
+              : "Γίνεται επαναφορά..."
+            : language === "en"
+              ? "Reset app / Clear local database"
+              : "Επαναφορά εφαρμογής / Καθαρισμός τοπικής βάσης"}
+        </button>
       </div>
     </div>
   );
@@ -8234,7 +9036,9 @@ async function upsertBusinessSettings(
   await databaseApi.createRecord("business_settings", payload);
 }
 
-async function saveOpeningHours(openingHours: OpeningHoursDraft[]): Promise<void> {
+async function saveOpeningHours(
+  openingHours: Array<OpeningHoursDraft & { notes?: string }>
+): Promise<void> {
   const existingRows = await databaseApi.listRecords("opening_hours", {
     limit: 20
   });
@@ -8249,7 +9053,7 @@ async function saveOpeningHours(openingHours: OpeningHoursDraft[]): Promise<void
       open_time: day.isOpen ? day.openTime : null,
       close_time: day.isOpen ? day.closeTime : null,
       is_overnight: day.isOpen ? day.isOvernight : false,
-      notes: null
+      notes: optionalText(day.notes ?? "")
     };
 
     if (existing) {
@@ -8272,10 +9076,88 @@ function businessSettingsToForm(
   };
 }
 
+function validateBusinessProfileForm(
+  form: BusinessInfoDraft,
+  language: UiLanguage
+): string[] {
+  const errors: string[] = [];
+
+  if (!form.businessName.trim()) {
+    errors.push(
+      language === "en"
+        ? "Business name is required."
+        : "Το όνομα επιχείρησης είναι υποχρεωτικό."
+    );
+  }
+
+  if (form.weekStartsOn !== 0 && form.weekStartsOn !== 1) {
+    errors.push(
+      language === "en"
+        ? "Choose a valid week start day."
+        : "Επιλέξτε έγκυρη ημέρα έναρξης εβδομάδας."
+    );
+  }
+
+  return errors;
+}
+
+function openingHoursToDraft(
+  openingHours: OpeningHours[],
+  language: UiLanguage
+): OpeningHoursFormRow[] {
+  const labels = localizedDayLabels(language);
+
+  return labels.map((day) => {
+    const row = openingHours.find(
+      (openingHour) => openingHour.day_of_week === day.dayOfWeek
+    );
+
+    return {
+      dayOfWeek: day.dayOfWeek,
+      label: day.label,
+      isOpen: row ? Boolean(row.is_open) : false,
+      openTime: row?.open_time ?? "08:00",
+      closeTime: row?.close_time ?? "17:00",
+      isOvernight: Boolean(row?.is_overnight),
+      notes: row?.notes ?? ""
+    };
+  });
+}
+
+function validateOpeningHoursForm(
+  openingHours: OpeningHoursDraft[],
+  language: UiLanguage
+): string[] {
+  const errors: string[] = [];
+
+  for (const day of openingHours) {
+    if (!day.isOpen) {
+      continue;
+    }
+
+    if (!day.openTime || !day.closeTime) {
+      errors.push(
+        language === "en"
+          ? `${day.label}: opening and closing times are required.`
+          : `${day.label}: χρειάζεται ώρα ανοίγματος και κλεισίματος.`
+      );
+    }
+  }
+
+  return errors;
+}
+
 function dayLabel(dayOfWeek: number): string {
   return (
     dayLabels.find((day) => day.dayOfWeek === dayOfWeek)?.label ??
     `Day ${dayOfWeek}`
+  );
+}
+
+function localizedDayName(dayOfWeek: DayOfWeek, language: UiLanguage): string {
+  return (
+    localizedDayLabels(language).find((day) => day.dayOfWeek === dayOfWeek)
+      ?.label ?? String(dayOfWeek)
   );
 }
 

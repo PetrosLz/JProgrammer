@@ -15,7 +15,7 @@ import {
   getSlotShiftTemplateId
 } from "./constraints";
 
-export const experiencedExperienceLevel: ExperienceLevel = "experienced";
+export const experiencedExperienceLevel: ExperienceLevel = "some_experience";
 
 export type RoleGroupQuality = {
   groupKey: string;
@@ -144,7 +144,7 @@ export function assessRoleGroupQuality({
     getEmployeeRoleExperience(employeeId, slot.role_id, employeeRoles)
   );
   const experiencedAssignedCount = experienceLevels.filter(
-    (experienceLevel) => experienceLevel === "experienced"
+    (experienceLevel) => experienceLevelRank(experienceLevel) >= 2
   ).length;
   const hasExperiencedEmployee = experiencedAssignedCount > 0;
   const hasEmployeeWithExperience = experienceLevels.some(
@@ -189,7 +189,7 @@ export function assessRoleGroupQuality({
     experiencedAssignedCount < experiencedRequiredCount
   ) {
     warnings.push(
-      `This shift requires ${experiencedRequiredCount} experienced ${roleName}, but assigned ${experiencedAssignedCount}.`
+      `This shift needs ${experiencedRequiredCount} ${roleName} employee with prior experience, but assigned ${experiencedAssignedCount}.`
     );
   }
 
