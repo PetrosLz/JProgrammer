@@ -5,7 +5,7 @@ export type SchedulerWarningDraft = {
   scheduleRunId: string;
   scheduleSlotId: string | null;
   scheduleAssignmentId: string | null;
-  severity: "info" | "warning";
+  severity: "info" | "warning" | "critical";
   warningType: string;
   message: string;
 };

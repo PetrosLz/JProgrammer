@@ -134,6 +134,12 @@ type CandidateSchedule = {
   repairIterations: number;
 };
 
+type FinalHardConstraintViolation = {
+  assignmentId: string | null;
+  slotId: string | null;
+  message: string;
+};
+
 type OptimizationConfig = {
   attempts: number;
   maxRepairIterations: number;
@@ -344,6 +350,25 @@ export async function assignEmployeesToRun({
     slots: runSlots,
     assignments: finalAssignments
   });
+  const finalHardConstraintViolations = validateFinalScheduleHardConstraints({
+    runSlots,
+    assignments: finalAssignments,
+    employees,
+    data,
+    manualOverrides
+  });
+
+  for (const violation of finalHardConstraintViolations) {
+    await saveWarning({
+      scheduleRunId: run.id,
+      scheduleSlotId: violation.slotId,
+      scheduleAssignmentId: violation.assignmentId,
+      severity: "critical",
+      warningType: "final_hard_constraint_violation",
+      message: violation.message
+    });
+    warningsCreated += 1;
+  }
 
   const coverageWarnings = createRoleGroupCoverageWarnings({
     runId: run.id,
@@ -389,6 +414,12 @@ export async function assignEmployeesToRun({
     selectedSchedule,
     feasibility
   );
+
+  if (finalHardConstraintViolations.length > 0) {
+    await databaseApi.updateRecord("schedule_runs", run.id, {
+      status: "needs_review"
+    });
+  }
 
   return {
     runId: run.id,
@@ -2158,6 +2189,88 @@ function validateScheduleHardConstraints({
       violations.push(
         `${employee.first_name} ${employee.last_name} cannot be assigned to ${slot.date} ${slot.start_time}-${slot.end_time}: ${hardConstraintResult.reasons.join(" ")}`
       );
+    }
+  }
+
+  return violations;
+}
+
+function validateFinalScheduleHardConstraints({
+  runSlots,
+  assignments,
+  employees,
+  data
+}: {
+  runSlots: ScheduleSlot[];
+  assignments: ScheduleAssignment[];
+  employees: Employee[];
+  data: SchedulerData;
+  manualOverrides: ManualOverrideMap;
+}): FinalHardConstraintViolation[] {
+  const violations: FinalHardConstraintViolation[] = [];
+  const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
+  const activeAssignments = assignments.filter(
+    (assignment) =>
+      assignment.status !== "cancelled" && assignment.status !== "removed"
+  );
+  const assignmentsBySlotId = new Map<string, ScheduleAssignment[]>();
+
+  for (const assignment of activeAssignments) {
+    const existing = assignmentsBySlotId.get(assignment.schedule_slot_id) ?? [];
+    assignmentsBySlotId.set(assignment.schedule_slot_id, [...existing, assignment]);
+  }
+
+  for (const [slotId, slotAssignments] of assignmentsBySlotId.entries()) {
+    if (slotAssignments.length > 1) {
+      violations.push({
+        assignmentId: null,
+        slotId,
+        message: `Critical validation issue: slot ${slotId} has ${slotAssignments.length} active assignments.`
+      });
+    }
+  }
+
+  for (const assignment of activeAssignments) {
+    const slot = slotById.get(assignment.schedule_slot_id);
+    const employee = employees.find(
+      (item) => item.id === assignment.employee_id
+    );
+
+    if (!slot || !employee) {
+      violations.push({
+        assignmentId: assignment.id,
+        slotId: assignment.schedule_slot_id,
+        message: `Critical validation issue: assignment ${assignment.id} references a missing slot or employee.`
+      });
+      continue;
+    }
+
+    const otherAssignments = activeAssignments.filter(
+      (item) => item.id !== assignment.id
+    );
+    const assignedShiftsWithoutCurrent = buildExistingAssignedShifts({
+      slots: runSlots,
+      assignments: otherAssignments
+    });
+    const hardConstraintResult = checkHardConstraints({
+      employee,
+      slot,
+      data,
+      assignedShifts: assignedShiftsWithoutCurrent
+    });
+
+    if (!hardConstraintResult.allowed) {
+      violations.push({
+        assignmentId: assignment.id,
+        slotId: slot.id,
+        message: `Σοβαρό θέμα ελέγχου: ${employee.first_name} ${
+          employee.last_name
+        } έχει ανατεθεί στις ${formatDayAndDate(slot.date)} ${
+          slot.start_time
+        }-${slot.end_time}, αλλά παραβιάζει κανόνες εργασίας: ${hardConstraintResult.reasons.join(
+          " "
+        )}`
+      });
     }
   }
 

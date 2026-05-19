@@ -41,8 +41,10 @@ export {
 } from "./warnings";
 export {
   saveManualAssignmentChange,
+  splitManualAssignmentViolations,
   validateManualAssignmentChange,
   type ManualAssignmentInput,
+  type ManualAssignmentSaveOptions,
   type ManualAssignmentValidation
 } from "./manualAssignments";
 export {

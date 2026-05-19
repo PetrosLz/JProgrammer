@@ -65,6 +65,7 @@ import {
   getWeekRangeForDate,
   isDateInputValue,
   saveManualAssignmentChange,
+  splitManualAssignmentViolations,
   validateManualAssignmentChange,
   type AssignmentResult,
   type GenerationPlan,
@@ -3505,30 +3506,6 @@ function buildManualCandidateRows({
         left.employee.id.localeCompare(right.employee.id)
       );
     });
-}
-
-function splitManualAssignmentViolations(violations: string[]): {
-  hard: string[];
-  soft: string[];
-} {
-  return violations.reduce(
-    (result, violation) => {
-      if (isHardManualAssignmentViolation(violation)) {
-        result.hard.push(violation);
-      } else {
-        result.soft.push(violation);
-      }
-
-      return result;
-    },
-    { hard: [] as string[], soft: [] as string[] }
-  );
-}
-
-function isHardManualAssignmentViolation(violation: string): boolean {
-  return /inactive|does not have the required role|Employee does not meet the required experience level for this role|time off|cannot work|not available|already has a shift|overlapping shift|cannot work weekends|exceed max weekly hours|exceed max weekly days|could not be found/i.test(
-    violation
-  );
 }
 
 function translateManualAssignmentViolation(
@@ -7919,6 +7896,7 @@ function programStatusLabel(status: string): string {
     generated: "Generated",
     assigned: "Proposed",
     partially_assigned: "Needs review",
+    needs_review: "Needs review",
     unfilled: "Needs review",
     draft: "Draft"
   };

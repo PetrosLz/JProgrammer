@@ -41,8 +41,13 @@ export type ManualAssignmentInput = {
   scheduleAssignments: ScheduleAssignment[];
 };
 
+export type ManualAssignmentSaveOptions = {
+  allowHardOverride?: boolean;
+};
+
 export async function saveManualAssignmentChange(
-  input: ManualAssignmentInput
+  input: ManualAssignmentInput,
+  options: ManualAssignmentSaveOptions = {}
 ): Promise<void> {
   // TODO: Future drag and drop should call this same validation/save path.
   const validation = validateManualAssignmentChange(input);
@@ -70,6 +75,25 @@ export async function saveManualAssignmentChange(
     throw new Error("Selected employee could not be found.");
   }
 
+  const splitViolations = splitManualAssignmentViolations(validation.violations);
+
+  if (splitViolations.hard.length > 0 && options.allowHardOverride !== true) {
+    throw new Error(
+      `Manual assignment blocked by hard rules: ${splitViolations.hard.join(" ")}`
+    );
+  }
+
+  const assignmentNotes =
+    splitViolations.hard.length > 0
+      ? `Manual hard override: ${validation.employee.first_name} ${
+          validation.employee.last_name
+        } assigned with hard rule violations: ${splitViolations.hard.join(" ")}${
+          splitViolations.soft.length > 0
+            ? ` Soft warnings: ${splitViolations.soft.join(" ")}`
+            : ""
+        }`
+      : validation.explanation;
+
   const reusableAssignment = input.scheduleAssignments.find(
     (assignment) =>
       assignment.schedule_slot_id === input.slot.id &&
@@ -90,7 +114,7 @@ export async function saveManualAssignmentChange(
     await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
       status: "assigned",
       is_manual_override: true,
-      notes: validation.explanation
+      notes: assignmentNotes
     });
   } else if (input.currentAssignment) {
     await databaseApi.updateRecord(
@@ -100,14 +124,14 @@ export async function saveManualAssignmentChange(
         employee_id: input.employeeId,
         status: "assigned",
         is_manual_override: true,
-        notes: validation.explanation
+        notes: assignmentNotes
       }
     );
   } else if (reusableAssignment) {
     await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
       status: "assigned",
       is_manual_override: true,
-      notes: validation.explanation
+      notes: assignmentNotes
     });
   } else {
     await databaseApi.createRecord("schedule_assignments", {
@@ -116,7 +140,7 @@ export async function saveManualAssignmentChange(
       employee_id: input.employeeId,
       status: "assigned",
       is_manual_override: true,
-      notes: validation.explanation
+      notes: assignmentNotes
     });
   }
 
@@ -124,16 +148,53 @@ export async function saveManualAssignmentChange(
     status: "filled"
   });
 
-  for (const violation of validation.violations) {
+  for (const violation of splitViolations.soft) {
     await databaseApi.createRecord("schedule_warnings", {
       schedule_run_id: input.slot.schedule_run_id,
       schedule_slot_id: input.slot.id,
       schedule_assignment_id: null,
       severity: "warning",
-      warning_type: "manual_override_violation",
+      warning_type: "manual_override_warning",
       message: `Manual override saved: ${violation}`
     } satisfies Omit<ScheduleWarning, "id" | "created_at" | "updated_at">);
   }
+
+  if (options.allowHardOverride === true) {
+    for (const violation of splitViolations.hard) {
+      await databaseApi.createRecord("schedule_warnings", {
+        schedule_run_id: input.slot.schedule_run_id,
+        schedule_slot_id: input.slot.id,
+        schedule_assignment_id: null,
+        severity: "critical",
+        warning_type: "manual_hard_override_violation",
+        message: `Manual hard override saved: ${violation}`
+      } satisfies Omit<ScheduleWarning, "id" | "created_at" | "updated_at">);
+    }
+  }
+}
+
+export function splitManualAssignmentViolations(violations: string[]): {
+  hard: string[];
+  soft: string[];
+} {
+  return violations.reduce(
+    (result, violation) => {
+      if (isHardManualAssignmentViolation(violation)) {
+        result.hard.push(violation);
+      } else {
+        result.soft.push(violation);
+      }
+
+      return result;
+    },
+    { hard: [] as string[], soft: [] as string[] }
+  );
+}
+
+function isHardManualAssignmentViolation(violation: string): boolean {
+  return /inactive|does not have the required role|Employee does not meet the required experience level for this role|time off|cannot work|not available|already has a shift|overlapping shift|cannot work weekends|exceed max weekly hours|exceed max weekly days|could not be found/i.test(
+    violation
+  );
 }
 
 export function validateManualAssignmentChange({
