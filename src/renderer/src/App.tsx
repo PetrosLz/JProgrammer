@@ -1441,7 +1441,11 @@ function ProfilePage({
             label={language === "en" ? "Latest program" : "Τελευταίο πρόγραμμα"}
             value={
               latestRun
-                ? formatDateRangeEu(latestRun.start_date, latestRun.end_date)
+                ? formatCompactDateRange(
+                    latestRun.start_date,
+                    latestRun.end_date,
+                    language
+                  )
                 : language === "en"
                   ? "None yet"
                   : "Δεν υπάρχει ακόμα"
@@ -1768,6 +1772,8 @@ function GenerateSchedulePage({
   const [errors, setErrors] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [programPendingDelete, setProgramPendingDelete] =
+    useState<ScheduleRun | null>(null);
   const language = appLanguage(businessSettings);
   const weekStartsOn: DayOfWeek = businessSettings?.week_starts_on ?? 1;
   const selectedWeekRange = isDateInputValue(weekStartDate)
@@ -1870,14 +1876,6 @@ function GenerateSchedulePage({
   }
 
   async function deleteProgram(run: ScheduleRun) {
-    const shouldDelete = window.confirm(
-      "Είστε σίγουρος ότι θέλετε να διαγράψετε αυτό το πρόγραμμα; Η διαγραφή δεν μπορεί να αναιρεθεί."
-    );
-
-    if (!shouldDelete) {
-      return;
-    }
-
     setErrors([]);
     setDeletingRunId(run.id);
 
@@ -1888,7 +1886,10 @@ function GenerateSchedulePage({
         scheduleAssignments,
         scheduleWarnings
       });
-      await onProgramDeleted("Program deleted.");
+      setProgramPendingDelete(null);
+      await onProgramDeleted(
+        language === "en" ? "Program deleted." : "Το πρόγραμμα διαγράφηκε."
+      );
     } catch (error) {
       setErrors([getErrorMessage(error)]);
     } finally {
@@ -1941,9 +1942,10 @@ function GenerateSchedulePage({
               </p>
               <p className="mt-1 text-sm font-semibold leading-5 text-slate-950">
                 {selectedWeekRange
-                  ? formatWeekRangeWithDays(
+                  ? formatCompactDateRange(
                       selectedWeekRange.weekStartDate,
-                      selectedWeekRange.weekEndDate
+                      selectedWeekRange.weekEndDate,
+                      language
                     )
                   : language === "en"
                     ? "Choose a valid date"
@@ -2073,7 +2075,7 @@ function GenerateSchedulePage({
                         {scheduleRunTypeLabel(run)}
                       </span>
                       <h4 className="mt-3 text-base font-semibold tracking-normal text-slate-950">
-                        {formatDateRangeEu(run.start_date, run.end_date)}
+                        {formatCompactDateRange(run.start_date, run.end_date, language)}
                       </h4>
                       <p className="mt-1 text-sm text-slate-500">
                         {programStatusLabel(run.status)}
@@ -2089,7 +2091,7 @@ function GenerateSchedulePage({
                       </button>
                       <button
                         type="button"
-                        onClick={() => void deleteProgram(run)}
+                        onClick={() => setProgramPendingDelete(run)}
                         disabled={deletingRunId === run.id}
                         className="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
                       >
@@ -2108,9 +2110,11 @@ function GenerateSchedulePage({
                     {metrics.map((metric) => (
                       <div
                         key={metric.label}
-                        className={`rounded-lg px-3 py-2 ring-1 ${metric.className}`}
+                        className={`flex min-h-[74px] flex-col justify-between rounded-lg px-3 py-2 ring-1 ${metric.className}`}
                       >
-                        <p className="text-xs font-medium">{metric.label}</p>
+                        <p className="text-[10px] font-semibold uppercase leading-4 tracking-wide [overflow-wrap:anywhere]">
+                          {metric.label}
+                        </p>
                         <p className="mt-1 text-lg font-semibold">{metric.value}</p>
                       </div>
                     ))}
@@ -2128,6 +2132,19 @@ function GenerateSchedulePage({
           </div>
         )}
       </div>
+      {programPendingDelete ? (
+        <DeleteProgramConfirmModal
+          language={language}
+          dateRange={formatCompactDateRange(
+            programPendingDelete.start_date,
+            programPendingDelete.end_date,
+            language
+          )}
+          isDeleting={deletingRunId === programPendingDelete.id}
+          onCancel={() => setProgramPendingDelete(null)}
+          onConfirm={() => void deleteProgram(programPendingDelete)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2162,6 +2179,84 @@ async function deleteGeneratedProgram({
   }
 
   await databaseApi.deleteRecord("schedule_runs", runId);
+}
+
+function DeleteProgramConfirmModal({
+  language,
+  dateRange,
+  isDeleting,
+  onCancel,
+  onConfirm
+}: {
+  language: UiLanguage;
+  dateRange: string;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !isDeleting) {
+        onCancel();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isDeleting, onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isDeleting) {
+          onCancel();
+        }
+      }}
+    >
+      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl ring-1 ring-red-100">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-lg font-bold text-red-700">
+            !
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold tracking-normal text-slate-950">
+              {language === "en" ? "Delete program" : "Διαγραφή προγράμματος"}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {language === "en"
+                ? `Are you sure you want to delete the schedule for ${dateRange}? This action cannot be undone.`
+                : `Θέλετε σίγουρα να διαγράψετε το πρόγραμμα ${dateRange}; Η ενέργεια δεν μπορεί να αναιρεθεί.`}
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isDeleting}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {language === "en" ? "Cancel" : "Ακύρωση"}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isDeleting}
+            className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+          >
+            {isDeleting
+              ? language === "en"
+                ? "Deleting..."
+                : "Διαγραφή..."
+              : language === "en"
+                ? "Delete"
+                : "Διαγραφή"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type AssignmentEditorState = {
@@ -2220,6 +2315,7 @@ function ScheduleViewPage({
     "team" | "manager" | null
   >(null);
   const [isDeletingProgram, setIsDeletingProgram] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const language = appLanguage(businessSettings);
   const selectedRun =
     scheduleRuns.find((run) => run.id === selectedRunId) ??
@@ -2267,6 +2363,14 @@ function ScheduleViewPage({
     staffingRequirements,
     shiftTemplates
   );
+  const managerCoverageIssues = buildManagerCoverageIssues({
+    runSlots,
+    runAssignments,
+    roles,
+    shiftTemplates,
+    staffingRequirements,
+    language
+  });
   const employeeRows = buildEmployeeScheduleRows({
     employees,
     runSlots,
@@ -2274,7 +2378,9 @@ function ScheduleViewPage({
     roles,
     shiftTemplates,
     staffingRequirements,
-    warningsBySlotId
+    warningsBySlotId,
+    coverageIssues: managerCoverageIssues,
+    language
   });
   const unfilledSlotsByDate = groupUnfilledSlotsByDate({
     runSlots,
@@ -2329,10 +2435,17 @@ function ScheduleViewPage({
       scheduleAssignments
     });
 
-    if (validation.violations.length > 0 && !editor.confirmed) {
+    const splitViolations = splitManualAssignmentViolations(
+      validation.violations
+    );
+
+    if (splitViolations.hard.length > 0) {
       setEditor({
         ...editor,
-        error: "Confirm the warnings before saving this manual override."
+        error:
+          language === "en"
+            ? "This change violates hard rules and cannot be saved automatically."
+            : "Αυτή η αλλαγή παραβιάζει σκληρούς κανόνες και δεν μπορεί να αποθηκευτεί αυτόματα."
       });
       return;
     }
@@ -2442,7 +2555,9 @@ function ScheduleViewPage({
               staffingRequirements,
               warnings: runWarnings,
               unfilledSlots,
-              employeeWorkRules
+              employeeWorkRules,
+              coverageIssues: managerCoverageIssues,
+              language
             });
       const filePrefix =
         exportType === "team" ? "Programma_Omadas" : "Manager_Report";
@@ -2466,14 +2581,6 @@ function ScheduleViewPage({
   }
 
   async function deleteCurrentProgram() {
-    const shouldDelete = window.confirm(
-      "Είστε σίγουρος ότι θέλετε να διαγράψετε αυτό το πρόγραμμα; Η διαγραφή δεν μπορεί να αναιρεθεί."
-    );
-
-    if (!shouldDelete) {
-      return;
-    }
-
     setExportError("");
     setExportNotice("");
     setIsDeletingProgram(true);
@@ -2485,7 +2592,10 @@ function ScheduleViewPage({
         scheduleAssignments,
         scheduleWarnings
       });
-      await onDeleted("Program deleted.");
+      setIsDeleteConfirmOpen(false);
+      await onDeleted(
+        language === "en" ? "Program deleted." : "Το πρόγραμμα διαγράφηκε."
+      );
     } catch (error) {
       setExportError(getErrorMessage(error));
     } finally {
@@ -2504,7 +2614,7 @@ function ScheduleViewPage({
               : "Ελέγξτε αναθέσεις, κενές βάρδιες και προειδοποιήσεις πριν την εξαγωγή."
           }
         />
-        <div className="flex items-end gap-3">
+        <div className="flex flex-wrap items-start justify-end gap-3">
           <Field label={language === "en" ? "View program" : "Προβολή προγράμματος"}>
             <select
               value={selectedRun.id}
@@ -2515,7 +2625,7 @@ function ScheduleViewPage({
                 .sort((a, b) => b.created_at.localeCompare(a.created_at))
                 .map((run) => (
                   <option key={run.id} value={run.id}>
-                    {formatDateRangeEu(run.start_date, run.end_date)}
+                    {formatCompactDateRange(run.start_date, run.end_date, language)}
                   </option>
                 ))}
             </select>
@@ -2552,7 +2662,7 @@ function ScheduleViewPage({
           </div>
           <button
             type="button"
-            onClick={() => void deleteCurrentProgram()}
+            onClick={() => setIsDeleteConfirmOpen(true)}
             disabled={isDeletingProgram}
             className="rounded-md border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
@@ -2574,11 +2684,32 @@ function ScheduleViewPage({
         </div>
       ) : null}
 
+      {unfilledSlotCount > 0 ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">
+            {language === "en"
+              ? "The schedule was generated, but it is not fully covered."
+              : "Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως."}
+          </p>
+          <div className="mt-1 space-y-1">
+            {buildShortageSummaryLines({
+              issues: managerCoverageIssues,
+              unfilledSlotCount,
+              language
+            })
+              .slice(1, 4)
+              .map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-5 grid grid-cols-6 gap-4">
         <SummaryTile label={language === "en" ? "Business" : "Επιχείρηση"} value={businessName} />
         <SummaryTile
           label={language === "en" ? "Period" : "Περίοδος"}
-          value={formatDateRangeEu(selectedRun.start_date, selectedRun.end_date)}
+          value={formatCompactDateRange(selectedRun.start_date, selectedRun.end_date, language)}
         />
         <SummaryTile label={language === "en" ? "Slots" : "Θέσεις"} value={runSlots.length} />
         <SummaryTile label={language === "en" ? "Assigned" : "Ανατέθηκαν"} value={runAssignments.length} />
@@ -2798,7 +2929,15 @@ function ScheduleViewPage({
                                 const role = roles.find((item) => item.id === slot.role_id) ?? null;
                                 const warningMessages = (
                                   warningsBySlotId.get(slot.id) ?? []
-                                ).map((warning) => warning.message);
+                                ).map((warning) =>
+                                  managerFriendlyWarningMessage({
+                                    warning,
+                                    slot,
+                                    coverageIssues: managerCoverageIssues,
+                                    staffingRequirements,
+                                    language
+                                  })
+                                );
 
                                 return (
                                   <button
@@ -2851,6 +2990,17 @@ function ScheduleViewPage({
         <AssignmentEditorModal
           editor={editor}
           employees={employees}
+          employeeRoles={employeeRoles}
+          employeeWorkRules={employeeWorkRules}
+          employeeDayConstraints={employeeDayConstraints}
+          employeeShiftAvailability={employeeShiftAvailability}
+          timeOff={timeOff}
+          roles={roles}
+          shiftTemplates={shiftTemplates}
+          staffingRequirements={staffingRequirements}
+          scheduleSlots={scheduleSlots}
+          scheduleAssignments={scheduleAssignments}
+          language={language}
           validation={modalValidation}
           isSaving={isSaving}
           onChange={(next) => setEditor(next)}
@@ -2859,13 +3009,48 @@ function ScheduleViewPage({
           onSave={() => void saveEditor()}
         />
       ) : null}
+      {isDeleteConfirmOpen ? (
+        <DeleteProgramConfirmModal
+          language={language}
+          dateRange={formatCompactDateRange(
+            selectedRun.start_date,
+            selectedRun.end_date,
+            language
+          )}
+          isDeleting={isDeletingProgram}
+          onCancel={() => setIsDeleteConfirmOpen(false)}
+          onConfirm={() => void deleteCurrentProgram()}
+        />
+      ) : null}
     </div>
   );
 }
 
+type ManualCandidateRow = {
+  employee: Employee;
+  validation: ManualAssignmentValidation;
+  hardViolations: string[];
+  softWarnings: string[];
+  status: "recommended" | "warning" | "blocked";
+  roleSummary: string;
+  hoursSummary: string;
+  reasonSummary: string;
+};
+
 function AssignmentEditorModal({
   editor,
   employees,
+  employeeRoles,
+  employeeWorkRules,
+  employeeDayConstraints,
+  employeeShiftAvailability,
+  timeOff,
+  roles,
+  shiftTemplates,
+  staffingRequirements,
+  scheduleSlots,
+  scheduleAssignments,
+  language,
   validation,
   isSaving,
   onChange,
@@ -2875,6 +3060,17 @@ function AssignmentEditorModal({
 }: {
   editor: AssignmentEditorState;
   employees: Employee[];
+  employeeRoles: EmployeeRole[];
+  employeeWorkRules: EmployeeWorkRules[];
+  employeeDayConstraints: EmployeeDayConstraint[];
+  employeeShiftAvailability: EmployeeShiftAvailability[];
+  timeOff: TimeOff[];
+  roles: Role[];
+  shiftTemplates: ShiftTemplate[];
+  staffingRequirements: StaffingRequirement[];
+  scheduleSlots: ScheduleSlot[];
+  scheduleAssignments: ScheduleAssignment[];
+  language: UiLanguage;
   validation: ManualAssignmentValidation | null;
   isSaving: boolean;
   onChange: (editor: AssignmentEditorState) => void;
@@ -2882,110 +3078,607 @@ function AssignmentEditorModal({
   onRemove: () => void;
   onSave: () => void;
 }) {
-  const hasViolations = Boolean(validation && validation.violations.length > 0);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const role = roles.find((item) => item.id === editor.slot.role_id) ?? null;
+  const roleName = role?.name ?? (language === "en" ? "Role" : "Ρόλος");
+  const shiftName = shiftNameForSlot(editor.slot, staffingRequirements, shiftTemplates);
+  const currentEmployee = editor.assignment
+    ? employees.find((employee) => employee.id === editor.assignment?.employee_id) ??
+      null
+    : null;
+  const selectedSplit = splitManualAssignmentViolations(
+    validation?.violations ?? []
+  );
+  const selectedHardViolations = selectedSplit.hard.map((violation) =>
+    translateManualAssignmentViolation(violation, roleName, language)
+  );
+  const selectedSoftWarnings = selectedSplit.soft.map((violation) =>
+    translateManualAssignmentViolation(violation, roleName, language)
+  );
+  const selectedEmployeeName = validation?.employee
+    ? employeeName(validation.employee.id, [validation.employee])
+    : "";
+  const title = editor.assignment
+    ? language === "en"
+      ? "Edit assignment"
+      : "Επεξεργασία ανάθεσης"
+    : language === "en"
+      ? "Fill unfilled position"
+      : "Κάλυψη κενής θέσης";
+  const candidates = useMemo(
+    () =>
+      buildManualCandidateRows({
+        editor,
+        employees,
+        employeeRoles,
+        employeeWorkRules,
+        employeeDayConstraints,
+        employeeShiftAvailability,
+        timeOff,
+        roles,
+        staffingRequirements,
+        scheduleSlots,
+        scheduleAssignments,
+        language
+      }),
+    [
+      editor,
+      employees,
+      employeeRoles,
+      employeeWorkRules,
+      employeeDayConstraints,
+      employeeShiftAvailability,
+      timeOff,
+      roles,
+      staffingRequirements,
+      scheduleSlots,
+      scheduleAssignments,
+      language
+    ]
+  );
+  const saveDisabled =
+    isSaving || !editor.employeeId || selectedHardViolations.length > 0;
+  const saveLabel = isSaving
+    ? language === "en"
+      ? "Saving..."
+      : "Αποθήκευση..."
+    : !editor.assignment
+      ? language === "en"
+        ? "Assign employee"
+        : "Ανάθεση εργαζομένου"
+      : selectedSoftWarnings.length > 0
+        ? language === "en"
+          ? "Save with warning"
+          : "Αποθήκευση με προειδοποίηση"
+        : language === "en"
+          ? "Save change"
+          : "Αποθήκευση αλλαγής";
+
+  useEffect(() => {
+    setConfirmRemove(false);
+  }, [editor.assignment?.id, editor.slot.id]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
-      <div className="w-full max-w-xl rounded-lg bg-white p-6 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col rounded-xl bg-white shadow-xl ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
           <div>
             <h3 className="text-lg font-semibold tracking-normal text-slate-950">
-              Edit assignment
+              {title}
             </h3>
-            <p className="mt-1 text-sm text-slate-500">
-              {formatDateEu(editor.slot.date)} · {editor.slot.start_time} -{" "}
-              {editor.slot.end_time}
-            </p>
+            <div className="mt-2 space-y-1 text-sm text-slate-600">
+              <p className="font-semibold text-slate-800">
+                {localizedDayName(getDayOfWeek(editor.slot.date), language)}{" "}
+                {formatDateEu(editor.slot.date)}
+              </p>
+              <p>
+                {shiftName} · {editor.slot.start_time}–{editor.slot.end_time}
+              </p>
+              <p>
+                {language === "en" ? "Role" : "Ρόλος"}:{" "}
+                <span className="font-semibold text-slate-900">{roleName}</span>
+              </p>
+              <p>
+                {language === "en" ? "Current assignment" : "Τρέχουσα ανάθεση"}:{" "}
+                <span className="font-semibold text-slate-900">
+                  {currentEmployee
+                    ? employeeName(currentEmployee.id, [currentEmployee])
+                    : language === "en"
+                      ? "Unfilled"
+                      : "Κενή θέση"}
+                </span>
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             className={secondaryButtonClassName}
           >
-            Close
+            {language === "en" ? "Close" : "Κλείσιμο"}
           </button>
         </div>
 
-        {editor.error ? <ErrorList errors={[editor.error]} /> : null}
+        <div className="overflow-y-auto px-6 py-5">
+          {editor.error ? <ErrorList errors={[editor.error]} /> : null}
 
-        <div className="mt-5">
-          <Field label="Employee">
-            <select
-              value={editor.employeeId}
-              onChange={(event) =>
-                onChange({
-                  ...editor,
-                  employeeId: event.target.value,
-                  confirmed: false,
-                  error: null
-                })
-              }
-              className={inputClassName}
-            >
-              <option value="">Unfilled</option>
-              {[...employees]
-                .sort(
-                  (a, b) =>
-                    a.last_name.localeCompare(b.last_name) ||
-                    a.first_name.localeCompare(b.first_name)
-                )
-                .map((employee) => (
-                  <option key={employee.id} value={employee.id}>
-                    {employee.first_name} {employee.last_name}
-                  </option>
-                ))}
-            </select>
-          </Field>
+          <div>
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-950">
+                  {language === "en"
+                    ? "Choose employee"
+                    : "Επιλογή εργαζομένου"}
+                </h4>
+                <p className="mt-1 text-sm text-slate-500">
+                  {language === "en"
+                    ? "Recommended candidates appear first. Blocked candidates explain the rule that prevents assignment."
+                    : "Οι προτεινόμενοι εργαζόμενοι εμφανίζονται πρώτοι. Οι μη διαθέσιμοι δείχνουν τον λόγο."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {candidates.map((candidate) => {
+                const isSelected = editor.employeeId === candidate.employee.id;
+                const statusClass =
+                  candidate.status === "recommended"
+                    ? "border-emerald-200 bg-emerald-50"
+                    : candidate.status === "warning"
+                      ? "border-amber-200 bg-amber-50"
+                      : "border-slate-200 bg-white";
+                const statusLabel =
+                  candidate.status === "recommended"
+                    ? language === "en"
+                      ? "Recommended"
+                      : "Προτεινόμενος"
+                    : candidate.status === "warning"
+                      ? language === "en"
+                        ? "Available with warning"
+                        : "Διαθέσιμος με προειδοποίηση"
+                      : language === "en"
+                        ? "Cannot assign"
+                        : "Δεν μπορεί";
+
+                return (
+                  <button
+                    key={candidate.employee.id}
+                    type="button"
+                    onClick={() =>
+                      onChange({
+                        ...editor,
+                        employeeId: candidate.employee.id,
+                        confirmed: false,
+                        error: null
+                      })
+                    }
+                    className={[
+                      "rounded-lg border px-4 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50",
+                      statusClass,
+                      isSelected ? "ring-2 ring-emerald-600" : ""
+                    ].join(" ")}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-950">
+                          {employeeName(candidate.employee.id, [candidate.employee])}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          {candidate.roleSummary} · {candidate.hoursSummary}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          {candidate.reasonSummary}
+                        </p>
+                      </div>
+                      <span
+                        className={[
+                          "rounded-full px-2.5 py-1 text-xs font-semibold",
+                          candidate.status === "recommended"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : candidate.status === "warning"
+                              ? "bg-amber-100 text-amber-900"
+                              : "bg-slate-100 text-slate-600"
+                        ].join(" ")}
+                      >
+                        {statusLabel}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-950">
+              {language === "en" ? "Validation" : "Έλεγχος ανάθεσης"}
+            </p>
+            {!editor.employeeId ? (
+              <p className="mt-2 text-sm text-slate-600">
+                {language === "en"
+                  ? "Choose an employee to check whether the assignment is allowed."
+                  : "Επιλέξτε εργαζόμενο για να γίνει έλεγχος κανόνων."}
+              </p>
+            ) : selectedHardViolations.length > 0 ? (
+              <div className="mt-2">
+                <p className="text-sm font-semibold text-red-800">
+                  {language === "en"
+                    ? "Cannot be assigned:"
+                    : "Δεν μπορεί να ανατεθεί:"}
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-800">
+                  {selectedHardViolations.map((violation) => (
+                    <li key={violation}>{violation}</li>
+                  ))}
+                </ul>
+                <p className="mt-3 text-sm text-red-700">
+                  {language === "en"
+                    ? "This change violates hard rules and cannot be saved automatically."
+                    : "Αυτή η αλλαγή παραβιάζει σκληρούς κανόνες και δεν μπορεί να αποθηκευτεί αυτόματα."}
+                </p>
+              </div>
+            ) : selectedSoftWarnings.length > 0 ? (
+              <div className="mt-2">
+                <p className="text-sm font-semibold text-amber-900">
+                  {language === "en"
+                    ? "This assignment can be saved with warning:"
+                    : "Η ανάθεση μπορεί να αποθηκευτεί με προειδοποίηση:"}
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
+                  {selectedSoftWarnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm font-semibold text-emerald-800">
+                {language === "en"
+                  ? `${selectedEmployeeName} can be assigned to this slot.`
+                  : `Η ανάθεση είναι έγκυρη για ${selectedEmployeeName}.`}
+              </p>
+            )}
+          </div>
+
+          {confirmRemove ? (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-sm font-semibold text-red-900">
+                {language === "en"
+                  ? "Remove employee from this slot?"
+                  : "Αφαίρεση εργαζομένου από αυτή τη θέση;"}
+              </p>
+              <p className="mt-1 text-sm leading-6 text-red-800">
+                {language === "en"
+                  ? "This slot will become unfilled and will appear as a schedule warning."
+                  : "Η θέση θα μείνει κενή και θα εμφανιστεί ως προειδοποίηση στο πρόγραμμα."}
+              </p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemove(false)}
+                  disabled={isSaving}
+                  className={secondaryButtonClassName}
+                >
+                  {language === "en" ? "Cancel" : "Ακύρωση"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onRemove}
+                  disabled={isSaving}
+                  className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+                >
+                  {language === "en"
+                    ? "Remove employee"
+                    : "Αφαίρεση εργαζομένου"}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        {validation?.explanation ? (
-          <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            {validation.explanation}
-          </div>
-        ) : null}
-
-        {hasViolations ? (
-          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-sm font-semibold text-amber-950">Warnings</p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
-              {validation?.violations.map((violation) => (
-                <li key={violation}>{violation}</li>
-              ))}
-            </ul>
-            <label className="mt-3 flex items-center gap-2 text-sm text-amber-950">
-              <input
-                type="checkbox"
-                checked={editor.confirmed}
-                onChange={(event) =>
-                  onChange({ ...editor, confirmed: event.target.checked })
-                }
-              />
-              Save as manual override despite these warnings
-            </label>
-          </div>
-        ) : null}
-
-        <div className="mt-6 flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
           <button
             type="button"
-            onClick={onRemove}
+            onClick={() => setConfirmRemove(true)}
             disabled={!editor.assignment || isSaving}
-            className={secondaryButtonClassName}
+            className="rounded-md border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
-            Remove assignment
+            {language === "en"
+              ? "Remove employee from this slot"
+              : "Αφαίρεση εργαζομένου"}
           </button>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={isSaving || (hasViolations && !editor.confirmed)}
-            className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-          >
-            {isSaving ? "Saving..." : "Save manual override"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSaving}
+              className={secondaryButtonClassName}
+            >
+              {language === "en" ? "Cancel" : "Ακύρωση"}
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saveDisabled}
+              className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
+            >
+              {saveLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function buildManualCandidateRows({
+  editor,
+  employees,
+  employeeRoles,
+  employeeWorkRules,
+  employeeDayConstraints,
+  employeeShiftAvailability,
+  timeOff,
+  roles,
+  staffingRequirements,
+  scheduleSlots,
+  scheduleAssignments,
+  language
+}: {
+  editor: AssignmentEditorState;
+  employees: Employee[];
+  employeeRoles: EmployeeRole[];
+  employeeWorkRules: EmployeeWorkRules[];
+  employeeDayConstraints: EmployeeDayConstraint[];
+  employeeShiftAvailability: EmployeeShiftAvailability[];
+  timeOff: TimeOff[];
+  roles: Role[];
+  staffingRequirements: StaffingRequirement[];
+  scheduleSlots: ScheduleSlot[];
+  scheduleAssignments: ScheduleAssignment[];
+  language: UiLanguage;
+}): ManualCandidateRow[] {
+  const roleName =
+    roles.find((role) => role.id === editor.slot.role_id)?.name ??
+    (language === "en" ? "Role" : "Ρόλος");
+
+  return [...employees]
+    .map((employee) => {
+      const validation = validateManualAssignmentChange({
+        slot: editor.slot,
+        employeeId: employee.id,
+        currentAssignment: editor.assignment,
+        employees,
+        employeeRoles,
+        employeeWorkRules,
+        employeeDayConstraints,
+        employeeShiftAvailability,
+        staffingRequirements,
+        roles,
+        timeOff,
+        scheduleSlots,
+        scheduleAssignments
+      });
+      const split = splitManualAssignmentViolations(validation.violations);
+      const status: ManualCandidateRow["status"] =
+        split.hard.length > 0
+          ? "blocked"
+          : split.soft.length > 0
+            ? "warning"
+            : "recommended";
+      const reasonSource = split.hard[0] ?? split.soft[0] ?? null;
+      const reasonSummary = reasonSource
+        ? translateManualAssignmentViolation(reasonSource, roleName, language)
+        : language === "en"
+          ? "Available for this shift."
+          : "Διαθέσιμος για αυτή τη βάρδια.";
+
+      return {
+        employee,
+        validation,
+        hardViolations: split.hard,
+        softWarnings: split.soft,
+        status,
+        roleSummary: getEmployeeRoleSummary(employee.id, employeeRoles, roles, language),
+        hoursSummary: getManualCandidateHoursSummary({
+          employeeId: employee.id,
+          slot: editor.slot,
+          currentAssignment: editor.assignment,
+          scheduleSlots,
+          scheduleAssignments,
+          employeeWorkRules,
+          language
+        }),
+        reasonSummary
+      };
+    })
+    .sort((left, right) => {
+      const statusRank: Record<ManualCandidateRow["status"], number> = {
+        recommended: 0,
+        warning: 1,
+        blocked: 2
+      };
+
+      return (
+        statusRank[left.status] - statusRank[right.status] ||
+        left.employee.last_name.localeCompare(right.employee.last_name) ||
+        left.employee.first_name.localeCompare(right.employee.first_name) ||
+        left.employee.id.localeCompare(right.employee.id)
+      );
+    });
+}
+
+function splitManualAssignmentViolations(violations: string[]): {
+  hard: string[];
+  soft: string[];
+} {
+  return violations.reduce(
+    (result, violation) => {
+      if (isHardManualAssignmentViolation(violation)) {
+        result.hard.push(violation);
+      } else {
+        result.soft.push(violation);
+      }
+
+      return result;
+    },
+    { hard: [] as string[], soft: [] as string[] }
+  );
+}
+
+function isHardManualAssignmentViolation(violation: string): boolean {
+  return /inactive|does not have the required role|Employee does not meet the required experience level for this role|time off|cannot work|not available|already has a shift|overlapping shift|cannot work weekends|exceed max weekly hours|exceed max weekly days|could not be found/i.test(
+    violation
+  );
+}
+
+function translateManualAssignmentViolation(
+  violation: string,
+  roleName: string,
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    return violation;
+  }
+
+  if (/inactive/i.test(violation)) {
+    return "Ο εργαζόμενος είναι ανενεργός.";
+  }
+
+  if (/does not have the required role/i.test(violation)) {
+    return `Δεν έχει τον ρόλο ${roleName}.`;
+  }
+
+  if (/does not meet the required experience/i.test(violation)) {
+    return "Δεν καλύπτει την απαιτούμενη προϋπηρεσία για αυτόν τον ρόλο.";
+  }
+
+  if (/time off/i.test(violation)) {
+    return "Έχει άδεια ή ρεπό αυτή την ημερομηνία.";
+  }
+
+  if (/cannot work on this day/i.test(violation)) {
+    return "Δεν μπορεί να δουλέψει αυτή την ημέρα.";
+  }
+
+  if (/not available for this shift/i.test(violation)) {
+    return "Δεν είναι διαθέσιμος για αυτή τη βάρδια.";
+  }
+
+  if (/already has a shift on this date/i.test(violation)) {
+    return "Έχει ήδη βάρδια την ίδια ημέρα.";
+  }
+
+  if (/overlapping shift/i.test(violation)) {
+    return "Έχει ήδη βάρδια που επικαλύπτεται χρονικά.";
+  }
+
+  if (/cannot work weekends/i.test(violation)) {
+    return "Δεν μπορεί να δουλεύει Σαββατοκύριακο.";
+  }
+
+  const maxHoursMatch = violation.match(/max weekly hours \(([^)]+)\)/i);
+  if (maxHoursMatch) {
+    return `Θα ξεπεράσει το εβδομαδιαίο όριο ωρών (${maxHoursMatch[1]}).`;
+  }
+
+  const maxDaysMatch = violation.match(/max weekly days \(([^)]+)\)/i);
+  if (maxDaysMatch) {
+    return `Θα ξεπεράσει το εβδομαδιαίο όριο ημερών (${maxDaysMatch[1]}).`;
+  }
+
+  if (/needs .*prior experience/i.test(violation)) {
+    return `Η βάρδια χρειάζεται τουλάχιστον έναν εργαζόμενο με προϋπηρεσία για τον ρόλο ${roleName}.`;
+  }
+
+  if (/has no .*prior experience/i.test(violation)) {
+    return `Η βάρδια δεν έχει εργαζόμενο με προϋπηρεσία για τον ρόλο ${roleName}.`;
+  }
+
+  if (/Two no-experience/i.test(violation)) {
+    return `Δύο εργαζόμενοι χωρίς προϋπηρεσία μπαίνουν μαζί στον ρόλο ${roleName}.`;
+  }
+
+  if (/No lead employee/i.test(violation)) {
+    return `Δεν έχει οριστεί υπεύθυνος εργαζόμενος για τον ρόλο ${roleName}.`;
+  }
+
+  if (/could not be found/i.test(violation)) {
+    return "Ο επιλεγμένος εργαζόμενος δεν βρέθηκε.";
+  }
+
+  return "Υπάρχει προειδοποίηση για αυτή την ανάθεση.";
+}
+
+function getEmployeeRoleSummary(
+  employeeId: string,
+  employeeRoles: EmployeeRole[],
+  roles: Role[],
+  language: UiLanguage
+): string {
+  const names = employeeRoles
+    .filter((employeeRole) => employeeRole.employee_id === employeeId)
+    .map(
+      (employeeRole) =>
+        roles.find((role) => role.id === employeeRole.role_id)?.name ?? null
+    )
+    .filter((name): name is string => Boolean(name));
+
+  if (names.length === 0) {
+    return language === "en" ? "No roles" : "Χωρίς ρόλους";
+  }
+
+  return names.join(", ");
+}
+
+function getManualCandidateHoursSummary({
+  employeeId,
+  slot,
+  currentAssignment,
+  scheduleSlots,
+  scheduleAssignments,
+  employeeWorkRules,
+  language
+}: {
+  employeeId: string;
+  slot: ScheduleSlot;
+  currentAssignment: ScheduleAssignment | null;
+  scheduleSlots: ScheduleSlot[];
+  scheduleAssignments: ScheduleAssignment[];
+  employeeWorkRules: EmployeeWorkRules[];
+  language: UiLanguage;
+}): string {
+  const slotById = new Map(scheduleSlots.map((item) => [item.id, item]));
+  const currentHours = scheduleAssignments
+    .filter(
+      (assignment) =>
+        assignment.schedule_run_id === slot.schedule_run_id &&
+        assignment.employee_id === employeeId &&
+        assignment.status !== "cancelled" &&
+        assignment.status !== "removed" &&
+        assignment.id !== currentAssignment?.id &&
+        assignment.schedule_slot_id !== slot.id
+    )
+    .reduce((total, assignment) => {
+      const assignedSlot = slotById.get(assignment.schedule_slot_id);
+      return assignedSlot ? total + getSlotDurationHours(assignedSlot) : total;
+    }, 0);
+  const projectedHours = currentHours + getSlotDurationHours(slot);
+  const workRules = employeeWorkRules.find(
+    (rules) => rules.employee_id === employeeId
+  );
+  const contractHours =
+    workRules?.contract_hours_per_week ??
+    workRules?.target_hours_per_week ??
+    workRules?.preferred_hours_per_week ??
+    workRules?.max_hours_per_week ??
+    null;
+  const hoursLabel = language === "en" ? "h" : " ώρες";
+
+  if (contractHours === null || contractHours === undefined) {
+    return `${formatHours(projectedHours)}${hoursLabel}`;
+  }
+
+  return `${formatHours(projectedHours)}/${formatHours(contractHours)}${hoursLabel}`;
 }
 
 function EmployeeConstraintsPage({
@@ -6670,6 +7363,334 @@ type EmployeeScheduleRow = {
   assignmentCount: number;
 };
 
+type ManagerCoverageIssue = {
+  groupKey: string;
+  severity: "critical" | "partial";
+  date: string;
+  dateLabel: string;
+  shiftName: string;
+  startTime: string;
+  endTime: string;
+  roleName: string;
+  requiredCount: number;
+  assignedCount: number;
+  missingCount: number;
+  missingHours: number;
+  summary: string;
+  cause: string;
+  recommendations: string[];
+};
+
+function scheduleCoverageGroupKey(
+  slot: ScheduleSlot,
+  requirements: StaffingRequirement[]
+): string {
+  const requirement = requirements.find((item) => item.id === slot.source_id);
+  const shiftKey = requirement?.shift_template_id
+    ? `template:${requirement.shift_template_id}`
+    : `time:${slot.start_time}-${slot.end_time}`;
+
+  return `${slot.date}|${shiftKey}|${slot.role_id}`;
+}
+
+function buildManagerCoverageIssues({
+  runSlots,
+  runAssignments,
+  roles,
+  shiftTemplates,
+  staffingRequirements,
+  language
+}: {
+  runSlots: ScheduleSlot[];
+  runAssignments: ScheduleAssignment[];
+  roles: Role[];
+  shiftTemplates: ShiftTemplate[];
+  staffingRequirements: StaffingRequirement[];
+  language: UiLanguage;
+}): ManagerCoverageIssue[] {
+  const assignedSlotIds = new Set(
+    runAssignments
+      .filter(
+        (assignment) =>
+          assignment.status !== "cancelled" && assignment.status !== "removed"
+      )
+      .map((assignment) => assignment.schedule_slot_id)
+  );
+  const groups = new Map<string, ScheduleSlot[]>();
+
+  for (const slot of runSlots) {
+    const key = scheduleCoverageGroupKey(slot, staffingRequirements);
+    groups.set(key, [...(groups.get(key) ?? []), slot]);
+  }
+
+  return [...groups.entries()]
+    .flatMap(([groupKey, slots]) => {
+      const sortedSlots = [...slots].sort(
+        (left, right) =>
+          left.start_time.localeCompare(right.start_time) ||
+          left.end_time.localeCompare(right.end_time) ||
+          left.id.localeCompare(right.id)
+      );
+      const representativeSlot = sortedSlots[0];
+
+      if (!representativeSlot) {
+        return [];
+      }
+
+      const assignedCount = sortedSlots.filter((slot) =>
+        assignedSlotIds.has(slot.id)
+      ).length;
+      const requiredCount = sortedSlots.length;
+
+      if (assignedCount >= requiredCount) {
+        return [];
+      }
+
+      const roleName =
+        roles.find((role) => role.id === representativeSlot.role_id)?.name ??
+        (language === "en" ? "role" : "ρόλο");
+      const shiftName = shiftNameForSlot(
+        representativeSlot,
+        staffingRequirements,
+        shiftTemplates
+      );
+      const missingCount = requiredCount - assignedCount;
+      const missingHours = missingCount * getSlotDurationHours(representativeSlot);
+      const dateLabel = `${localizedDayName(
+        getDayOfWeek(representativeSlot.date),
+        language
+      )} ${formatDateEu(representativeSlot.date)}`;
+      const requiredLabel = formatManagerEmployeeCount(requiredCount, language);
+      const assignedLabel = formatManagerEmployeeCount(assignedCount, language);
+      const severity: ManagerCoverageIssue["severity"] =
+        assignedCount === 0 ? "critical" : "partial";
+
+      return [
+        {
+          groupKey,
+          severity,
+          date: representativeSlot.date,
+          dateLabel,
+          shiftName,
+          startTime: representativeSlot.start_time,
+          endTime: representativeSlot.end_time,
+          roleName,
+          requiredCount,
+          assignedCount,
+          missingCount,
+          missingHours,
+          summary:
+            language === "en"
+              ? `${requiredLabel} ${
+                  requiredCount === 1 ? "is" : "are"
+                } needed, but only ${assignedLabel} ${
+                  assignedCount === 1 ? "was" : "were"
+                } assigned.`
+              : `${requiredCount === 1 ? "Χρειάζεται" : "Χρειάζονται"} ${requiredLabel}, αλλά ${
+                  assignedCount === 1 ? "καλύφθηκε" : "καλύφθηκαν"
+                } ${assignedLabel}.`,
+          cause:
+            language === "en"
+              ? `There is no other available ${roleName} employee without breaking work rules.`
+              : `Δεν υπάρχει άλλος διαθέσιμος εργαζόμενος για ${roleName} χωρίς να παραβιαστούν οι κανόνες εργασίας.`,
+          recommendations:
+            language === "en"
+              ? [
+                  `Add another ${roleName} employee.`,
+                  `Give the ${roleName} role to an available employee.`,
+                  `Reduce the ${roleName} requirement for this shift from ${requiredCount} to ${assignedCount}.`
+                ]
+              : [
+                  `Πρόσθεσε έναν ακόμη εργαζόμενο με ρόλο ${roleName}.`,
+                  `Δώσε ρόλο ${roleName} σε κάποιον διαθέσιμο εργαζόμενο.`,
+                  `Μείωσε την ανάγκη ${roleName} για αυτή τη βάρδια από ${requiredCount} σε ${assignedCount}.`
+                ]
+        }
+      ];
+    })
+    .sort(
+      (left, right) =>
+        (left.severity === "critical" && right.severity !== "critical" ? -1 : 0) ||
+        (right.severity === "critical" && left.severity !== "critical" ? 1 : 0) ||
+        left.date.localeCompare(right.date) ||
+        left.startTime.localeCompare(right.startTime) ||
+        left.roleName.localeCompare(right.roleName)
+    );
+}
+
+function buildRoleShortageSummaries(
+  issues: ManagerCoverageIssue[],
+  language: UiLanguage
+): string[] {
+  const byRole = new Map<string, { missingCount: number; missingHours: number }>();
+
+  for (const issue of issues) {
+    const existing = byRole.get(issue.roleName) ?? {
+      missingCount: 0,
+      missingHours: 0
+    };
+    byRole.set(issue.roleName, {
+      missingCount: existing.missingCount + issue.missingCount,
+      missingHours: existing.missingHours + issue.missingHours
+    });
+  }
+
+  return [...byRole.entries()]
+    .sort(
+      (left, right) =>
+        right[1].missingCount - left[1].missingCount ||
+        right[1].missingHours - left[1].missingHours ||
+        left[0].localeCompare(right[0])
+    )
+    .map(([roleName, shortage]) =>
+      language === "en"
+        ? `${roleName}: about ${formatHours(shortage.missingHours)} more hours are needed (${shortage.missingCount} unfilled position${
+            shortage.missingCount === 1 ? "" : "s"
+          }).`
+        : `${roleName}: χρειάζονται περίπου ${formatHours(
+            shortage.missingHours
+          )} επιπλέον ώρες (${shortage.missingCount} κεν${
+            shortage.missingCount === 1 ? "ή θέση" : "ές θέσεις"
+          }).`
+    );
+}
+
+function buildShortageSummaryLines({
+  issues,
+  unfilledSlotCount,
+  language
+}: {
+  issues: ManagerCoverageIssue[];
+  unfilledSlotCount: number;
+  language: UiLanguage;
+}): string[] {
+  if (unfilledSlotCount === 0) {
+    return [
+      language === "en"
+        ? "The schedule is fully covered."
+        : "Το πρόγραμμα καλύπτεται πλήρως."
+    ];
+  }
+
+  const roleShortages = buildRoleShortageSummaries(issues, language);
+  const primaryRole =
+    issues.length > 0
+      ? buildPrimaryShortageRole(issues)
+      : language === "en"
+        ? "one role"
+        : "έναν ρόλο";
+
+  return [
+    language === "en"
+      ? `The schedule was generated, but it is not fully covered. There ${
+          unfilledSlotCount === 1 ? "is" : "are"
+        } ${unfilledSlotCount} unfilled position${
+          unfilledSlotCount === 1 ? "" : "s"
+        }.`
+      : `Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως. Υπάρχ${
+          unfilledSlotCount === 1 ? "ει" : "ουν"
+        } ${unfilledSlotCount} κεν${unfilledSlotCount === 1 ? "ή θέση" : "ές θέσεις"}.`,
+    language === "en"
+      ? `The main shortage is in ${primaryRole}.`
+      : `Το πρόβλημα εντοπίζεται κυρίως στον ρόλο ${primaryRole}.`,
+    ...roleShortages.slice(0, 3)
+  ];
+}
+
+function buildPrimaryShortageRole(issues: ManagerCoverageIssue[]): string {
+  const counts = new Map<string, number>();
+
+  for (const issue of issues) {
+    counts.set(issue.roleName, (counts.get(issue.roleName) ?? 0) + issue.missingCount);
+  }
+
+  return (
+    [...counts.entries()].sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0])
+    )[0]?.[0] ?? "Role"
+  );
+}
+
+function formatManagerEmployeeCount(count: number, language: UiLanguage): string {
+  if (language === "en") {
+    return `${count} employee${count === 1 ? "" : "s"}`;
+  }
+
+  return `${count} ${count === 1 ? "άτομο" : "άτομα"}`;
+}
+
+function uniqueRecommendations(issues: ManagerCoverageIssue[]): string[] {
+  return Array.from(new Set(issues.flatMap((issue) => issue.recommendations)));
+}
+
+function managerFriendlyWarningMessage({
+  warning,
+  slot,
+  coverageIssues,
+  staffingRequirements,
+  language
+}: {
+  warning: ScheduleWarning;
+  slot: ScheduleSlot;
+  coverageIssues: ManagerCoverageIssue[];
+  staffingRequirements: StaffingRequirement[];
+  language: UiLanguage;
+}): string {
+  const coverageIssue = coverageIssues.find(
+    (issue) => issue.groupKey === scheduleCoverageGroupKey(slot, staffingRequirements)
+  );
+
+  if (
+    coverageIssue &&
+    ["critical_coverage_gap", "role_group_understaffed", "slot_unfilled"].includes(
+      warning.warning_type
+    )
+  ) {
+    return `${coverageIssue.dateLabel} · ${coverageIssue.shiftName} · ${coverageIssue.roleName}: ${coverageIssue.summary} ${coverageIssue.cause}`;
+  }
+
+  if (warning.warning_type === "weak_team_composition") {
+    return language === "en"
+      ? "This shift needs at least one employee with prior experience for this role."
+      : "Η βάρδια χρειάζεται τουλάχιστον έναν εργαζόμενο με προϋπηρεσία για αυτόν τον ρόλο.";
+  }
+
+  return humanizeSchedulerWarningText(warning.message, language);
+}
+
+function humanizeSchedulerWarningText(message: string, language: UiLanguage): string {
+  if (/Manual override/i.test(message)) {
+    return language === "en"
+      ? "This assignment was changed manually and has manager-confirmed warnings."
+      : "Αυτή η ανάθεση άλλαξε χειροκίνητα και έχει προειδοποιήσεις που επιβεβαιώθηκαν από manager.";
+  }
+
+  if (/Employee (is inactive|does not have|has time off|cannot work|is not available|already has|would exceed)/.test(message)) {
+    return language === "en"
+      ? "This warning is related to an employee work rule or availability limit."
+      : "Η προειδοποίηση σχετίζεται με κανόνα εργασίας ή διαθεσιμότητα εργαζομένου.";
+  }
+
+  if (/This schedule run has no unfilled slots to assign/i.test(message)) {
+    return language === "en"
+      ? "There were no open positions left for automatic assignment."
+      : "Δεν υπήρχαν κενές θέσεις για αυτόματη ανάθεση.";
+  }
+
+  const hidesDebugDetails =
+    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
+      message
+    );
+
+  if (!hidesDebugDetails) {
+    return message;
+  }
+
+  return language === "en"
+    ? "This warning is related to employee availability or work-rule limits."
+    : "Η προειδοποίηση σχετίζεται με διαθεσιμότητα εργαζομένων ή όρια εργασίας.";
+}
+
 function buildEmployeeScheduleRows({
   employees,
   runSlots,
@@ -6677,7 +7698,9 @@ function buildEmployeeScheduleRows({
   roles,
   shiftTemplates,
   staffingRequirements,
-  warningsBySlotId
+  warningsBySlotId,
+  coverageIssues,
+  language
 }: {
   employees: Employee[];
   runSlots: ScheduleSlot[];
@@ -6686,6 +7709,8 @@ function buildEmployeeScheduleRows({
   shiftTemplates: ShiftTemplate[];
   staffingRequirements: StaffingRequirement[];
   warningsBySlotId: Map<string, ScheduleWarning[]>;
+  coverageIssues: ManagerCoverageIssue[];
+  language: UiLanguage;
 }): EmployeeScheduleRow[] {
   const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
   const assignedEmployeeIds = new Set(
@@ -6725,7 +7750,14 @@ function buildEmployeeScheduleRows({
           shiftName: shiftNameForSlot(slot, staffingRequirements, shiftTemplates),
           warningCount: warningsBySlotId.get(slot.id)?.length ?? 0,
           warningMessages: (warningsBySlotId.get(slot.id) ?? []).map(
-            (warning) => warning.message
+            (warning) =>
+              managerFriendlyWarningMessage({
+                warning,
+                slot,
+                coverageIssues,
+                staffingRequirements,
+                language
+              })
           )
         }
       ]);
@@ -6903,6 +7935,88 @@ function formatDateRangeEu(startDate: string, endDate: string): string {
   return `${formatDateEu(startDate)} - ${formatDateEu(endDate)}`;
 }
 
+function formatCompactDateRange(
+  startDate: string,
+  endDate: string,
+  language: UiLanguage
+): string {
+  const start = parseDateParts(startDate);
+  const end = parseDateParts(endDate);
+
+  if (!start || !end) {
+    return formatDateRangeEu(startDate, endDate);
+  }
+
+  const [startYear, startMonth, startDay] = start;
+  const [endYear, endMonth, endDay] = end;
+  const greekMonths = [
+    "Ιανουαρίου",
+    "Φεβρουαρίου",
+    "Μαρτίου",
+    "Απριλίου",
+    "Μαΐου",
+    "Ιουνίου",
+    "Ιουλίου",
+    "Αυγούστου",
+    "Σεπτεμβρίου",
+    "Οκτωβρίου",
+    "Νοεμβρίου",
+    "Δεκεμβρίου"
+  ];
+  const englishMonths = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+
+  if (language === "en") {
+    const startMonthName = englishMonths[startMonth - 1] ?? "";
+    const endMonthName = englishMonths[endMonth - 1] ?? "";
+
+    if (startYear === endYear && startMonth === endMonth) {
+      return `${startMonthName} ${startDay}–${endDay}, ${startYear}`;
+    }
+
+    if (startYear === endYear) {
+      return `${startMonthName} ${startDay}\u00a0–\u00a0${endMonthName} ${endDay}, ${startYear}`;
+    }
+
+    return `${startMonthName} ${startDay}, ${startYear}\u00a0–\u00a0${endMonthName} ${endDay}, ${endYear}`;
+  }
+
+  const startMonthName = greekMonths[startMonth - 1] ?? "";
+  const endMonthName = greekMonths[endMonth - 1] ?? "";
+
+  if (startYear === endYear && startMonth === endMonth) {
+    return `${startDay}–${endDay} ${startMonthName} ${startYear}`;
+  }
+
+  if (startYear === endYear) {
+    return `${startDay} ${startMonthName}\u00a0–\u00a0${endDay} ${endMonthName} ${startYear}`;
+  }
+
+  return `${startDay} ${startMonthName} ${startYear}\u00a0–\u00a0${endDay} ${endMonthName} ${endYear}`;
+}
+
+function parseDateParts(date: string): [number, number, number] | null {
+  const [year, month, day] = date.split("-").map(Number);
+
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return [year, month, day];
+}
+
 function formatWeekRangeWithDays(startDate: string, endDate: string): string {
   return `${dayLabel(getDayOfWeek(startDate))} ${formatDateEu(startDate)} - ${dayLabel(
     getDayOfWeek(endDate)
@@ -7068,7 +8182,9 @@ function buildManagerReportPdfHtml({
   staffingRequirements,
   warnings,
   unfilledSlots,
-  employeeWorkRules
+  employeeWorkRules,
+  coverageIssues,
+  language
 }: {
   businessName: string;
   run: ScheduleRun;
@@ -7081,31 +8197,86 @@ function buildManagerReportPdfHtml({
   warnings: ScheduleWarning[];
   unfilledSlots: ScheduleSlot[];
   employeeWorkRules: EmployeeWorkRules[];
+  coverageIssues: ManagerCoverageIssue[];
+  language: UiLanguage;
 }): string {
-  const warningRows = warnings
-    .map((warning) => {
-      const slot = warning.schedule_slot_id
-        ? runSlots.find((item) => item.id === warning.schedule_slot_id)
-        : null;
-      const context = slot
-        ? `${formatDateEu(slot.date)} ${slot.start_time}-${slot.end_time}`
-        : "Γενική προειδοποίηση";
+  const shortageSummaryRows = buildShortageSummaryLines({
+    issues: coverageIssues,
+    unfilledSlotCount: unfilledSlots.length,
+    language
+  })
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("");
+  const issueRows = coverageIssues
+    .map(
+      (issue) => `<article class="issue-card ${
+        issue.severity === "critical" ? "critical" : ""
+      }">
+        <h3>${escapeHtml(issue.dateLabel)} · ${escapeHtml(
+          issue.shiftName
+        )} · ${escapeHtml(issue.roleName)}</h3>
+        <p>${escapeHtml(issue.summary)}</p>
+        <p>${escapeHtml(issue.cause)}</p>
+        <ul>${issue.recommendations
+          .map((recommendation) => `<li>${escapeHtml(recommendation)}</li>`)
+          .join("")}</ul>
+      </article>`
+    )
+    .join("");
+  const coverageIssueKeys = new Set(coverageIssues.map((issue) => issue.groupKey));
+  const coverageWarningTypes = new Set([
+    "critical_coverage_gap",
+    "role_group_understaffed",
+    "slot_unfilled"
+  ]);
+  const managerWarningRows = Array.from(
+    new Set(
+      warnings.flatMap((warning) => {
+        const slot = warning.schedule_slot_id
+          ? runSlots.find((item) => item.id === warning.schedule_slot_id)
+          : null;
 
-      return `<li><strong>${escapeHtml(context)}:</strong> ${escapeHtml(
-        warning.message
-      )}</li>`;
-    })
+        if (
+          slot &&
+          coverageWarningTypes.has(warning.warning_type) &&
+          coverageIssueKeys.has(scheduleCoverageGroupKey(slot, staffingRequirements))
+        ) {
+          return [];
+        }
+
+        const friendlyMessage = slot
+          ? managerFriendlyWarningMessage({
+              warning,
+              slot,
+              coverageIssues,
+              staffingRequirements,
+              language
+            })
+          : humanizeSchedulerWarningText(warning.message, language);
+
+        if (
+          friendlyMessage ===
+          (language === "en"
+            ? "This warning is related to employee availability or work-rule limits."
+            : "Η προειδοποίηση σχετίζεται με διαθεσιμότητα εργαζομένων ή όρια εργασίας.")
+        ) {
+          return [];
+        }
+
+        return [friendlyMessage];
+      })
+    )
+  )
+    .map((message) => `<li>${escapeHtml(message)}</li>`)
     .join("");
-  const unfilledRows = unfilledSlots
-    .map((slot) => {
-      const role = roles.find((item) => item.id === slot.role_id);
-      return `<li>${escapeHtml(formatDateEu(slot.date))} · ${escapeHtml(
-        shiftNameForSlot(slot, staffingRequirements, shiftTemplates)
-      )} · ${escapeHtml(slot.start_time)}-${escapeHtml(slot.end_time)} · ${escapeHtml(
-        role?.name ?? "Role"
-      )}</li>`;
-    })
+  const recommendationRows = uniqueRecommendations(coverageIssues)
+    .map((recommendation) => `<li>${escapeHtml(recommendation)}</li>`)
     .join("");
+  const technicalWarningCount = warnings.filter((warning) =>
+    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
+      warning.message
+    )
+  ).length;
   const employeeSummaryRows = employeeRows
     .map((employeeRow) => {
       const totalHours = getEmployeeScheduleHours(employeeRow);
@@ -7129,7 +8300,7 @@ function buildManagerReportPdfHtml({
       </tr>`;
     })
     .join("");
-  const attentionRows = employeeRows
+  const overLimitRows = employeeRows
     .flatMap((employeeRow) => {
       const totalHours = getEmployeeScheduleHours(employeeRow);
       const workRules = employeeWorkRules.find(
@@ -7140,26 +8311,22 @@ function buildManagerReportPdfHtml({
       if (
         workRules?.max_hours_per_week !== null &&
         workRules?.max_hours_per_week !== undefined &&
-        totalHours >= workRules.max_hours_per_week * 0.85
+        totalHours > workRules.max_hours_per_week
       ) {
         rows.push(
-          `${employeeName(employeeRow.employee.id, [employeeRow.employee])}: close to max hours (${formatHours(
-            totalHours
-          )}/${formatHours(workRules.max_hours_per_week)}).`
-        );
-      }
-
-      const targetHours =
-        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week;
-      if (
-        targetHours !== null &&
-        targetHours !== undefined &&
-        totalHours > targetHours
-      ) {
-        rows.push(
-          `${employeeName(employeeRow.employee.id, [employeeRow.employee])}: above target hours (${formatHours(
-            totalHours
-          )}/${formatHours(targetHours)}).`
+          language === "en"
+            ? `${employeeName(
+                employeeRow.employee.id,
+                [employeeRow.employee]
+              )}: above the configured weekly limit (${formatHours(
+                totalHours
+              )}/${formatHours(workRules.max_hours_per_week)} hours).`
+            : `${employeeName(
+                employeeRow.employee.id,
+                [employeeRow.employee]
+              )}: πάνω από το εβδομαδιαίο όριο (${formatHours(
+                totalHours
+              )}/${formatHours(workRules.max_hours_per_week)} ώρες).`
         );
       }
 
@@ -7167,25 +8334,67 @@ function buildManagerReportPdfHtml({
     })
     .map((row) => `<li>${escapeHtml(row)}</li>`)
     .join("");
-  const assignmentNotes = employeeRows
-    .flatMap((employeeRow) =>
-      [...employeeRow.assignmentsByDate.values()].flat().flatMap((item) =>
-        item.assignment.notes
-          ? [
-              `<li>${escapeHtml(formatDateEu(item.slot.date))} ${escapeHtml(
-                item.slot.start_time
-              )}-${escapeHtml(item.slot.end_time)} ${escapeHtml(
-                employeeName(item.employee.id, [item.employee])
-              )}: ${escapeHtml(item.assignment.notes)}</li>`
-            ]
-          : []
-      )
-    )
-    .slice(0, 30)
-    .join("");
+  const assignedShiftCount = employeeRows.reduce(
+    (total, employeeRow) => total + employeeRow.assignmentCount,
+    0
+  );
+  const text =
+    language === "en"
+      ? {
+          assignedShifts: "Assigned shifts",
+          difficult: "Difficult",
+          employee: "Employee",
+          employeeSummary: "Employee hours summary",
+          employees: "Employees",
+          exportMeta: "PDF export",
+          hours: "Hours",
+          issueSection: "Issues to fix",
+          max: "Limit",
+          notesTitle: "Notes / limitations",
+          off: "Off",
+          recommendations: "Recommendations",
+          scheduleTitle: "Weekly schedule",
+          shifts: "Shifts",
+          summaryTitle: "Coverage summary",
+          target: "Contract",
+          technicalDetails: "Technical details",
+          technicalHidden:
+            "Detailed scoring factors and blocked-candidate counts are kept internally and are not included in the normal manager report.",
+          totalHours: "Total hours",
+          unfilled: "Unfilled shifts",
+          warnings: "Warnings",
+          week: "Schedule week",
+          weekend: "Weekend"
+        }
+      : {
+          assignedShifts: "Ανατεθειμένες βάρδιες",
+          difficult: "Δύσκολες",
+          employee: "Εργαζόμενος",
+          employeeSummary: "Σύνοψη ωρών εργαζομένων",
+          employees: "Εργαζόμενοι",
+          exportMeta: "Εξαγωγή PDF",
+          hours: "Ώρες",
+          issueSection: "Θέματα προς διόρθωση",
+          max: "Όριο",
+          notesTitle: "Σημειώσεις / περιορισμοί",
+          off: "Ρεπό",
+          recommendations: "Προτάσεις",
+          scheduleTitle: "Εβδομαδιαίο πρόγραμμα",
+          shifts: "Βάρδιες",
+          summaryTitle: "Σύνοψη κάλυψης",
+          target: "Συμφωνία",
+          technicalDetails: "Τεχνικές λεπτομέρειες",
+          technicalHidden:
+            "Οι αναλυτικοί παράγοντες βαθμολόγησης και οι τεχνικές μετρήσεις υποψηφίων παραμένουν εσωτερικά και δεν εμφανίζονται στην κανονική αναφορά manager.",
+          totalHours: "Σύνολο ωρών",
+          unfilled: "Κενές βάρδιες",
+          warnings: "Προειδοποιήσεις",
+          week: "Πρόγραμμα εβδομάδας",
+          weekend: "Σ/Κ"
+        };
 
   return `<!doctype html>
-<html lang="el">
+<html lang="${language}">
 <head>
   <meta charset="utf-8" />
   <title>${escapeHtml(businessName)} Manager Report</title>
@@ -7288,6 +8497,15 @@ function buildManagerReportPdfHtml({
     }
     .summary-label { color: #64748b; font-size: 9px; }
     .summary-value { margin-top: 2px; font-size: 13px; font-weight: 700; }
+    .manager-summary {
+      border: 1px solid #f59e0b;
+      border-radius: 7px;
+      background: #fffbeb;
+      color: #78350f;
+      padding: 9px 10px;
+      margin: 10px 0 12px;
+    }
+    .manager-summary p { margin: 0 0 3px; }
     .section {
       margin-top: 14px;
       break-inside: avoid;
@@ -7310,34 +8528,66 @@ function buildManagerReportPdfHtml({
       text-align: right;
       white-space: nowrap;
     }
+    .issue-card {
+      border: 1px solid #fed7aa;
+      border-radius: 7px;
+      background: #fff7ed;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      break-inside: avoid;
+    }
+    .issue-card.critical {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .issue-card h3 {
+      margin: 0 0 4px;
+      font-size: 12px;
+    }
+    .issue-card p {
+      margin: 0 0 4px;
+    }
+    .technical-note {
+      color: #64748b;
+      font-size: 9px;
+    }
   </style>
 </head>
 <body>
   <header class="header">
     <div>
       <h1>${escapeHtml(businessName)}</h1>
-      <p class="subtitle">Πρόγραμμα εβδομάδας: ${escapeHtml(
+      <p class="subtitle">${escapeHtml(text.week)}: ${escapeHtml(
         formatDateRangeEu(run.start_date, run.end_date)
       )}</p>
     </div>
-    <div class="meta">Εξαγωγή PDF · ${escapeHtml(formatDateEu(todayInputValue()))}</div>
+    <div class="meta">${escapeHtml(text.exportMeta)} · ${escapeHtml(formatDateEu(todayInputValue()))}</div>
   </header>
 
   <section class="summary">
-    <div class="summary-item"><div class="summary-label">Εργαζόμενοι</div><div class="summary-value">${employeeRows.length}</div></div>
-    <div class="summary-item"><div class="summary-label">Κενές βάρδιες</div><div class="summary-value">${unfilledSlots.length}</div></div>
-    <div class="summary-item"><div class="summary-label">Προειδοποιήσεις</div><div class="summary-value">${warnings.length}</div></div>
-    <div class="summary-item"><div class="summary-label">Περίοδος</div><div class="summary-value">${escapeHtml(formatDateRangeEu(run.start_date, run.end_date))}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.employees)}</div><div class="summary-value">${employeeRows.length}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.assignedShifts)}</div><div class="summary-value">${assignedShiftCount}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.unfilled)}</div><div class="summary-value">${unfilledSlots.length}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.warnings)}</div><div class="summary-value">${warnings.length}</div></div>
   </section>
 
+  <section class="manager-summary">
+    <strong>${escapeHtml(text.summaryTitle)}</strong>
+    ${shortageSummaryRows}
+  </section>
+
+  <section class="section">
+    <h2>${escapeHtml(text.scheduleTitle)}</h2>
   <table>
     <thead>
       <tr>
-        <th class="employee">Εργαζόμενος</th>
+        <th class="employee">${escapeHtml(text.employee)}</th>
         ${dates
           .map(
             (date) =>
-              `<th>${escapeHtml(dayLabel(getDayOfWeek(date)))}<br />${escapeHtml(
+              `<th>${escapeHtml(
+                localizedDayName(getDayOfWeek(date), language)
+              )}<br />${escapeHtml(
                 formatDateEu(date)
               )}</th>`
           )
@@ -7352,13 +8602,13 @@ function buildManagerReportPdfHtml({
           return `<tr>
             <td class="employee">${escapeHtml(
               employeeName(employeeRow.employee.id, [employeeRow.employee])
-            )}<div class="hours">Σύνολο ωρών: ${escapeHtml(formatHours(totalHours))}</div></td>
+            )}<div class="hours">${escapeHtml(text.totalHours)}: ${escapeHtml(formatHours(totalHours))}</div></td>
             ${dates
               .map((date) => {
                 const items = employeeRow.assignmentsByDate.get(date) ?? [];
 
                 if (items.length === 0) {
-                  return `<td><span class="cell-off">Ρεπό</span></td>`;
+                  return `<td><span class="cell-off">${escapeHtml(text.off)}</span></td>`;
                 }
 
                 return `<td>${items
@@ -7388,19 +8638,20 @@ function buildManagerReportPdfHtml({
         .join("")}
     </tbody>
   </table>
+  </section>
 
   <section class="section">
-    <h2>Σύνοψη εργαζομένων</h2>
+    <h2>${escapeHtml(text.employeeSummary)}</h2>
     <table>
       <thead>
         <tr>
-          <th>Εργαζόμενος</th>
-          <th class="numeric">Βάρδιες</th>
-          <th class="numeric">Ώρες</th>
-          <th class="numeric">Weekend</th>
-          <th class="numeric">Δύσκολες</th>
-          <th class="numeric">Στόχος</th>
-          <th class="numeric">Μέγιστο</th>
+          <th>${escapeHtml(text.employee)}</th>
+          <th class="numeric">${escapeHtml(text.shifts)}</th>
+          <th class="numeric">${escapeHtml(text.hours)}</th>
+          <th class="numeric">${escapeHtml(text.weekend)}</th>
+          <th class="numeric">${escapeHtml(text.difficult)}</th>
+          <th class="numeric">${escapeHtml(text.target)}</th>
+          <th class="numeric">${escapeHtml(text.max)}</th>
         </tr>
       </thead>
       <tbody>${employeeSummaryRows}</tbody>
@@ -7408,31 +8659,52 @@ function buildManagerReportPdfHtml({
   </section>
 
   ${
-    attentionRows
-      ? `<section class="section"><h2>Εργαζόμενοι που θέλουν προσοχή</h2><ul>${attentionRows}</ul></section>`
+    overLimitRows
+      ? `<section class="section"><h2>${escapeHtml(
+          language === "en" ? "Employee limit issues" : "Υπερβάσεις ορίων"
+        )}</h2><ul>${overLimitRows}</ul></section>`
       : ""
   }
 
   ${
-    unfilledRows
-      ? `<section class="section"><h2>Κενές βάρδιες</h2><ul>${unfilledRows}</ul></section>`
+    issueRows
+      ? `<section class="section"><h2>${escapeHtml(text.issueSection)}</h2>${issueRows}</section>`
+      : `<section class="section"><h2>${escapeHtml(text.issueSection)}</h2><p>${escapeHtml(
+          language === "en"
+            ? "No unfilled shift issues were found."
+            : "Δεν εντοπίστηκαν κενές θέσεις."
+        )}</p></section>`
+  }
+  ${
+    recommendationRows
+      ? `<section class="section"><h2>${escapeHtml(text.recommendations)}</h2><ul>${recommendationRows}</ul></section>`
       : ""
   }
   ${
-    warningRows
-      ? `<section class="section"><h2>Προειδοποιήσεις</h2><ul>${warningRows}</ul></section>`
+    managerWarningRows
+      ? `<section class="section"><h2>${escapeHtml(text.warnings)}</h2><ul>${managerWarningRows}</ul></section>`
       : ""
   }
   ${
-    assignmentNotes
-      ? `<section class="section"><h2>Σημειώσεις ανάθεσης</h2><ul>${assignmentNotes}</ul></section>`
+    technicalWarningCount > 0
+      ? `<section class="section technical-note"><h2>${escapeHtml(
+          text.technicalDetails
+        )}</h2><p>${escapeHtml(text.technicalHidden)}</p></section>`
       : ""
   }
   <section class="section">
-    <h2>Σημειώσεις / περιορισμοί</h2>
+    <h2>${escapeHtml(text.notesTitle)}</h2>
     <ul>
-      <li>Η αναφορά manager περιέχει εσωτερικές προειδοποιήσεις και σημειώσεις ανάθεσης.</li>
-      <li>Το PDF ομάδας κρατά μόνο το καθαρό πρόγραμμα και δεν περιλαμβάνει constraints, προτιμήσεις, εξηγήσεις ή στοιχεία επικοινωνίας.</li>
+      <li>${escapeHtml(
+        language === "en"
+          ? "Assignment score logs are intentionally excluded from this report."
+          : "Οι τεχνικές σημειώσεις βαθμολόγησης αναθέσεων δεν εμφανίζονται στην κανονική αναφορά."
+      )}</li>
+      <li>${escapeHtml(
+        language === "en"
+          ? "The team PDF remains a clean employee schedule without constraints, preferences, explanations or contact details."
+          : "Το PDF ομάδας κρατά μόνο το καθαρό πρόγραμμα και δεν περιλαμβάνει περιορισμούς, προτιμήσεις, εξηγήσεις ή στοιχεία επικοινωνίας."
+      )}</li>
     </ul>
   </section>
 </body>
@@ -8948,9 +10220,11 @@ function SummaryTile({
   value: string | number;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5">
-      <p className="text-sm font-medium text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tracking-normal text-slate-950">
+    <div className="flex min-h-[104px] flex-col justify-between rounded-lg border border-slate-200 bg-white p-4">
+      <p className="text-xs font-semibold uppercase leading-4 tracking-wide text-slate-500 [overflow-wrap:anywhere]">
+        {label}
+      </p>
+      <p className="mt-2 break-words text-xl font-semibold leading-tight tracking-normal text-slate-950">
         {value}
       </p>
     </div>
