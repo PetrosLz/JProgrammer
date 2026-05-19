@@ -76,25 +76,21 @@ const setupCompletedKey = "setup.completedAt";
 
 type PageId =
   | "profile"
-  | "dashboard"
-  | "business-settings"
   | "opening-hours"
   | "roles"
   | "shift-templates"
   | "staffing-requirements"
   | "employees"
-  | "employee-constraints"
-  | "time-off"
   | "generate-schedule"
   | "schedule-view"
   | "reports"
   | "backup-restore";
 
-type Page = {
-  id: PageId;
-  title: string;
-  description: string;
-};
+type LegacyPageId =
+  | "dashboard"
+  | "business-settings"
+  | "employee-constraints"
+  | "time-off";
 
 type DashboardSummary = {
   businessSettings: BusinessSettings | null;
@@ -115,74 +111,6 @@ type DashboardSummary = {
   timeOff: TimeOff[];
   setupCompletedAt: string | null;
 };
-
-const pages: Page[] = [
-  {
-    id: "dashboard",
-    title: "Dashboard",
-    description: "Σύνοψη της τοπικής ρύθμισης επιχείρησης."
-  },
-  {
-    id: "business-settings",
-    title: "Business Settings",
-    description: "Βασικά στοιχεία επιχείρησης και εβδομάδας."
-  },
-  {
-    id: "opening-hours",
-    title: "Opening Hours",
-    description: "Αποθηκευμένες ώρες λειτουργίας ανά ημέρα."
-  },
-  {
-    id: "roles",
-    title: "Roles",
-    description: "Προσαρμοσμένοι ρόλοι που δημιουργήθηκαν στην αρχική ρύθμιση."
-  },
-  {
-    id: "shift-templates",
-    title: "Shift Templates",
-    description: "Πρότυπα βαρδιών για μελλοντικό προγραμματισμό."
-  },
-  {
-    id: "staffing-requirements",
-    title: "Staffing Requirements",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  },
-  {
-    id: "employees",
-    title: "Εργαζόμενοι",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  },
-  {
-    id: "employee-constraints",
-    title: "Employee Constraints",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  },
-  {
-    id: "time-off",
-    title: "Time Off",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  },
-  {
-    id: "generate-schedule",
-    title: "Generate Program",
-    description: "Δημιουργία slots και ανάθεση εργαζομένων με βασικούς κανόνες."
-  },
-  {
-    id: "schedule-view",
-    title: "Schedule View",
-    description: "Proposed Program review and editing."
-  },
-  {
-    id: "reports",
-    title: "Reports",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  },
-  {
-    id: "backup-restore",
-    title: "Backup / Restore",
-    description: "Θα υλοποιηθεί σε επόμενη φάση."
-  }
-];
 
 const emptySummary: DashboardSummary = {
   businessSettings: null,
@@ -218,22 +146,6 @@ function appLanguage(settings: BusinessSettings | null): UiLanguage {
   return settings?.language === "en" ? "en" : "el";
 }
 
-function pageTitle(page: Page, language: UiLanguage): string {
-  if (page.id === "employees") {
-    return language === "en" ? "Employees" : "Εργαζόμενοι";
-  }
-
-  return page.title;
-}
-
-function pageLabel(pageId: PageId, language: UiLanguage): string | null {
-  return (
-    navigationGroups(language)
-      .flatMap((group) => group.items)
-      .find((item) => item.id === pageId)?.title ?? null
-  );
-}
-
 function navigationGroups(language: UiLanguage): NavigationGroup[] {
   if (language === "en") {
     return [
@@ -241,7 +153,6 @@ function navigationGroups(language: UiLanguage): NavigationGroup[] {
         title: "Setup",
         items: [
           { id: "profile", title: "Profile" },
-          { id: "business-settings", title: "Settings" },
           { id: "opening-hours", title: "Opening Hours" },
           { id: "roles", title: "Roles" },
           { id: "shift-templates", title: "Shift Templates" },
@@ -269,7 +180,6 @@ function navigationGroups(language: UiLanguage): NavigationGroup[] {
       title: "Ρυθμίσεις",
       items: [
         { id: "profile", title: "Προφίλ" },
-        { id: "business-settings", title: "Ρυθμίσεις" },
         { id: "opening-hours", title: "Ώρες λειτουργίας" },
         { id: "roles", title: "Ρόλοι" },
         { id: "shift-templates", title: "Βάρδιες" },
@@ -292,11 +202,40 @@ function navigationGroups(language: UiLanguage): NavigationGroup[] {
   ];
 }
 
+function normalizePageId(pageId: PageId | LegacyPageId | string): PageId {
+  if (pageId === "dashboard" || pageId === "business-settings") {
+    return "profile";
+  }
+
+  if (pageId === "employee-constraints" || pageId === "time-off") {
+    return "employees";
+  }
+
+  const validPageIds: PageId[] = [
+    "profile",
+    "opening-hours",
+    "roles",
+    "shift-templates",
+    "staffing-requirements",
+    "employees",
+    "generate-schedule",
+    "schedule-view",
+    "reports",
+    "backup-restore"
+  ];
+
+  return validPageIds.includes(pageId as PageId)
+    ? (pageId as PageId)
+    : "profile";
+}
+
 export function App() {
   const [appState, setAppState] = useState<"loading" | "setup" | "ready">(
     "loading"
   );
-  const [activePageId, setActivePageId] = useState<PageId>("profile");
+  const [activePageId, setActivePageId] = useState<PageId | LegacyPageId>(
+    "profile"
+  );
   const [activeStep, setActiveStep] = useState(0);
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(() =>
     createInitialSetupDraft()
@@ -317,10 +256,18 @@ export function App() {
     () => sidebarGroups.flatMap((group) => group.items),
     [sidebarGroups]
   );
+  const normalizedActivePageId = normalizePageId(activePageId);
   const activeNavItem =
-    sidebarItems.find((item) => item.id === activePageId) ?? sidebarItems[0];
+    sidebarItems.find((item) => item.id === normalizedActivePageId) ??
+    sidebarItems[0];
   const activePageTitle = activeNavItem.title;
   const today = useMemo(() => format(new Date(), "EEEE, MMMM d, yyyy"), []);
+
+  useEffect(() => {
+    if (activePageId !== normalizedActivePageId) {
+      setActivePageId(normalizedActivePageId);
+    }
+  }, [activePageId, normalizedActivePageId]);
 
   const refreshSummary = useCallback(async () => {
     const [
@@ -437,7 +384,7 @@ export function App() {
       await saveSetupDraft(setupDraft);
       await refreshSummary();
       setNotice("Η αρχική ρύθμιση αποθηκεύτηκε.");
-      setActivePageId("dashboard");
+      setActivePageId("profile");
       setAppState("ready");
     } catch (error) {
       setErrors([getErrorMessage(error)]);
@@ -464,7 +411,7 @@ export function App() {
       await refreshSummary();
       setSelectedScheduleRunId(null);
       setActiveStep(0);
-      setActivePageId("dashboard");
+      setActivePageId("profile");
       setAppState("ready");
       setNotice(
         `Το Demo Cafe φορτώθηκε: ${result.employeeCount} εργαζόμενοι, ${result.roleCount} ρόλοι, ${result.staffingRequirementCount} ανάγκες προσωπικού.`
@@ -600,10 +547,6 @@ export function App() {
             },
             onLoadDemoData: () => void handleLoadDemoData(),
             onResetLocalData: () => void handleResetLocalData(),
-            onOpenSettings: () => {
-              setNotice("");
-              setActivePageId("business-settings");
-            },
             onProgramGenerated: async (runId, message) => {
               await refreshSummary();
               setSelectedScheduleRunId(runId);
@@ -1338,13 +1281,13 @@ function ProfilePage({
   language,
   isLoadingDemoData,
   onLoadDemoData,
-  onOpenSettings
+  onSettingsSaved
 }: {
   summary: DashboardSummary;
   language: UiLanguage;
   isLoadingDemoData: boolean;
   onLoadDemoData: () => void;
-  onOpenSettings: () => void;
+  onSettingsSaved: () => Promise<void>;
 }) {
   const settings = summary.businessSettings;
   const latestRun = [...summary.scheduleRuns].sort((a, b) =>
@@ -1362,13 +1305,6 @@ function ProfilePage({
               : "Τρέχουσα εικόνα επιχείρησης και γρήγορη σύνοψη."
           }
         />
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className={secondaryButtonClassName}
-        >
-          {language === "en" ? "Open Settings" : "Άνοιγμα ρυθμίσεων"}
-        </button>
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -1453,6 +1389,14 @@ function ProfilePage({
             }
           />
         </div>
+      </div>
+
+      <div className="mt-6">
+        <BusinessSettingsEditor
+          settings={summary.businessSettings}
+          language={language}
+          onSaved={onSettingsSaved}
+        />
       </div>
     </div>
   );
@@ -3658,553 +3602,6 @@ function getManualCandidateHoursSummary({
   return `${formatHours(projectedHours)}/${formatHours(contractHours)}${hoursLabel}`;
 }
 
-function EmployeeConstraintsPage({
-  employees,
-  constraints,
-  shiftTemplates,
-  shiftAvailability,
-  onChanged
-}: {
-  employees: Employee[];
-  constraints: EmployeeDayConstraint[];
-  shiftTemplates: ShiftTemplate[];
-  shiftAvailability: EmployeeShiftAvailability[];
-  onChanged: (message: string) => Promise<void>;
-}) {
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState(
-    employees[0]?.id ?? ""
-  );
-  const selectedEmployee =
-    employees.find((employee) => employee.id === selectedEmployeeId) ??
-    employees[0] ??
-    null;
-  const activeShiftTemplates = shiftTemplates.filter(
-    (shiftTemplate) => shiftTemplate.is_active === 1
-  );
-
-  useEffect(() => {
-    setSelectedEmployeeId((current) =>
-      current && employees.some((employee) => employee.id === current)
-        ? current
-        : employees[0]?.id ?? ""
-    );
-  }, [employees]);
-
-  async function saveConstraint(
-    employee: Employee,
-    dayOfWeek: DayOfWeek,
-    constraintType: DayConstraintValue
-  ) {
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      const existingConstraints = constraints.filter(
-        (constraint) =>
-          constraint.employee_id === employee.id &&
-          constraint.day_of_week === dayOfWeek
-      );
-
-      if (constraintType === "neutral") {
-        for (const constraint of existingConstraints) {
-          await databaseApi.deleteRecord(
-            "employee_day_constraints",
-            constraint.id
-          );
-        }
-        await onChanged("Availability constraint cleared.");
-        return;
-      }
-
-      const [existingConstraint, ...duplicates] = existingConstraints;
-
-      if (existingConstraint) {
-        await databaseApi.updateRecord(
-          "employee_day_constraints",
-          existingConstraint.id,
-          {
-            employee_id: employee.id,
-            day_of_week: dayOfWeek,
-            constraint_type: constraintType,
-            notes: null
-          }
-        );
-
-        for (const duplicate of duplicates) {
-          await databaseApi.deleteRecord(
-            "employee_day_constraints",
-            duplicate.id
-          );
-        }
-      } else {
-        await databaseApi.createRecord("employee_day_constraints", {
-          employee_id: employee.id,
-          day_of_week: dayOfWeek,
-          constraint_type: constraintType,
-          notes: null
-        });
-      }
-
-      await onChanged("Availability constraint saved.");
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function saveShiftAvailability(
-    employee: Employee,
-    dayOfWeek: DayOfWeek,
-    shiftTemplateId: string,
-    availabilityType: ShiftAvailabilityValue
-  ) {
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      const existingRows = shiftAvailability.filter(
-        (item) =>
-          item.employee_id === employee.id &&
-          item.day_of_week === dayOfWeek &&
-          item.shift_template_id === shiftTemplateId
-      );
-
-      if (availabilityType === "available") {
-        for (const row of existingRows) {
-          await databaseApi.deleteRecord("employee_shift_availability", row.id);
-        }
-        await onChanged("Shift availability cleared.");
-        return;
-      }
-
-      const [existingRow, ...duplicates] = existingRows;
-
-      if (existingRow) {
-        await databaseApi.updateRecord(
-          "employee_shift_availability",
-          existingRow.id,
-          {
-            employee_id: employee.id,
-            day_of_week: dayOfWeek,
-            shift_template_id: shiftTemplateId,
-            availability_type: availabilityType,
-            notes: null
-          }
-        );
-
-        for (const duplicate of duplicates) {
-          await databaseApi.deleteRecord(
-            "employee_shift_availability",
-            duplicate.id
-          );
-        }
-      } else {
-        await databaseApi.createRecord("employee_shift_availability", {
-          employee_id: employee.id,
-          day_of_week: dayOfWeek,
-          shift_template_id: shiftTemplateId,
-          availability_type: availabilityType,
-          notes: null
-        });
-      }
-
-      await onChanged("Shift availability saved.");
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <div className="max-w-7xl">
-      <SectionHeading
-        title="Employee Availability"
-        description="Set day-level constraints and specific shift availability for each employee."
-      />
-
-      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-
-      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-5">
-        <div className="grid gap-4 text-sm text-slate-600 md:grid-cols-4">
-          <p>
-            <span className="font-semibold text-slate-900">cannot_work</span> is
-            a hard constraint.
-          </p>
-          <p>
-            <span className="font-semibold text-slate-900">
-              prefers_not_to_work
-            </span>{" "}
-            is a soft negative preference.
-          </p>
-          <p>
-            <span className="font-semibold text-slate-900">prefers_to_work</span>{" "}
-            is a soft positive preference.
-          </p>
-          <Field label="Employee">
-            <select
-              value={selectedEmployee?.id ?? ""}
-              onChange={(event) => setSelectedEmployeeId(event.target.value)}
-              className={inputClassName}
-            >
-              {employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.first_name} {employee.last_name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-      </div>
-
-      {employees.length === 0 ? (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white px-5 py-5 text-sm text-slate-500">
-            Add employees before setting availability constraints.
-        </div>
-      ) : selectedEmployee ? (
-        <>
-          <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="border-b border-slate-200 px-5 py-4">
-              <h3 className="text-base font-semibold tracking-normal text-slate-900">
-                Day-level availability
-              </h3>
-              <p className="mt-1 text-sm text-slate-500">
-                A day-level cannot_work blocks every shift on that day.
-              </p>
-            </div>
-            <div className="grid grid-cols-[1.2fr_repeat(7,1fr)] items-center gap-3 px-5 py-4">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">
-                  {selectedEmployee.first_name} {selectedEmployee.last_name}
-                </p>
-                <StatusBadge isActive={Boolean(selectedEmployee.is_active)} />
-              </div>
-              {dayLabels.map((day) => (
-                <select
-                  key={day.dayOfWeek}
-                  value={dayConstraintValue(
-                    selectedEmployee.id,
-                    day.dayOfWeek,
-                    constraints
-                  )}
-                  onChange={(event) =>
-                    void saveConstraint(
-                      selectedEmployee,
-                      day.dayOfWeek,
-                      event.target.value as DayConstraintValue
-                    )
-                  }
-                  disabled={isSaving}
-                  className={inputClassName}
-                >
-                  {dayConstraintOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-            <div
-              className="grid min-w-[980px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500"
-              style={{
-                gridTemplateColumns: `150px repeat(${Math.max(
-                  1,
-                  activeShiftTemplates.length
-                )}, minmax(150px, 1fr))`
-              }}
-            >
-              <span>Day</span>
-              {activeShiftTemplates.length === 0 ? (
-                <span>Shift templates</span>
-              ) : (
-                activeShiftTemplates.map((shiftTemplate) => (
-                  <span key={shiftTemplate.id} className="whitespace-nowrap">
-                    {shiftTemplate.name}
-                  </span>
-                ))
-              )}
-            </div>
-
-            {activeShiftTemplates.length === 0 ? (
-              <p className="px-5 py-5 text-sm text-slate-500">
-                Add active shift templates before setting shift availability.
-              </p>
-            ) : (
-              dayLabels.map((day) => (
-                <div
-                  key={day.dayOfWeek}
-                  className="grid min-w-[980px] items-center gap-3 border-t border-slate-200 px-5 py-4"
-                  style={{
-                    gridTemplateColumns: `150px repeat(${activeShiftTemplates.length}, minmax(150px, 1fr))`
-                  }}
-                >
-                  <p className="text-sm font-semibold text-slate-900">
-                    {day.label}
-                  </p>
-                  {activeShiftTemplates.map((shiftTemplate) => {
-                    const value = shiftAvailabilityValue(
-                      selectedEmployee.id,
-                      day.dayOfWeek,
-                      shiftTemplate.id,
-                      shiftAvailability
-                    );
-
-                    return (
-                      <select
-                        key={shiftTemplate.id}
-                        value={value}
-                        onChange={(event) =>
-                          void saveShiftAvailability(
-                            selectedEmployee,
-                            day.dayOfWeek,
-                            shiftTemplate.id,
-                            event.target.value as ShiftAvailabilityValue
-                          )
-                        }
-                        disabled={isSaving}
-                        className={`${inputClassName} ${shiftAvailabilityClassName(
-                          value
-                        )}`}
-                      >
-                        {shiftAvailabilityOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    );
-                  })}
-                </div>
-              ))
-            )}
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function TimeOffPage({
-  employees,
-  timeOff,
-  onChanged
-}: {
-  employees: Employee[];
-  timeOff: TimeOff[];
-  onChanged: (message: string) => Promise<void>;
-}) {
-  const [form, setForm] = useState<TimeOffForm>(() =>
-    createTimeOffForm(employees)
-  );
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-
-  useEffect(() => {
-    setForm((current) => ({
-      ...current,
-      employeeId:
-        current.employeeId &&
-        employees.some((employee) => employee.id === current.employeeId)
-          ? current.employeeId
-          : employees[0]?.id ?? ""
-    }));
-  }, [employees]);
-
-  async function saveTimeOff() {
-    const nextErrors = validateTimeOffForm(form, employees);
-
-    if (nextErrors.length > 0) {
-      setErrors(nextErrors);
-      return;
-    }
-
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      await databaseApi.createRecord("time_off", {
-        employee_id: form.employeeId,
-        type: form.type,
-        start_date: form.dateFrom,
-        end_date: form.dateTo,
-        reason: optionalText(form.reason),
-        status: "recorded",
-        notes: null
-      });
-      await onChanged("Time off saved.");
-      setForm(createTimeOffForm(employees));
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function deleteTimeOff(entry: TimeOff) {
-    const shouldDelete = window.confirm("Delete this time off entry?");
-
-    if (!shouldDelete) {
-      return;
-    }
-
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      await databaseApi.deleteRecord("time_off", entry.id);
-      await onChanged("Time off deleted.");
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <div className="max-w-6xl">
-      <SectionHeading
-        title="Time Off"
-        description="Record employee days off, vacation, sick leave, personal time, and other absence periods."
-      />
-
-      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-
-      {employees.length === 0 ? (
-        <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          Add employees before recording time off.
-        </div>
-      ) : null}
-
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
-        <h3 className="text-base font-semibold tracking-normal">Add time off</h3>
-
-        <div className="mt-4 grid grid-cols-[1.2fr_150px_150px_150px_1.5fr] gap-4">
-          <Field label="Employee" required>
-            <select
-              value={form.employeeId}
-              onChange={(event) =>
-                setForm({ ...form, employeeId: event.target.value })
-              }
-              className={inputClassName}
-            >
-              <option value="">Choose employee</option>
-              {employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.first_name} {employee.last_name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Date from" required>
-            <input
-              type="date"
-              value={form.dateFrom}
-              onChange={(event) =>
-                setForm({ ...form, dateFrom: event.target.value })
-              }
-              className={inputClassName}
-            />
-          </Field>
-          <Field label="Date to" required>
-            <input
-              type="date"
-              value={form.dateTo}
-              onChange={(event) =>
-                setForm({ ...form, dateTo: event.target.value })
-              }
-              className={inputClassName}
-            />
-          </Field>
-          <Field label="Type" required>
-            <select
-              value={form.type}
-              onChange={(event) => setForm({ ...form, type: event.target.value })}
-              className={inputClassName}
-            >
-              {timeOffTypes.map((type) => (
-                <option key={type.value} value={type.value}>
-                  {type.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Reason">
-            <input
-              value={form.reason}
-              onChange={(event) =>
-                setForm({ ...form, reason: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="Optional"
-            />
-          </Field>
-        </div>
-
-        <button
-          type="button"
-          onClick={saveTimeOff}
-          disabled={isSaving || employees.length === 0}
-          className="mt-5 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-        >
-          {isSaving ? "Saving..." : "Add time off"}
-        </button>
-      </div>
-
-      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1.2fr_160px_160px_160px_1.4fr_120px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Employee</span>
-          <span>From</span>
-          <span>To</span>
-          <span>Type</span>
-          <span>Reason</span>
-          <span>Actions</span>
-        </div>
-
-        {timeOff.length === 0 ? (
-          <p className="px-5 py-5 text-sm text-slate-500">
-            No time off has been recorded yet.
-          </p>
-        ) : (
-          [...timeOff]
-            .sort((a, b) => a.start_date.localeCompare(b.start_date))
-            .map((entry) => (
-              <div
-                key={entry.id}
-                className="grid grid-cols-[1.2fr_160px_160px_160px_1.4fr_120px] items-center gap-4 border-t border-slate-200 px-5 py-4"
-              >
-                <p className="text-sm font-semibold text-slate-900">
-                  {employeeName(entry.employee_id, employees)}
-                </p>
-                <p className="text-sm text-slate-600">{entry.start_date}</p>
-                <p className="text-sm text-slate-600">{entry.end_date}</p>
-                <p className="text-sm text-slate-600">
-                  {timeOffTypeLabel(entry.type)}
-                </p>
-                <p className="text-sm text-slate-600">
-                  {entry.reason || "No reason"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void deleteTimeOff(entry)}
-                  className={secondaryButtonClassName}
-                >
-                  Delete
-                </button>
-              </div>
-            ))
-        )}
-      </div>
-    </div>
-  );
-}
-
 function UnifiedEmployeesPage({
   language,
   employees,
@@ -5328,596 +4725,6 @@ function UnifiedEmployeesPage({
             </div>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function EmployeesPage({
-  employees,
-  roles,
-  employeeRoles,
-  employeeWorkRules,
-  onChanged
-}: {
-  employees: Employee[];
-  roles: Role[];
-  employeeRoles: EmployeeRole[];
-  employeeWorkRules: EmployeeWorkRules[];
-  onChanged: (message: string) => Promise<void>;
-}) {
-  const [form, setForm] = useState<EmployeeForm>(() => createEmployeeForm());
-  const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const filteredEmployees = useMemo(() => {
-    const query = searchTerm.trim().toLocaleLowerCase();
-
-    if (!query) {
-      return employees;
-    }
-
-    return employees.filter((employee) => {
-      const haystack = [
-        employee.first_name,
-        employee.last_name,
-        employee.email ?? "",
-        employee.phone ?? "",
-        employee.notes ?? ""
-      ]
-        .join(" ")
-        .toLocaleLowerCase();
-
-      return haystack.includes(query);
-    });
-  }, [employees, searchTerm]);
-
-  async function saveEmployee() {
-    const nextErrors = validateEmployeeForm(form);
-
-    if (nextErrors.length > 0) {
-      setErrors(nextErrors);
-      return;
-    }
-
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      const payload = {
-        first_name: form.firstName.trim(),
-        last_name: form.lastName.trim(),
-        email: optionalText(form.email),
-        phone: optionalText(form.phone),
-        is_active: form.isActive,
-        notes: optionalText(form.notes)
-      };
-      const employee = editingEmployeeId
-        ? await databaseApi.updateRecord("employees", editingEmployeeId, payload)
-        : await databaseApi.createRecord("employees", payload);
-
-      if (!employee) {
-        throw new Error("Δεν ήταν δυνατή η αποθήκευση εργαζομένου.");
-      }
-
-      await syncEmployeeRoleAssignments(
-        employee.id,
-        form,
-        employeeRoles
-      );
-      await upsertEmployeeWorkRules(
-        employee.id,
-        form.workRules,
-        employeeWorkRules
-      );
-      await onChanged(
-        editingEmployeeId
-          ? "Ο εργαζόμενος ενημερώθηκε."
-          : "Ο εργαζόμενος προστέθηκε."
-      );
-
-      setEditingEmployeeId(null);
-      setForm(createEmployeeForm());
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function toggleEmployeeActive(employee: Employee) {
-    setErrors([]);
-    setIsSaving(true);
-
-    try {
-      const nextIsActive = !employee.is_active;
-      await databaseApi.updateRecord("employees", employee.id, {
-        is_active: nextIsActive
-      });
-
-      if (editingEmployeeId === employee.id) {
-        setForm((current) => ({ ...current, isActive: nextIsActive }));
-      }
-
-      await onChanged(
-        nextIsActive
-          ? "Ο εργαζόμενος ενεργοποιήθηκε."
-          : "Ο εργαζόμενος απενεργοποιήθηκε."
-      );
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function startEditing(employee: Employee) {
-    const assignedRoles = employeeRoles.filter(
-      (employeeRole) => employeeRole.employee_id === employee.id
-    );
-    const workRules =
-      employeeWorkRules.find((rules) => rules.employee_id === employee.id) ??
-      null;
-
-    setErrors([]);
-    setEditingEmployeeId(employee.id);
-    setForm(employeeToForm(employee, assignedRoles, workRules));
-  }
-
-  function resetForm() {
-    setErrors([]);
-    setEditingEmployeeId(null);
-    setForm(createEmployeeForm());
-  }
-
-  function toggleRole(roleId: string, checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      roleIds: checked
-        ? [...new Set([...current.roleIds, roleId])]
-        : current.roleIds.filter((id) => id !== roleId),
-      roleDetails: {
-        ...current.roleDetails,
-        [roleId]: current.roleDetails[roleId] ?? {
-          experienceLevel: "some_experience",
-          canLeadRole: false,
-          isPreferredRole: false
-        }
-      }
-    }));
-  }
-
-  function updateRoleDetail(
-    roleId: string,
-    detail: Partial<EmployeeForm["roleDetails"][string]>
-  ) {
-    setForm((current) => {
-      const existing = current.roleDetails[roleId];
-      const nextDetail = {
-        experienceLevel: existing?.experienceLevel ?? "some_experience",
-        canLeadRole: existing?.canLeadRole ?? false,
-        isPreferredRole: existing?.isPreferredRole ?? false,
-        ...detail
-      };
-
-      return {
-        ...current,
-        roleDetails: {
-          ...current.roleDetails,
-          [roleId]: nextDetail
-        }
-      };
-    });
-  }
-
-  return (
-    <div className="max-w-7xl">
-      <SectionHeading
-        title="Εργαζόμενοι"
-        description="Διαχείριση στοιχείων εργαζομένων, ρόλων και κανόνων εργασίας."
-      />
-
-      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-
-      {roles.length === 0 ? (
-        <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
-          Προσθέστε ρόλους πριν τους αναθέσετε σε εργαζομένους.
-        </div>
-      ) : null}
-
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold tracking-normal">
-            {editingEmployeeId ? "Επεξεργασία εργαζομένου" : "Προσθήκη εργαζομένου"}
-          </h3>
-          {editingEmployeeId ? (
-            <button
-              type="button"
-              onClick={resetForm}
-              className={secondaryButtonClassName}
-            >
-              Ακύρωση
-            </button>
-          ) : null}
-        </div>
-
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          <Field label="Όνομα" required>
-            <input
-              value={form.firstName}
-              onChange={(event) =>
-                setForm({ ...form, firstName: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="Alex"
-            />
-          </Field>
-          <Field label="Επώνυμο" required>
-            <input
-              value={form.lastName}
-              onChange={(event) =>
-                setForm({ ...form, lastName: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="Papadopoulos"
-            />
-          </Field>
-          <Field label="Κατάσταση">
-            <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={form.isActive}
-                onChange={(event) =>
-                  setForm({ ...form, isActive: event.target.checked })
-                }
-                className="h-4 w-4"
-              />
-              Ενεργός
-            </label>
-          </Field>
-          <Field label="Τηλέφωνο">
-            <input
-              value={form.phone}
-              onChange={(event) =>
-                setForm({ ...form, phone: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="+30..."
-            />
-          </Field>
-          <Field label="Email">
-            <input
-              type="email"
-              value={form.email}
-              onChange={(event) =>
-                setForm({ ...form, email: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="name@example.com"
-            />
-          </Field>
-          <Field label="Σημειώσεις">
-            <input
-              value={form.notes}
-              onChange={(event) =>
-                setForm({ ...form, notes: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="Optional"
-            />
-          </Field>
-        </div>
-
-        <div className="mt-6 grid grid-cols-[1fr_1.4fr] gap-5">
-          <div>
-            <h4 className="text-sm font-semibold text-slate-800">
-              Ρόλοι εργαζομένου
-            </h4>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {roles.length === 0 ? (
-                <p className="text-sm text-slate-500">Δεν υπάρχουν διαθέσιμοι ρόλοι.</p>
-              ) : (
-                roles.map((role) => {
-                  const isSelected = form.roleIds.includes(role.id);
-                  const details = form.roleDetails[role.id] ?? {
-                    experienceLevel: "some_experience",
-                    canLeadRole: false,
-                    isPreferredRole: false
-                  };
-
-                  return (
-                    <div
-                      key={role.id}
-                      className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
-                    >
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(event) =>
-                            toggleRole(role.id, event.target.checked)
-                          }
-                          className="h-4 w-4"
-                        />
-                        <span
-                          className="h-3 w-3 rounded-full"
-                          style={{ backgroundColor: role.color ?? roleColors[0] }}
-                        />
-                        <span>{role.name}</span>
-                        {!role.is_active ? (
-                          <span className="text-xs text-slate-400">ανενεργός</span>
-                        ) : null}
-                      </label>
-
-                      {isSelected ? (
-                        <div className="mt-3 space-y-2">
-                          <Field label="Προϋπηρεσία">
-                            <select
-                              value={details.experienceLevel}
-                              onChange={(event) =>
-                                updateRoleDetail(role.id, {
-                                  experienceLevel: event.target
-                                    .value as ExperienceLevel
-                                })
-                              }
-                              className={inputClassName}
-                            >
-                              {experienceOptions("el").map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </Field>
-                          <label className="flex items-center gap-2 text-xs text-slate-600">
-                            <input
-                              type="checkbox"
-                              checked={details.canLeadRole}
-                              onChange={(event) =>
-                                updateRoleDetail(role.id, {
-                                  canLeadRole: event.target.checked
-                                })
-                              }
-                            />
-                            Μπορεί να είναι υπεύθυνος ρόλου
-                          </label>
-                          <label className="flex items-center gap-2 text-xs text-slate-600">
-                            <input
-                              type="checkbox"
-                              checked={details.isPreferredRole}
-                              onChange={(event) =>
-                                updateRoleDetail(role.id, {
-                                  isPreferredRole: event.target.checked
-                                })
-                              }
-                            />
-                            Προτιμώμενος ρόλος
-                          </label>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold text-slate-800">
-                Σύμβαση / Κανόνες εργασίας
-              </h4>
-              <div className="flex flex-wrap gap-2">
-                {employmentPatternPresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        workRules: applyEmploymentPatternPreset(
-                          form.workRules,
-                          preset.id
-                        )
-                      })
-                    }
-                    className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-3">
-              <Field label="Τύπος απασχόλησης">
-                <select
-                  value={form.workRules.employmentType}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      workRules: applyEmploymentTypeDefaults(
-                        form.workRules,
-                        event.target.value as EmploymentType
-                      )
-                    })
-                  }
-                  className={inputClassName}
-                >
-                  {employmentTypeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <NumberField
-                label="Ημέρες / εβδομάδα"
-                value={form.workRules.contractDaysPerWeek}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: {
-                      ...form.workRules,
-                      contractDaysPerWeek: value
-                    }
-                  })
-                }
-              />
-              <NumberField
-                label="Ώρες / ημέρα"
-                value={form.workRules.preferredHoursPerDay}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: {
-                      ...form.workRules,
-                      preferredHoursPerDay: value
-                    }
-                  })
-                }
-              />
-              <NumberField
-                label="Ώρες / εβδομάδα"
-                value={form.workRules.contractHoursPerWeek}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: {
-                      ...form.workRules,
-                      contractHoursPerWeek: value
-                    }
-                  })
-                }
-              />
-              <NumberField
-                label="Μέγιστες συνεχόμενες ημέρες"
-                value={form.workRules.maxConsecutiveDays}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    workRules: { ...form.workRules, maxConsecutiveDays: value }
-                  })
-                }
-              />
-              <label className="flex items-center gap-2 pt-7 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={form.workRules.canWorkWeekends}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      workRules: {
-                        ...form.workRules,
-                        canWorkWeekends: event.target.checked
-                      }
-                    })
-                  }
-                  className="h-4 w-4"
-                />
-                Μπορεί να δουλεύει Σαββατοκύριακο
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={saveEmployee}
-          disabled={isSaving}
-          className="mt-6 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
-        >
-          {isSaving
-            ? "Αποθήκευση..."
-            : editingEmployeeId
-              ? "Αποθήκευση εργαζομένου"
-              : "Προσθήκη εργαζομένου"}
-        </button>
-      </div>
-
-      <div className="mt-6 flex items-end justify-between gap-4">
-        <Field label="Αναζήτηση εργαζομένων">
-          <input
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className={`${inputClassName} w-96`}
-            placeholder="Αναζήτηση με όνομα, τηλέφωνο, email ή σημειώσεις"
-          />
-        </Field>
-        <p className="pb-2 text-sm text-slate-500">
-          Εμφάνιση {filteredEmployees.length} από {employees.length}
-        </p>
-      </div>
-
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1.1fr_1.1fr_1.4fr_1.4fr_110px_190px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Εργαζόμενος</span>
-          <span>Επικοινωνία</span>
-          <span>Ρόλοι</span>
-          <span>Σύμβαση</span>
-          <span>Κατάσταση</span>
-          <span>Ενέργειες</span>
-        </div>
-
-        {filteredEmployees.length === 0 ? (
-          <p className="px-5 py-5 text-sm text-slate-500">
-            Δεν βρέθηκαν εργαζόμενοι με αυτό το φίλτρο.
-          </p>
-        ) : (
-          filteredEmployees.map((employee) => {
-            const assignedRoleIds = employeeRoles
-              .filter((employeeRole) => employeeRole.employee_id === employee.id)
-              .map((employeeRole) => employeeRole.role_id);
-            const rules =
-              employeeWorkRules.find(
-                (workRules) => workRules.employee_id === employee.id
-              ) ?? null;
-
-            return (
-              <div
-                key={employee.id}
-                className="grid grid-cols-[1.1fr_1.1fr_1.4fr_1.4fr_110px_190px] items-center gap-4 border-t border-slate-200 px-5 py-4"
-              >
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">
-                    {employee.first_name} {employee.last_name}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {employee.notes || "Χωρίς σημειώσεις"}
-                  </p>
-                </div>
-                <div className="text-sm text-slate-600">
-                  <p>{employee.phone || "Χωρίς τηλέφωνο"}</p>
-                  <p className="mt-1">{employee.email || "Χωρίς email"}</p>
-                </div>
-                <p className="text-sm text-slate-600">
-                  {employeeRoleLabels(assignedRoleIds, roles)}
-                </p>
-                <p className="text-sm text-slate-600">
-                  {workRulesSummary(rules)}
-                </p>
-                <StatusBadge isActive={Boolean(employee.is_active)} />
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => startEditing(employee)}
-                    className={secondaryButtonClassName}
-                  >
-                    Επεξεργασία
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void toggleEmployeeActive(employee)}
-                    className={secondaryButtonClassName}
-                  >
-                    {employee.is_active ? "Απενεργοποίηση" : "Ενεργοποίηση"}
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        )}
       </div>
     </div>
   );
@@ -9244,39 +8051,6 @@ function validateTimeOffFormForLanguage(
   return errors;
 }
 
-const dayConstraintOptions: Array<{
-  value: DayConstraintValue;
-  label: string;
-}> = [
-  { value: "neutral", label: "Neutral / available" },
-  { value: "cannot_work", label: "Cannot work" },
-  { value: "prefers_not_to_work", label: "Prefers not" },
-  { value: "prefers_to_work", label: "Prefers to work" }
-];
-
-const shiftAvailabilityOptions: Array<{
-  value: ShiftAvailabilityValue;
-  label: string;
-}> = [
-  { value: "available", label: "Διαθέσιμος" },
-  { value: "cannot_work", label: "Δεν μπορεί" },
-  { value: "prefers_not_to_work", label: "Προτιμά να μη δουλέψει" },
-  { value: "prefers_to_work", label: "Προτιμά να δουλέψει" }
-];
-
-const employmentTypeOptions: Array<{
-  value: EmploymentType;
-  label: string;
-}> = [
-  { value: "full_time", label: "Πλήρης απασχόληση" },
-  { value: "part_time", label: "Μερική απασχόληση" },
-  {
-    value: "weekly_hours",
-    label: "Συμφωνημένες εβδομαδιαίες ώρες"
-  },
-  { value: "custom", label: "Custom" }
-];
-
 type EmploymentPatternPresetId = "full_time_8h" | "part_time_6h" | "part_time_4h";
 
 const employmentPatternPresets: Array<{
@@ -9286,14 +8060,6 @@ const employmentPatternPresets: Array<{
   { id: "full_time_8h", label: "5x8" },
   { id: "part_time_6h", label: "5x6" },
   { id: "part_time_4h", label: "5x4" }
-];
-
-const timeOffTypes = [
-  { value: "day_off", label: "Day off" },
-  { value: "vacation", label: "Vacation" },
-  { value: "sick_leave", label: "Sick leave" },
-  { value: "personal", label: "Personal" },
-  { value: "other", label: "Other" }
 ];
 
 function dayConstraintValue(
@@ -9368,35 +8134,6 @@ function createTimeOffForm(employees: Employee[]): TimeOffForm {
   };
 }
 
-function validateTimeOffForm(
-  form: TimeOffForm,
-  employees: Employee[]
-): string[] {
-  const errors: string[] = [];
-
-  if (!form.employeeId || !employees.some((employee) => employee.id === form.employeeId)) {
-    errors.push("Choose an employee.");
-  }
-
-  if (!form.dateFrom) {
-    errors.push("Date from is required.");
-  }
-
-  if (!form.dateTo) {
-    errors.push("Date to is required.");
-  }
-
-  if (form.dateFrom && form.dateTo && form.dateTo < form.dateFrom) {
-    errors.push("Date to cannot be before date from.");
-  }
-
-  if (!timeOffTypes.some((type) => type.value === form.type)) {
-    errors.push("Choose a valid time off type.");
-  }
-
-  return errors;
-}
-
 function employeeName(employeeId: string, employees: Employee[]): string {
   const employee = employees.find((item) => item.id === employeeId);
 
@@ -9405,10 +8142,6 @@ function employeeName(employeeId: string, employees: Employee[]): string {
   }
 
   return `${employee.first_name} ${employee.last_name}`;
-}
-
-function timeOffTypeLabel(value: string): string {
-  return timeOffTypes.find((type) => type.value === value)?.label ?? value;
 }
 
 function createEmployeeForm(): EmployeeForm {
@@ -9578,53 +8311,6 @@ function normalizeEmploymentType(value: unknown): EmploymentType {
     : "custom";
 }
 
-function validateEmployeeForm(form: EmployeeForm): string[] {
-  const errors: string[] = [];
-
-  if (!form.firstName.trim()) {
-    errors.push("Το όνομα είναι υποχρεωτικό.");
-  }
-
-  if (!form.lastName.trim()) {
-    errors.push("Το επώνυμο είναι υποχρεωτικό.");
-  }
-
-  if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-    errors.push("Συμπληρώστε έγκυρο email.");
-  }
-
-  const contractDays = parseOptionalNumber(form.workRules.contractDaysPerWeek);
-  const preferredHoursPerDay = parseOptionalNumber(
-    form.workRules.preferredHoursPerDay
-  );
-  const contractHours = parseOptionalNumber(form.workRules.contractHoursPerWeek);
-  const maxConsecutiveDays = parseOptionalNumber(
-    form.workRules.maxConsecutiveDays
-  );
-
-  if (contractDays === null || contractDays < 1 || contractDays > 7) {
-    errors.push("Οι ημέρες / εβδομάδα πρέπει να είναι από 1 έως 7.");
-  }
-
-  if (preferredHoursPerDay === null || preferredHoursPerDay <= 0) {
-    errors.push("Οι ώρες / ημέρα πρέπει να είναι θετικός αριθμός.");
-  }
-
-  if (contractHours === null || contractHours <= 0) {
-    errors.push("Οι ώρες / εβδομάδα πρέπει να είναι θετικός αριθμός.");
-  }
-
-  if (
-    maxConsecutiveDays === null ||
-    maxConsecutiveDays < 1 ||
-    maxConsecutiveDays > 7
-  ) {
-    errors.push("Οι μέγιστες συνεχόμενες ημέρες πρέπει να είναι από 1 έως 7.");
-  }
-
-  return errors;
-}
-
 async function syncEmployeeRoleAssignments(
   employeeId: string,
   form: EmployeeForm,
@@ -9741,41 +8427,6 @@ function optionalNumberToString(value: number | null | undefined): string {
   return String(value);
 }
 
-function employeeRoleLabels(roleIds: string[], roles: Role[]): string {
-  if (roleIds.length === 0) {
-    return "No roles";
-  }
-
-  return roleIds.map((roleId) => roleLabel(roleId, roles)).join(", ");
-}
-
-function workRulesSummary(workRules: EmployeeWorkRules | null): string {
-  if (!workRules) {
-    return "Δεν έχουν οριστεί κανόνες εργασίας";
-  }
-
-  const employmentType = employmentTypeOptions.find(
-    (option) => option.value === normalizeEmploymentType(workRules.employment_type)
-  )?.label;
-  const days =
-    workRules.contract_days_per_week ??
-    workRules.target_days_per_week ??
-    workRules.max_days_per_week ??
-    "-";
-  const hours =
-    workRules.contract_hours_per_week ??
-    workRules.target_hours_per_week ??
-    workRules.preferred_hours_per_week ??
-    "-";
-  const hoursPerDay = workRules.preferred_hours_per_day ?? "-";
-  const weekends =
-    workRules.can_work_weekends === 0
-      ? "όχι Σαββατοκύριακα"
-      : "Σαββατοκύριακα οκ";
-
-  return `${employmentType ?? "Custom"}: ${days} ημέρες, ${hoursPerDay} ώρες/ημέρα, ${hours} ώρες/εβδομάδα, ${weekends}`;
-}
-
 function renderPage(
   pageId: PageId,
   summary: DashboardSummary,
@@ -9786,7 +8437,6 @@ function renderPage(
     onDataChanged: (message: string) => Promise<void>;
     onLoadDemoData: () => void;
     onResetLocalData: () => void;
-    onOpenSettings: () => void;
     onProgramGenerated: (runId: string, message: string) => Promise<void>;
     onProgramDeleted: (message: string) => Promise<void>;
     onViewProgram: (runId: string) => void;
@@ -9801,27 +8451,7 @@ function renderPage(
         language={appLanguage(summary.businessSettings)}
         isLoadingDemoData={actions.isLoadingDemoData}
         onLoadDemoData={actions.onLoadDemoData}
-        onOpenSettings={actions.onOpenSettings}
-      />
-    );
-  }
-
-  if (pageId === "dashboard") {
-    return (
-      <Dashboard
-        summary={summary}
-        isLoadingDemoData={actions.isLoadingDemoData}
-        onLoadDemoData={actions.onLoadDemoData}
-      />
-    );
-  }
-
-  if (pageId === "business-settings") {
-    return (
-      <BusinessSettingsEditor
-        settings={summary.businessSettings}
-        language={appLanguage(summary.businessSettings)}
-        onSaved={() =>
+        onSettingsSaved={() =>
           onDataChanged(
             appLanguage(summary.businessSettings) === "en"
               ? "Settings saved."
@@ -9840,23 +8470,6 @@ function renderPage(
         shiftTemplates={summary.shiftTemplates}
         staffingRequirements={summary.staffingRequirements}
         onChanged={(message) => onDataChanged(message)}
-      />
-    );
-  }
-
-  if (false && pageId === "opening-hours") {
-    return (
-      <RecordListPage
-        title="Ώρες λειτουργίας"
-        description="Οι εγγραφές δημιουργούνται από τον οδηγό πρώτης ρύθμισης."
-        emptyLabel="Δεν υπάρχουν ώρες λειτουργίας."
-        rows={summary.openingHours.map((row) => ({
-          id: row.id,
-          title: dayLabel(row.day_of_week),
-          detail: row.is_open
-            ? `${row.open_time} - ${row.close_time}${row.is_overnight ? " (overnight)" : ""}`
-            : "Κλειστά"
-        }))}
       />
     );
   }
@@ -9883,28 +8496,6 @@ function renderPage(
         employeeDayConstraints={summary.employeeDayConstraints}
         employeeShiftAvailability={summary.employeeShiftAvailability}
         shiftTemplates={summary.shiftTemplates}
-        timeOff={summary.timeOff}
-        onChanged={(message) => onDataChanged(message)}
-      />
-    );
-  }
-
-  if (pageId === "employee-constraints") {
-    return (
-      <EmployeeConstraintsPage
-        employees={summary.employees}
-        constraints={summary.employeeDayConstraints}
-        shiftTemplates={summary.shiftTemplates}
-        shiftAvailability={summary.employeeShiftAvailability}
-        onChanged={(message) => onDataChanged(message)}
-      />
-    );
-  }
-
-  if (pageId === "time-off") {
-    return (
-      <TimeOffPage
-        employees={summary.employees}
         timeOff={summary.timeOff}
         onChanged={(message) => onDataChanged(message)}
       />
@@ -10007,116 +8598,7 @@ function renderPage(
     );
   }
 
-  const page = pages.find((item) => item.id === pageId);
-
-  return (
-    <div className="max-w-3xl">
-      <p className="text-base leading-7 text-slate-600">{page?.description}</p>
-      <div className="mt-8 rounded-lg border border-dashed border-slate-300 bg-white p-6">
-        <h3 className="text-base font-semibold tracking-normal">
-          Δεν έχει υλοποιηθεί ακόμα
-        </h3>
-        <p className="mt-2 text-sm leading-6 text-slate-500">
-          Αυτή η λειτουργία ανήκει σε επόμενη φάση. Δεν προστέθηκαν απαιτήσεις
-          προσωπικού, εργαζόμενοι ή αλγόριθμος προγράμματος.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Dashboard({
-  summary,
-  isLoadingDemoData,
-  onLoadDemoData
-}: {
-  summary: DashboardSummary;
-  isLoadingDemoData: boolean;
-  onLoadDemoData: () => void;
-}) {
-  const businessName = summary.businessSettings?.business_name ?? "JProgrammer";
-
-  return (
-    <div className="max-w-5xl">
-      <div className="flex items-start justify-between gap-6">
-        <p className="text-base leading-7 text-slate-600">
-          Η αρχική ρύθμιση ολοκληρώθηκε για{" "}
-          <span className="font-semibold text-slate-900">{businessName}</span>.
-        </p>
-        <button
-          type="button"
-          onClick={onLoadDemoData}
-          disabled={isLoadingDemoData}
-          className={secondaryButtonClassName}
-        >
-          {isLoadingDemoData ? "Loading demo..." : "Load Demo Data"}
-        </button>
-      </div>
-
-      <div className="mt-6 grid grid-cols-4 gap-4">
-        <SummaryTile label="Opening days" value={openDayCount(summary.openingHours)} />
-        <SummaryTile label="Roles" value={summary.roles.length} />
-        <SummaryTile label="Shift templates" value={summary.shiftTemplates.length} />
-        <SummaryTile
-          label="Week starts"
-          value={
-            summary.businessSettings?.week_starts_on === 0 ? "Sunday" : "Monday"
-          }
-        />
-      </div>
-
-      <div className="mt-8 rounded-lg border border-slate-200 bg-white p-6">
-        <h3 className="text-base font-semibold tracking-normal">
-          Επόμενα βήματα
-        </h3>
-        <p className="mt-2 text-sm leading-6 text-slate-500">
-          Η βάση δεδομένων έχει τα βασικά στοιχεία. Οι απαιτήσεις προσωπικού,
-          οι εργαζόμενοι και η δημιουργία προγράμματος παραμένουν εκτός Phase 3.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function RecordListPage({
-  title,
-  description,
-  emptyLabel,
-  rows
-}: {
-  title: string;
-  description: string;
-  emptyLabel: string;
-  rows: Array<{ id: string; title: string; detail: string; color?: string | null }>;
-}) {
-  return (
-    <div className="max-w-4xl">
-      <SectionHeading title={title} description={description} />
-
-      <div className="mt-6 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
-        {rows.length === 0 ? (
-          <p className="px-5 py-4 text-sm text-slate-500">{emptyLabel}</p>
-        ) : (
-          rows.map((row) => (
-            <div key={row.id} className="flex items-center gap-3 px-5 py-4">
-              {row.color ? (
-                <span
-                  className="h-3 w-3 rounded-full"
-                  style={{ backgroundColor: row.color }}
-                />
-              ) : null}
-              <div>
-                <p className="text-sm font-semibold text-slate-900">
-                  {row.title}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">{row.detail}</p>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
+  return null;
 }
 
 function SimpleInfoPage({

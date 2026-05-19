@@ -2199,7 +2199,8 @@ function validateFinalScheduleHardConstraints({
   runSlots,
   assignments,
   employees,
-  data
+  data,
+  manualOverrides
 }: {
   runSlots: ScheduleSlot[];
   assignments: ScheduleAssignment[];
@@ -2256,7 +2257,8 @@ function validateFinalScheduleHardConstraints({
       employee,
       slot,
       data,
-      assignedShifts: assignedShiftsWithoutCurrent
+      assignedShifts: assignedShiftsWithoutCurrent,
+      manualOverrides
     });
 
     if (!hardConstraintResult.allowed) {
