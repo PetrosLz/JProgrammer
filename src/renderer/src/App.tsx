@@ -1,5 +1,4 @@
 import { format } from "date-fns";
-import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { databaseApi } from "../services/databaseApi";
 import { loadDemoData } from "../services/demoData";
@@ -31,8 +30,6 @@ import type {
   ExperienceLevel
 } from "../types";
 import {
-  createBlankRole,
-  createBlankShiftTemplate,
   createInitialSetupDraft,
   dayLabels,
   hasAnyRoleValue,
@@ -49,21 +46,53 @@ import {
   type ShiftTemplateDraft
 } from "./setupData";
 import {
-  businessTypePresets,
-  createRoleDraftsFromBusinessTypePreset,
-  getBusinessTypePresetById,
-  getBusinessTypePresetIdForValue,
-  isRoleDraftListEffectivelyEmpty,
-  type BusinessTypePresetId
-} from "./businessTypePresets";
+  ConfirmActionModal,
+  DeleteProgramConfirmModal
+} from "./components/ConfirmActionModal";
+import { ErrorList } from "./components/ErrorList";
+import { Field, NumberField } from "./components/Field";
+import { ColorSelect } from "./components/ColorSelect";
+import { LoadingScreen } from "./components/LoadingScreen";
+import { SectionHeading } from "./components/SectionHeading";
+import { SummaryTile } from "./components/SummaryTile";
+import { LocalizedStatusBadge, StatusBadge } from "./components/StatusBadge";
+import {
+  inputClassName,
+  secondaryButtonClassName
+} from "./components/styles";
+import { getErrorMessage } from "./utils/errors";
+import { appLanguage, type UiLanguage } from "./utils/localization";
+import {
+  WarningBadge,
+  buildEmployeeScheduleRows,
+  buildManagerCoverageIssues,
+  buildManagerReportPdfHtml,
+  buildScheduleRows,
+  buildShortageSummaryLines,
+  buildTeamSchedulePdfHtml,
+  employeeName,
+  formatCompactDateRange,
+  formatDateEu,
+  formatHours,
+  groupUnfilledSlotsByDate,
+  groupWarningsBySlot,
+  localizedDayLabels,
+  localizedDayName,
+  managerFriendlyWarningMessage,
+  roleLabel,
+  safeFileNamePart,
+  scheduleRowKey,
+  shiftNameForSlot,
+  shortEmployeeName
+} from "./utils/scheduleDisplay";
+import { BusinessInfoForm, SetupWizard } from "./pages/SetupWizard";
+import { BackupRestorePage, SimpleInfoPage } from "./pages/BackupRestorePage";
+import { GenerateSchedulePage } from "./pages/GenerateSchedulePage";
+import { deleteGeneratedProgram } from "./utils/scheduleRuns";
 import {
   addDays,
-  assignEmployeesToRun,
-  buildScheduleGenerationPlan,
   getDayOfWeek,
   getSlotDurationHours,
-  getWeekRangeForDate,
-  isDateInputValue,
   saveManualAssignmentChange,
   splitManualAssignmentViolations,
   validateManualAssignmentChange,
@@ -132,7 +161,7 @@ const emptySummary: DashboardSummary = {
   setupCompletedAt: null
 };
 
-type UiLanguage = "el" | "en";
+type AppConfirmAction = "load-demo" | "reset-local-data";
 
 type NavigationGroup = {
   title: string;
@@ -141,10 +170,6 @@ type NavigationGroup = {
     title: string;
   }>;
 };
-
-function appLanguage(settings: BusinessSettings | null): UiLanguage {
-  return settings?.language === "en" ? "en" : "el";
-}
 
 function navigationGroups(language: UiLanguage): NavigationGroup[] {
   if (language === "en") {
@@ -245,12 +270,18 @@ export function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingDemoData, setIsLoadingDemoData] = useState(false);
   const [isResettingApp, setIsResettingApp] = useState(false);
+  const [pendingAppConfirmAction, setPendingAppConfirmAction] =
+    useState<AppConfirmAction | null>(null);
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [selectedScheduleRunId, setSelectedScheduleRunId] = useState<
     string | null
   >(null);
 
   const language = appLanguage(summary.businessSettings);
+  const setupLanguage: UiLanguage =
+    setupDraft.businessInfo.language === "en" ? "en" : "el";
+  const confirmationLanguage =
+    appState === "setup" ? setupLanguage : language;
   const sidebarGroups = useMemo(() => navigationGroups(language), [language]);
   const sidebarItems = useMemo(
     () => sidebarGroups.flatMap((group) => group.items),
@@ -394,14 +425,6 @@ export function App() {
   }
 
   async function handleLoadDemoData() {
-    const confirmed = window.confirm(
-      "Η φόρτωση demo δεδομένων θα αντικαταστήσει τα τρέχοντα τοπικά δεδομένα με το Demo Cafe. Συνέχεια;"
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
     setErrors([]);
     setNotice("");
     setIsLoadingDemoData(true);
@@ -420,18 +443,11 @@ export function App() {
       setErrors([getErrorMessage(error)]);
     } finally {
       setIsLoadingDemoData(false);
+      setPendingAppConfirmAction(null);
     }
   }
 
   async function handleResetLocalData() {
-    const confirmed = window.confirm(
-      "Αυτό θα διαγράψει οριστικά όλα τα τοπικά δεδομένα της εφαρμογής, όπως εργαζόμενους, ρόλους, βάρδιες, προγράμματα, προειδοποιήσεις και ρυθμίσεις. Δεν μπορεί να αναιρεθεί. Συνέχεια;"
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
     setErrors([]);
     setNotice("");
     setIsResettingApp(true);
@@ -448,8 +464,58 @@ export function App() {
       setErrors([getErrorMessage(error)]);
     } finally {
       setIsResettingApp(false);
+      setPendingAppConfirmAction(null);
     }
   }
+
+  const pendingAppConfirmModal = pendingAppConfirmAction ? (
+    <ConfirmActionModal
+      language={confirmationLanguage}
+      title={
+        pendingAppConfirmAction === "load-demo"
+          ? confirmationLanguage === "en"
+            ? "Load demo data"
+            : "Φόρτωση demo δεδομένων"
+          : confirmationLanguage === "en"
+            ? "Delete all local data"
+            : "Διαγραφή όλων των τοπικών δεδομένων"
+      }
+      body={
+        pendingAppConfirmAction === "load-demo"
+          ? confirmationLanguage === "en"
+            ? "Loading demo data will replace the current local data with Demo Cafe. This action cannot be undone. Do you want to continue?"
+            : "Η φόρτωση demo δεδομένων θα αντικαταστήσει τα τρέχοντα τοπικά δεδομένα με το Demo Cafe. Η ενέργεια δεν μπορεί να αναιρεθεί. Θέλετε να συνεχίσετε;"
+          : confirmationLanguage === "en"
+            ? "This will permanently delete employees, roles, shifts, schedules, warnings and settings. This action cannot be undone."
+            : "Αυτό θα διαγράψει οριστικά εργαζόμενους, ρόλους, βάρδιες, προγράμματα, προειδοποιήσεις και ρυθμίσεις. Η ενέργεια δεν μπορεί να αναιρεθεί."
+      }
+      confirmLabel={
+        pendingAppConfirmAction === "load-demo"
+          ? confirmationLanguage === "en"
+            ? "Load demo"
+            : "Φόρτωση demo"
+          : confirmationLanguage === "en"
+            ? "Delete all"
+            : "Διαγραφή όλων"
+      }
+      cancelLabel={confirmationLanguage === "en" ? "Cancel" : "Ακύρωση"}
+      variant={pendingAppConfirmAction === "load-demo" ? "warning" : "danger"}
+      isWorking={
+        pendingAppConfirmAction === "load-demo"
+          ? isLoadingDemoData
+          : isResettingApp
+      }
+      onCancel={() => setPendingAppConfirmAction(null)}
+      onConfirm={() => {
+        if (pendingAppConfirmAction === "load-demo") {
+          void handleLoadDemoData();
+          return;
+        }
+
+        void handleResetLocalData();
+      }}
+    />
+  ) : null;
 
   if (appState === "loading") {
     return <LoadingScreen />;
@@ -457,20 +523,24 @@ export function App() {
 
   if (appState === "setup") {
     return (
-      <SetupWizard
-        activeStep={activeStep}
-        draft={setupDraft}
-        errors={errors}
-        isSaving={isSaving}
-        isLoadingDemoData={isLoadingDemoData}
-        onBack={() => {
-          setErrors([]);
-          setActiveStep((step) => Math.max(0, step - 1));
-        }}
-        onChange={setSetupDraft}
-        onLoadDemoData={() => void handleLoadDemoData()}
-        onNext={handleWizardNext}
-      />
+      <>
+        <SetupWizard
+          activeStep={activeStep}
+          draft={setupDraft}
+          errors={errors}
+          isSaving={isSaving}
+          isLoadingDemoData={isLoadingDemoData}
+          onBack={() => {
+            setErrors([]);
+            setActiveStep((step) => Math.max(0, step - 1));
+          }}
+          onChange={setSetupDraft}
+          language={setupLanguage}
+          onLoadDemoData={() => setPendingAppConfirmAction("load-demo")}
+          onNext={handleWizardNext}
+        />
+        {pendingAppConfirmModal}
+      </>
     );
   }
 
@@ -545,8 +615,8 @@ export function App() {
               await refreshSummary();
               setNotice(message);
             },
-            onLoadDemoData: () => void handleLoadDemoData(),
-            onResetLocalData: () => void handleResetLocalData(),
+            onLoadDemoData: () => setPendingAppConfirmAction("load-demo"),
+            onResetLocalData: () => setPendingAppConfirmAction("reset-local-data"),
             onProgramGenerated: async (runId, message) => {
               await refreshSummary();
               setSelectedScheduleRunId(runId);
@@ -567,632 +637,7 @@ export function App() {
           })}
         </section>
       </main>
-    </div>
-  );
-}
-
-function SetupWizard({
-  activeStep,
-  draft,
-  errors,
-  isSaving,
-  isLoadingDemoData,
-  onBack,
-  onChange,
-  onLoadDemoData,
-  onNext
-}: {
-  activeStep: number;
-  draft: SetupDraft;
-  errors: string[];
-  isSaving: boolean;
-  isLoadingDemoData: boolean;
-  onBack: () => void;
-  onChange: (draft: SetupDraft) => void;
-  onLoadDemoData: () => void;
-  onNext: () => void;
-}) {
-  const setupStepLabels = [
-    { title: "Στοιχεία", detail: "Επιχείρηση" },
-    { title: "Ωράριο", detail: "Λειτουργία" },
-    { title: "Ρόλοι", detail: "Ομάδα" },
-    { title: "Βάρδιες", detail: "Πρότυπα" }
-  ];
-  const currentStep = setupStepLabels[activeStep] ?? setupStepLabels[0];
-
-  function handleBusinessTypePresetChange(presetId: BusinessTypePresetId) {
-    const preset = getBusinessTypePresetById(presetId);
-    const nextBusinessInfo = {
-      ...draft.businessInfo,
-      businessType: preset.businessTypeValue
-    };
-    let nextRoles = draft.roles;
-    const rolesAreEmpty = isRoleDraftListEffectivelyEmpty(draft.roles);
-
-    if (preset.id === "custom") {
-      if (rolesAreEmpty) {
-        nextRoles = [createBlankRole()];
-      } else if (
-        window.confirm(
-          "Η επιλογή Προσαρμοσμένο μπορεί να καθαρίσει τους προτεινόμενους ρόλους. Θέλετε να ξεκινήσετε από κενή λίστα;"
-        )
-      ) {
-        nextRoles = [createBlankRole()];
-      }
-
-      onChange({
-        ...draft,
-        businessInfo: nextBusinessInfo,
-        roles: nextRoles
-      });
-      return;
-    }
-
-    const presetRoles = createRoleDraftsFromBusinessTypePreset(preset);
-
-    if (rolesAreEmpty) {
-      nextRoles = presetRoles;
-    } else if (
-      window.confirm(
-        "Η αλλαγή τύπου επιχείρησης μπορεί να αντικαταστήσει τους προτεινόμενους ρόλους. Θέλετε να εφαρμοστεί το νέο preset;"
-      )
-    ) {
-      nextRoles = presetRoles;
-    }
-
-    onChange({
-      ...draft,
-      businessInfo: nextBusinessInfo,
-      roles: nextRoles
-    });
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-100 px-6 py-8 text-slate-950">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-700">
-              Πρώτη ρύθμιση
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-normal text-slate-950">
-              Ρύθμιση επιχείρησης
-            </h1>
-            <p className="mt-2 text-sm text-slate-600">
-              Λίγα βασικά στοιχεία για να ξεκινήσει το πρόγραμμα.
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-emerald-200 bg-white px-4 py-3 shadow-sm lg:w-[340px]">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-sm font-semibold tracking-normal text-slate-950">
-                  Demo Cafe
-                </h2>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  Γρήγορη φόρτωση δοκιμαστικών δεδομένων.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={onLoadDemoData}
-                disabled={isLoadingDemoData}
-                className="whitespace-nowrap rounded-md border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isLoadingDemoData ? "Φόρτωση..." : "Φόρτωση"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-6 py-5">
-            <div className="flex items-center gap-3">
-              {setupSteps.map((step, index) => {
-                const isActive = index === activeStep;
-                const isComplete = index < activeStep;
-
-                return (
-                  <div key={step} className="flex items-center gap-3">
-                    <div
-                      className={[
-                        "flex h-9 min-w-9 items-center justify-center rounded-full border text-sm font-semibold transition",
-                        isActive
-                          ? "border-emerald-700 bg-emerald-700 text-white"
-                          : isComplete
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                            : "border-slate-200 bg-white text-slate-400"
-                      ].join(" ")}
-                    >
-                      {isComplete ? "✓" : index + 1}
-                    </div>
-                    {isActive ? (
-                      <div className="mr-2 hidden sm:block">
-                        <p className="text-sm font-semibold text-slate-950">
-                          {setupStepLabels[index]?.title}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {setupStepLabels[index]?.detail}
-                        </p>
-                      </div>
-                    ) : null}
-                    {index < setupSteps.length - 1 ? (
-                      <div className="h-px w-8 bg-slate-200 sm:w-12" />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-5 flex items-end justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Βήμα {activeStep + 1} από {setupSteps.length}
-                </p>
-                <h2 className="mt-1 text-xl font-semibold tracking-normal text-slate-950">
-                  {currentStep.title}
-                </h2>
-              </div>
-              <span className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
-                Τοπική SQLite
-              </span>
-            </div>
-          </div>
-
-          <section className="px-6 py-6">
-            {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-
-            {activeStep === 0 ? (
-              <BusinessInfoForm
-                value={draft.businessInfo}
-                onChange={(businessInfo) => onChange({ ...draft, businessInfo })}
-                onBusinessTypePresetChange={handleBusinessTypePresetChange}
-              />
-            ) : null}
-
-            {activeStep === 1 ? (
-              <OpeningHoursGrid
-                value={draft.openingHours}
-                onChange={(openingHours) => onChange({ ...draft, openingHours })}
-              />
-            ) : null}
-
-            {activeStep === 2 ? (
-              <RolesEditor
-                value={draft.roles}
-                onChange={(roles) => onChange({ ...draft, roles })}
-              />
-            ) : null}
-
-            {activeStep === 3 ? (
-              <ShiftTemplatesEditor
-                value={draft.shiftTemplates}
-                onChange={(shiftTemplates) =>
-                  onChange({ ...draft, shiftTemplates })
-                }
-              />
-            ) : null}
-
-            <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-5">
-              <button
-                type="button"
-                onClick={onBack}
-                disabled={activeStep === 0 || isSaving}
-                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Πίσω
-              </button>
-              <button
-                type="button"
-                onClick={onNext}
-                disabled={isSaving}
-                className="rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSaving
-                  ? "Αποθήκευση..."
-                  : activeStep === setupSteps.length - 1
-                    ? "Ολοκλήρωση"
-                    : "Συνέχεια"}
-              </button>
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BusinessInfoForm({
-  value,
-  onChange,
-  onBusinessTypePresetChange,
-  language = "el",
-  showLocationField = false,
-  showWeekStartsOnField = false
-}: {
-  value: BusinessInfoDraft;
-  onChange: (value: BusinessInfoDraft) => void;
-  onBusinessTypePresetChange?: (presetId: BusinessTypePresetId) => void;
-  language?: UiLanguage;
-  showLocationField?: boolean;
-  showWeekStartsOnField?: boolean;
-}) {
-  const selectedPresetId = getBusinessTypePresetIdForValue(value.businessType);
-
-  return (
-    <div>
-      <SectionHeading
-        title={language === "en" ? "Business details" : "Στοιχεία επιχείρησης"}
-        description={
-          language === "en"
-            ? "Business name, type and app language."
-            : "Όνομα, τύπος επιχείρησης και γλώσσα εφαρμογής."
-        }
-      />
-
-      <div className="mt-6 grid max-w-3xl gap-4 md:grid-cols-2">
-        <Field label={language === "en" ? "Business name" : "Όνομα επιχείρησης"} required>
-          <input
-            value={value.businessName}
-            onChange={(event) =>
-              onChange({ ...value, businessName: event.target.value })
-            }
-            className={inputClassName}
-            placeholder="π.χ. My Cafe"
-          />
-        </Field>
-
-        <Field label={language === "en" ? "Business type" : "Τύπος επιχείρησης"}>
-          <select
-            value={selectedPresetId}
-            onChange={(event) => {
-              const presetId = event.target.value as BusinessTypePresetId;
-
-              if (onBusinessTypePresetChange) {
-                onBusinessTypePresetChange(presetId);
-                return;
-              }
-
-              onChange({
-                ...value,
-                businessType: getBusinessTypePresetById(presetId)
-                  .businessTypeValue
-              });
-            }}
-            className={inputClassName}
-          >
-            {businessTypePresets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            {language === "en"
-              ? "Suggests roles you can edit in the next step."
-              : "Προτείνει ρόλους που μπορείτε να αλλάξετε στο επόμενο βήμα."}
-          </p>
-        </Field>
-
-        {selectedPresetId === "custom" ? (
-          <Field label={language === "en" ? "Custom type" : "Προσαρμοσμένος τύπος"}>
-            <input
-              value={value.businessType}
-              onChange={(event) =>
-                onChange({ ...value, businessType: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="π.χ. Bakery, Pharmacy, Salon"
-            />
-          </Field>
-        ) : null}
-
-        {showLocationField ? (
-          <Field label={language === "en" ? "Location" : "Τοποθεσία"}>
-            <input
-              value={value.location}
-              onChange={(event) =>
-                onChange({ ...value, location: event.target.value })
-              }
-              className={inputClassName}
-              placeholder="π.χ. Αθήνα"
-            />
-          </Field>
-        ) : null}
-
-        {showWeekStartsOnField ? (
-          <Field label={language === "en" ? "Week starts on" : "Πρώτη ημέρα εβδομάδας"}>
-            <select
-              value={value.weekStartsOn}
-              onChange={(event) =>
-                onChange({
-                  ...value,
-                  weekStartsOn: Number(event.target.value) as 0 | 1
-                })
-              }
-              className={inputClassName}
-            >
-              <option value={1}>{language === "en" ? "Monday" : "Δευτέρα"}</option>
-              <option value={0}>{language === "en" ? "Sunday" : "Κυριακή"}</option>
-            </select>
-          </Field>
-        ) : null}
-
-        <Field label={language === "en" ? "Language" : "Γλώσσα"}>
-          <select
-            value={value.language}
-            onChange={(event) =>
-              onChange({
-                ...value,
-                language: event.target.value as BusinessInfoDraft["language"]
-              })
-            }
-            className={inputClassName}
-          >
-            <option value="el">Ελληνικά</option>
-            <option value="en">English</option>
-          </select>
-        </Field>
-      </div>
-    </div>
-  );
-}
-
-function OpeningHoursGrid({
-  value,
-  onChange
-}: {
-  value: OpeningHoursDraft[];
-  onChange: (value: OpeningHoursDraft[]) => void;
-}) {
-  function updateDay(dayOfWeek: number, nextValue: Partial<OpeningHoursDraft>) {
-    onChange(
-      value.map((day) =>
-        day.dayOfWeek === dayOfWeek ? { ...day, ...nextValue } : day
-      )
-    );
-  }
-
-  return (
-    <div>
-      <SectionHeading
-        title="Ώρες λειτουργίας"
-        description="Ορίστε το βασικό εβδομαδιαίο ωράριο."
-      />
-
-      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200">
-        <div className="grid grid-cols-[1.2fr_0.7fr_1fr_1fr_0.8fr] bg-slate-100 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Ημέρα</span>
-          <span>Ανοικτά</span>
-          <span>Άνοιγμα</span>
-          <span>Κλείσιμο</span>
-          <span>Overnight</span>
-        </div>
-
-        {value.map((day) => (
-          <div
-            key={day.dayOfWeek}
-            className="grid grid-cols-[1.2fr_0.7fr_1fr_1fr_0.8fr] items-center gap-3 border-t border-slate-200 px-4 py-3"
-          >
-            <span className="text-sm font-medium text-slate-800">
-              {day.label}
-            </span>
-            <input
-              type="checkbox"
-              checked={day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { isOpen: event.target.checked })
-              }
-              className="h-4 w-4"
-            />
-            <input
-              type="time"
-              value={day.openTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { openTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <input
-              type="time"
-              value={day.closeTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { closeTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <input
-              type="checkbox"
-              checked={day.isOvernight}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, {
-                  isOvernight: event.target.checked
-                })
-              }
-              className="h-4 w-4"
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function RolesEditor({
-  value,
-  onChange
-}: {
-  value: RoleDraft[];
-  onChange: (value: RoleDraft[]) => void;
-}) {
-  function updateRole(index: number, nextValue: Partial<RoleDraft>) {
-    onChange(
-      value.map((role, roleIndex) =>
-        roleIndex === index ? { ...role, ...nextValue } : role
-      )
-    );
-  }
-
-  return (
-    <div>
-      <SectionHeading
-        title="Προσαρμοσμένοι ρόλοι"
-        description="Επεξεργαστείτε τους προτεινόμενους ρόλους ή προσθέστε δικούς σας."
-      />
-
-      <div className="mt-6 space-y-4">
-        {value.map((role, index) => (
-          <div
-            key={index}
-            className="grid grid-cols-[1fr_140px_1.4fr_auto] gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
-          >
-            <Field label="Όνομα ρόλου">
-              <input
-                value={role.name}
-                onChange={(event) =>
-                  updateRole(index, { name: event.target.value })
-                }
-                className={inputClassName}
-                placeholder="π.χ. Barista"
-              />
-            </Field>
-            <Field label="Χρώμα">
-              <ColorSelect
-                value={role.color}
-                onChange={(color) => updateRole(index, { color })}
-              />
-            </Field>
-            <Field label="Περιγραφή">
-              <input
-                value={role.description}
-                onChange={(event) =>
-                  updateRole(index, { description: event.target.value })
-                }
-                className={inputClassName}
-                placeholder="Προαιρετικά"
-              />
-            </Field>
-            <button
-              type="button"
-              onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}
-              className="self-end rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600"
-            >
-              Διαγραφή
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onChange([...value, createBlankRole()])}
-        className="mt-5 rounded-md border border-emerald-300 px-4 py-2 text-sm font-medium text-emerald-800"
-      >
-        Προσθήκη ρόλου
-      </button>
-    </div>
-  );
-}
-
-function ShiftTemplatesEditor({
-  value,
-  onChange
-}: {
-  value: ShiftTemplateDraft[];
-  onChange: (value: ShiftTemplateDraft[]) => void;
-}) {
-  function updateTemplate(index: number, nextValue: Partial<ShiftTemplateDraft>) {
-    onChange(
-      value.map((template, templateIndex) =>
-        templateIndex === index ? { ...template, ...nextValue } : template
-      )
-    );
-  }
-
-  return (
-    <div>
-      <SectionHeading
-        title="Πρότυπα βαρδιών"
-        description="Δημιουργήστε τις βασικές βάρδιες που χρησιμοποιείτε συχνά."
-      />
-
-      <div className="mt-6 space-y-4">
-        {value.map((template, index) => (
-          <div
-            key={index}
-            className="grid grid-cols-[1fr_130px_130px_110px_130px_auto] gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
-          >
-            <Field label="Όνομα">
-              <input
-                value={template.name}
-                onChange={(event) =>
-                  updateTemplate(index, { name: event.target.value })
-                }
-                className={inputClassName}
-                placeholder="π.χ. Morning"
-              />
-            </Field>
-            <Field label="Έναρξη">
-              <input
-                type="time"
-                value={template.startTime}
-                onChange={(event) =>
-                  updateTemplate(index, { startTime: event.target.value })
-                }
-                className={inputClassName}
-              />
-            </Field>
-            <Field label="Λήξη">
-              <input
-                type="time"
-                value={template.endTime}
-                onChange={(event) =>
-                  updateTemplate(index, { endTime: event.target.value })
-                }
-                className={inputClassName}
-              />
-            </Field>
-            <Field label="Overnight">
-              <input
-                type="checkbox"
-                checked={template.isOvernight}
-                onChange={(event) =>
-                  updateTemplate(index, {
-                    isOvernight: event.target.checked
-                  })
-                }
-                className="mt-3 h-4 w-4"
-              />
-            </Field>
-            <Field label="Χρώμα">
-              <ColorSelect
-                value={template.color}
-                onChange={(color) => updateTemplate(index, { color })}
-              />
-            </Field>
-            <button
-              type="button"
-              onClick={() =>
-                onChange(value.filter((_, itemIndex) => itemIndex !== index))
-              }
-              className="self-end rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600"
-            >
-              Διαγραφή
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onChange([...value, createBlankShiftTemplate()])}
-        className="mt-5 rounded-md border border-emerald-300 px-4 py-2 text-sm font-medium text-emerald-800"
-      >
-        Προσθήκη βάρδιας
-      </button>
+      {pendingAppConfirmModal}
     </div>
   );
 }
@@ -1671,538 +1116,6 @@ type TimeOffForm = {
 type OpeningHoursFormRow = OpeningHoursDraft & {
   notes: string;
 };
-
-function GenerateSchedulePage({
-  businessSettings,
-  openingHours,
-  staffingRequirements,
-  specialDays,
-  scheduleRuns,
-  scheduleSlots,
-  scheduleAssignments,
-  scheduleWarnings,
-  employees,
-  employeeRoles,
-  employeeWorkRules,
-  employeeDayConstraints,
-  employeeShiftAvailability,
-  timeOff,
-  roles,
-  shiftTemplates,
-  onProgramGenerated,
-  onProgramDeleted,
-  onViewProgram
-}: {
-  businessSettings: BusinessSettings | null;
-  openingHours: OpeningHours[];
-  staffingRequirements: StaffingRequirement[];
-  specialDays: SpecialDay[];
-  scheduleRuns: ScheduleRun[];
-  scheduleSlots: ScheduleSlot[];
-  scheduleAssignments: ScheduleAssignment[];
-  scheduleWarnings: ScheduleWarning[];
-  employees: Employee[];
-  employeeRoles: EmployeeRole[];
-  employeeWorkRules: EmployeeWorkRules[];
-  employeeDayConstraints: EmployeeDayConstraint[];
-  employeeShiftAvailability: EmployeeShiftAvailability[];
-  timeOff: TimeOff[];
-  roles: Role[];
-  shiftTemplates: ShiftTemplate[];
-  onProgramGenerated: (runId: string, message: string) => Promise<void>;
-  onProgramDeleted: (message: string) => Promise<void>;
-  onViewProgram: (runId: string) => void;
-}) {
-  const [weekStartDate, setWeekStartDate] = useState(() => todayInputValue());
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
-  const [programPendingDelete, setProgramPendingDelete] =
-    useState<ScheduleRun | null>(null);
-  const language = appLanguage(businessSettings);
-  const weekStartsOn: DayOfWeek = businessSettings?.week_starts_on ?? 1;
-  const selectedWeekRange = isDateInputValue(weekStartDate)
-    ? getWeekRangeForDate({
-        selectedDate: weekStartDate,
-        weekStartsOn
-      })
-    : null;
-
-  async function generateProgram() {
-    if (!isDateInputValue(weekStartDate)) {
-      setErrors(["Choose a valid date."]);
-      return;
-    }
-
-    setErrors([]);
-    setIsGenerating(true);
-
-    try {
-      const weekRange = getWeekRangeForDate({
-        selectedDate: weekStartDate,
-        weekStartsOn
-      });
-      const plan = buildScheduleGenerationPlan({
-        weekStartDate: weekRange.weekStartDate,
-        openingHours,
-        staffingRequirements,
-        shiftTemplates,
-        specialDays
-      });
-      const run = await databaseApi.createRecord("schedule_runs", {
-        name: `Weekly schedule ${formatDateRangeEu(plan.weekStartDate, plan.weekEndDate)}`,
-        start_date: plan.weekStartDate,
-        end_date: plan.weekEndDate,
-        status: "generated",
-        parameters_json: JSON.stringify({
-          stage: "slot_generation",
-          type: "weekly",
-          selectedDate: weekRange.selectedDate,
-          weekStartsOn: weekRange.weekStartsOn,
-          weekStartDate: plan.weekStartDate,
-          weekEndDate: plan.weekEndDate
-        }),
-        completed_at: new Date().toISOString()
-      });
-
-      const createdSlots: ScheduleSlot[] = [];
-
-      for (const slot of plan.slots) {
-        const createdSlot = await databaseApi.createRecord("schedule_slots", {
-          schedule_run_id: run.id,
-          date: slot.date,
-          role_id: slot.roleId,
-          start_time: slot.startTime,
-          end_time: slot.endTime,
-          required_count: 1,
-          status: "unfilled",
-          source_type: "staffing_requirement",
-          source_id: slot.sourceId,
-          notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`
-        });
-        createdSlots.push(createdSlot);
-      }
-
-      for (const warning of plan.warnings) {
-        await databaseApi.createRecord("schedule_warnings", {
-          schedule_run_id: run.id,
-          schedule_slot_id: null,
-          schedule_assignment_id: null,
-          severity: warning.severity,
-          warning_type: warning.warningType,
-          message: warning.message
-        });
-      }
-
-      await assignEmployeesToRun({
-        run,
-        slots: [...scheduleSlots, ...createdSlots],
-        employees,
-        employeeRoles,
-        employeeWorkRules,
-        employeeDayConstraints,
-        employeeShiftAvailability,
-        timeOff,
-        roles,
-        shiftTemplates,
-        staffingRequirements,
-        assignments: scheduleAssignments
-      });
-
-      await onProgramGenerated(
-        run.id,
-        "Proposed program generated. Review it in Schedule View."
-      );
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  async function deleteProgram(run: ScheduleRun) {
-    setErrors([]);
-    setDeletingRunId(run.id);
-
-    try {
-      await deleteGeneratedProgram({
-        runId: run.id,
-        scheduleSlots,
-        scheduleAssignments,
-        scheduleWarnings
-      });
-      setProgramPendingDelete(null);
-      await onProgramDeleted(
-        language === "en" ? "Program deleted." : "Το πρόγραμμα διαγράφηκε."
-      );
-    } catch (error) {
-      setErrors([getErrorMessage(error)]);
-    } finally {
-      setDeletingRunId(null);
-    }
-  }
-
-  const recentRuns = [...scheduleRuns]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .slice(0, 5);
-
-  return (
-    <div className="max-w-6xl">
-      <SectionHeading
-        title={language === "en" ? "Generate Program" : "Δημιουργία προγράμματος"}
-        description={
-          language === "en"
-            ? "Generate a proposed weekly schedule based on roles, availability and work rules."
-            : "Δημιουργήστε ένα προτεινόμενο εβδομαδιαίο πρόγραμμα με βάση ρόλους, διαθεσιμότητες και κανόνες."
-        }
-      />
-
-      {errors.length > 0 ? <ErrorList errors={errors} /> : null}
-
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px_230px] lg:items-center">
-          <div>
-            <h3 className="text-lg font-semibold tracking-normal text-slate-950">
-              {language === "en" ? "New program" : "Νέο πρόγραμμα"}
-            </h3>
-            <p className="mt-2 max-w-md text-sm leading-6 text-slate-600">
-              {language === "en"
-                ? "Choose a date. The app will calculate the matching week."
-                : "Επιλέξτε μία ημερομηνία. Η εφαρμογή θα υπολογίσει την αντίστοιχη εβδομάδα."}
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <Field label={language === "en" ? "Week selection" : "Επιλογή εβδομάδας"} required>
-              <input
-                type="date"
-                value={weekStartDate}
-                onChange={(event) => setWeekStartDate(event.target.value)}
-                className={inputClassName}
-              />
-            </Field>
-            <div className="rounded-lg bg-slate-50 px-4 py-3 ring-1 ring-slate-200">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {language === "en" ? "Week" : "Εβδομάδα"}
-              </p>
-              <p className="mt-1 text-sm font-semibold leading-5 text-slate-950">
-                {selectedWeekRange
-                  ? formatCompactDateRange(
-                      selectedWeekRange.weekStartDate,
-                      selectedWeekRange.weekEndDate,
-                      language
-                    )
-                  : language === "en"
-                    ? "Choose a valid date"
-                    : "Επιλέξτε έγκυρη ημερομηνία"}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
-                {selectedWeekRange && selectedWeekRange.weekStartDate !== weekStartDate
-                  ? language === "en"
-                    ? `Adjusted to ${formatDateEu(selectedWeekRange.weekStartDate)} because weeks start on ${localizedDayName(weekStartsOn, language)}.`
-                    : `Προσαρμόζεται σε ${formatDateEu(selectedWeekRange.weekStartDate)}, επειδή η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`
-                  : language === "en"
-                    ? `Weeks start on ${localizedDayName(weekStartsOn, language)}.`
-                    : `Η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`}
-              </p>
-            </div>
-          </div>
-
-          <div className="rounded-lg bg-emerald-50 p-4 ring-1 ring-emerald-100">
-            <button
-              type="button"
-              onClick={generateProgram}
-              disabled={isGenerating}
-              className="w-full rounded-md bg-emerald-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-60"
-            >
-              {isGenerating
-                ? language === "en"
-                  ? "Generating..."
-                  : "Δημιουργία..."
-                : language === "en"
-                  ? "Generate Program"
-                  : "Δημιουργία προγράμματος"}
-            </button>
-            <p className="mt-3 text-xs leading-5 text-emerald-900">
-              {language === "en"
-                ? "Creates a proposed schedule and opens it for review."
-                : "Δημιουργεί προτεινόμενο πρόγραμμα και το ανοίγει για έλεγχο."}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-6">
-        <div className="mb-4 flex items-end justify-between gap-4">
-          <div>
-            <h3 className="text-base font-semibold tracking-normal text-slate-950">
-              {language === "en" ? "Recent programs" : "Πρόσφατα προγράμματα"}
-            </h3>
-            <p className="mt-1 text-sm text-slate-500">
-              {language === "en"
-                ? "Review, open or delete recently generated schedules."
-                : "Δείτε, ανοίξτε ή διαγράψτε πρόσφατα προγράμματα."}
-            </p>
-          </div>
-        </div>
-
-        {recentRuns.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
-            <h4 className="text-base font-semibold tracking-normal text-slate-950">
-              {language === "en"
-                ? "No programs yet"
-                : "Δεν υπάρχουν προγράμματα ακόμα"}
-            </h4>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-              {language === "en"
-                ? "Generate the first weekly program to see it here."
-                : "Δημιουργήστε το πρώτο εβδομαδιαίο πρόγραμμα για να εμφανιστεί εδώ."}
-            </p>
-          </div>
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {recentRuns.map((run) => {
-              const runSlots = scheduleSlots.filter(
-                (slot) => slot.schedule_run_id === run.id
-              );
-              const runWarnings = scheduleWarnings.filter(
-                (warning) => warning.schedule_run_id === run.id
-              );
-              const runAssignments = scheduleAssignments.filter(
-                (assignment) =>
-                  assignment.schedule_run_id === run.id &&
-                  assignment.status !== "cancelled"
-              );
-              const assignedSlotIds = new Set(
-                runAssignments.map((assignment) => assignment.schedule_slot_id)
-              );
-              const unfilledSlotCount = runSlots.filter(
-                (slot) => slot.status !== "filled" && !assignedSlotIds.has(slot.id)
-              ).length;
-
-              const metrics = [
-                {
-                  label: language === "en" ? "Slots" : "Θέσεις",
-                  value: runSlots.length,
-                  className: "bg-slate-50 text-slate-700 ring-slate-200"
-                },
-                {
-                  label: language === "en" ? "Assigned" : "Ανατέθηκαν",
-                  value: assignedSlotIds.size,
-                  className: "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                },
-                {
-                  label: language === "en" ? "Unfilled" : "Κενές",
-                  value: unfilledSlotCount,
-                  className:
-                    unfilledSlotCount > 0
-                      ? "bg-amber-50 text-amber-800 ring-amber-200"
-                      : "bg-slate-50 text-slate-600 ring-slate-200"
-                },
-                {
-                  label: language === "en" ? "Warnings" : "Προειδοποιήσεις",
-                  value: runWarnings.length,
-                  className:
-                    runWarnings.length > 0
-                      ? "bg-red-50 text-red-700 ring-red-200"
-                      : "bg-slate-50 text-slate-600 ring-slate-200"
-                }
-              ];
-
-              return (
-                <div
-                  key={run.id}
-                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                        {scheduleRunTypeLabel(run)}
-                      </span>
-                      <h4 className="mt-3 text-base font-semibold tracking-normal text-slate-950">
-                        {formatCompactDateRange(run.start_date, run.end_date, language)}
-                      </h4>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {programStatusLabel(run.status)}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onViewProgram(run.id)}
-                        className={secondaryButtonClassName}
-                      >
-                        {language === "en" ? "View" : "Προβολή"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProgramPendingDelete(run)}
-                        disabled={deletingRunId === run.id}
-                        className="rounded-md border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
-                      >
-                        {deletingRunId === run.id
-                          ? language === "en"
-                            ? "Deleting..."
-                            : "Διαγραφή..."
-                          : language === "en"
-                            ? "Delete"
-                            : "Διαγραφή"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {metrics.map((metric) => (
-                      <div
-                        key={metric.label}
-                        className={`flex min-h-[74px] flex-col justify-between rounded-lg px-3 py-2 ring-1 ${metric.className}`}
-                      >
-                        <p className="text-[10px] font-semibold uppercase leading-4 tracking-wide [overflow-wrap:anywhere]">
-                          {metric.label}
-                        </p>
-                        <p className="mt-1 text-lg font-semibold">{metric.value}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {runSlots.length > 0 ? (
-                    <p className="mt-4 text-xs leading-5 text-slate-500">
-                      {language === "en" ? "Role coverage:" : "Κάλυψη ρόλων:"}{" "}
-                      {roleCoverageSummary(runSlots, roles)}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      {programPendingDelete ? (
-        <DeleteProgramConfirmModal
-          language={language}
-          dateRange={formatCompactDateRange(
-            programPendingDelete.start_date,
-            programPendingDelete.end_date,
-            language
-          )}
-          isDeleting={deletingRunId === programPendingDelete.id}
-          onCancel={() => setProgramPendingDelete(null)}
-          onConfirm={() => void deleteProgram(programPendingDelete)}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-async function deleteGeneratedProgram({
-  runId,
-  scheduleSlots,
-  scheduleAssignments,
-  scheduleWarnings
-}: {
-  runId: string;
-  scheduleSlots: ScheduleSlot[];
-  scheduleAssignments: ScheduleAssignment[];
-  scheduleWarnings: ScheduleWarning[];
-}): Promise<void> {
-  for (const warning of scheduleWarnings.filter(
-    (item) => item.schedule_run_id === runId
-  )) {
-    await databaseApi.deleteRecord("schedule_warnings", warning.id);
-  }
-
-  for (const assignment of scheduleAssignments.filter(
-    (item) => item.schedule_run_id === runId
-  )) {
-    await databaseApi.deleteRecord("schedule_assignments", assignment.id);
-  }
-
-  for (const slot of scheduleSlots.filter(
-    (item) => item.schedule_run_id === runId
-  )) {
-    await databaseApi.deleteRecord("schedule_slots", slot.id);
-  }
-
-  await databaseApi.deleteRecord("schedule_runs", runId);
-}
-
-function DeleteProgramConfirmModal({
-  language,
-  dateRange,
-  isDeleting,
-  onCancel,
-  onConfirm
-}: {
-  language: UiLanguage;
-  dateRange: string;
-  isDeleting: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !isDeleting) {
-        onCancel();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isDeleting, onCancel]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !isDeleting) {
-          onCancel();
-        }
-      }}
-    >
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl ring-1 ring-red-100">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-lg font-bold text-red-700">
-            !
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold tracking-normal text-slate-950">
-              {language === "en" ? "Delete program" : "Διαγραφή προγράμματος"}
-            </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {language === "en"
-                ? `Are you sure you want to delete the schedule for ${dateRange}? This action cannot be undone.`
-                : `Θέλετε σίγουρα να διαγράψετε το πρόγραμμα ${dateRange}; Η ενέργεια δεν μπορεί να αναιρεθεί.`}
-            </p>
-          </div>
-        </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isDeleting}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          >
-            {language === "en" ? "Cancel" : "Ακύρωση"}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isDeleting}
-            className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60"
-          >
-            {isDeleting
-              ? language === "en"
-                ? "Deleting..."
-                : "Διαγραφή..."
-              : language === "en"
-                ? "Delete"
-                : "Διαγραφή"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 type AssignmentEditorState = {
   slot: ScheduleSlot;
@@ -3665,6 +2578,8 @@ function UnifiedEmployeesPage({
   const [timeOffForm, setTimeOffForm] = useState<TimeOffForm>(() =>
     createTimeOffForm(employees)
   );
+  const [timeOffPendingDelete, setTimeOffPendingDelete] =
+    useState<TimeOff | null>(null);
 
   const selectedEmployee =
     editingEmployeeId && detailMode === "edit"
@@ -4013,12 +2928,6 @@ function UnifiedEmployeesPage({
   }
 
   async function deleteTimeOff(entry: TimeOff) {
-    const shouldDelete = window.confirm(text.confirmDeleteTimeOff);
-
-    if (!shouldDelete) {
-      return;
-    }
-
     setErrors([]);
     setIsSaving(true);
 
@@ -4029,6 +2938,7 @@ function UnifiedEmployeesPage({
       setErrors([getErrorMessage(error)]);
     } finally {
       setIsSaving(false);
+      setTimeOffPendingDelete(null);
     }
   }
 
@@ -4731,7 +3641,7 @@ function UnifiedEmployeesPage({
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={() => void deleteTimeOff(entry)}
+                                  onClick={() => setTimeOffPendingDelete(entry)}
                                   className={secondaryButtonClassName}
                                 >
                                   {text.delete}
@@ -4752,6 +3662,27 @@ function UnifiedEmployeesPage({
           )}
         </div>
       </div>
+      {timeOffPendingDelete ? (
+        <ConfirmActionModal
+          language={language}
+          title={language === "en" ? "Delete time off" : "Διαγραφή άδειας"}
+          body={
+            language === "en"
+              ? "This time off entry will be deleted. This action cannot be undone."
+              : "Αυτή η άδεια θα διαγραφεί. Η ενέργεια δεν μπορεί να αναιρεθεί."
+          }
+          confirmLabel={language === "en" ? "Delete" : "Διαγραφή"}
+          cancelLabel={language === "en" ? "Cancel" : "Ακύρωση"}
+          variant="danger"
+          isWorking={isSaving}
+          onCancel={() => setTimeOffPendingDelete(null)}
+          onConfirm={() => {
+            if (timeOffPendingDelete) {
+              void deleteTimeOff(timeOffPendingDelete);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4782,6 +3713,8 @@ function StaffingRequirementsPage({
   );
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null);
+  const [requirementGroupPendingDelete, setRequirementGroupPendingDelete] =
+    useState<StaffingRequirementGroup | null>(null);
   const [copySourceDay, setCopySourceDay] = useState<DayOfWeek>(1);
   const [copyTargetDay, setCopyTargetDay] = useState<DayOfWeek>(2);
   const [errors, setErrors] = useState<string[]>([]);
@@ -4896,14 +3829,6 @@ function StaffingRequirementsPage({
   }
 
   async function deleteRequirementGroup(group: StaffingRequirementGroup) {
-    const shouldDelete = window.confirm(
-      "Να διαγραφούν όλες οι ανάγκες προσωπικού για αυτή τη βάρδια; Αυτή η ενέργεια δεν αναιρείται."
-    );
-
-    if (!shouldDelete) {
-      return;
-    }
-
     setErrors([]);
     setIsSaving(true);
 
@@ -4926,6 +3851,7 @@ function StaffingRequirementsPage({
       setErrors([getErrorMessage(error)]);
     } finally {
       setIsSaving(false);
+      setRequirementGroupPendingDelete(null);
     }
   }
 
@@ -5288,7 +4214,7 @@ function StaffingRequirementsPage({
                           </button>
                           <button
                             type="button"
-                            onClick={() => void deleteRequirementGroup(group)}
+                            onClick={() => setRequirementGroupPendingDelete(group)}
                             className={secondaryButtonClassName}
                           >
                             Διαγραφή
@@ -5303,6 +4229,31 @@ function StaffingRequirementsPage({
           );
         })}
       </div>
+      {requirementGroupPendingDelete ? (
+        <ConfirmActionModal
+          language={language}
+          title={
+            language === "en"
+              ? "Delete shift requirements"
+              : "Διαγραφή αναγκών βάρδιας"
+          }
+          body={
+            language === "en"
+              ? "All staffing requirements for this shift will be deleted. This action cannot be undone."
+              : "Να διαγραφούν όλες οι ανάγκες προσωπικού για αυτή τη βάρδια; Η ενέργεια δεν μπορεί να αναιρεθεί."
+          }
+          confirmLabel={language === "en" ? "Delete" : "Διαγραφή"}
+          cancelLabel={language === "en" ? "Cancel" : "Ακύρωση"}
+          variant="danger"
+          isWorking={isSaving}
+          onCancel={() => setRequirementGroupPendingDelete(null)}
+          onConfirm={() => {
+            if (requirementGroupPendingDelete) {
+              void deleteRequirementGroup(requirementGroupPendingDelete);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -5967,33 +4918,6 @@ function ShiftTemplatesCrudPage({
   );
 }
 
-function StatusBadge({
-  isActive,
-  language
-}: {
-  isActive: boolean;
-  language: UiLanguage;
-}) {
-  return (
-    <span
-      className={[
-        "inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold",
-        isActive
-          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-          : "bg-slate-100 text-slate-500 ring-1 ring-slate-200"
-      ].join(" ")}
-    >
-      {isActive
-        ? language === "en"
-          ? "Active"
-          : "Ενεργός"
-        : language === "en"
-          ? "Inactive"
-          : "Ανενεργός"}
-    </span>
-  );
-}
-
 function createRoleCrudForm(): RoleCrudForm {
   return {
     name: "",
@@ -6299,1459 +5223,6 @@ function staffingRequirementShiftSnapshot(
   };
 }
 
-function roleLabel(roleId: string, roles: Role[]): string {
-  return roles.find((role) => role.id === roleId)?.name ?? "Unknown role";
-}
-
-function todayInputValue(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function roleCoverageSummary(slots: ScheduleSlot[], roles: Role[]): string {
-  const counts = new Map<string, number>();
-
-  for (const slot of slots) {
-    counts.set(slot.role_id, (counts.get(slot.role_id) ?? 0) + 1);
-  }
-
-  return [...counts.entries()]
-    .map(([roleId, count]) => `${roleLabel(roleId, roles)}: ${count}`)
-    .join(", ");
-}
-
-type ScheduleRow = {
-  key: string;
-  label: string;
-  startTime: string;
-  endTime: string;
-};
-
-type EmployeeScheduleItem = {
-  employee: Employee;
-  assignment: ScheduleAssignment;
-  slot: ScheduleSlot;
-  role: Role | null;
-  shiftName: string;
-  warningCount: number;
-  warningMessages: string[];
-};
-
-type EmployeeScheduleRow = {
-  employee: Employee;
-  assignmentsByDate: Map<string, EmployeeScheduleItem[]>;
-  assignmentCount: number;
-};
-
-type ManagerCoverageIssue = {
-  groupKey: string;
-  severity: "critical" | "partial";
-  date: string;
-  dateLabel: string;
-  shiftName: string;
-  startTime: string;
-  endTime: string;
-  roleName: string;
-  requiredCount: number;
-  assignedCount: number;
-  missingCount: number;
-  missingHours: number;
-  summary: string;
-  cause: string;
-  recommendations: string[];
-};
-
-function scheduleCoverageGroupKey(
-  slot: ScheduleSlot,
-  requirements: StaffingRequirement[]
-): string {
-  const requirement = requirements.find((item) => item.id === slot.source_id);
-  const shiftKey = requirement?.shift_template_id
-    ? `template:${requirement.shift_template_id}`
-    : `time:${slot.start_time}-${slot.end_time}`;
-
-  return `${slot.date}|${shiftKey}|${slot.role_id}`;
-}
-
-function buildManagerCoverageIssues({
-  runSlots,
-  runAssignments,
-  roles,
-  shiftTemplates,
-  staffingRequirements,
-  language
-}: {
-  runSlots: ScheduleSlot[];
-  runAssignments: ScheduleAssignment[];
-  roles: Role[];
-  shiftTemplates: ShiftTemplate[];
-  staffingRequirements: StaffingRequirement[];
-  language: UiLanguage;
-}): ManagerCoverageIssue[] {
-  const assignedSlotIds = new Set(
-    runAssignments
-      .filter(
-        (assignment) =>
-          assignment.status !== "cancelled" && assignment.status !== "removed"
-      )
-      .map((assignment) => assignment.schedule_slot_id)
-  );
-  const groups = new Map<string, ScheduleSlot[]>();
-
-  for (const slot of runSlots) {
-    const key = scheduleCoverageGroupKey(slot, staffingRequirements);
-    groups.set(key, [...(groups.get(key) ?? []), slot]);
-  }
-
-  return [...groups.entries()]
-    .flatMap(([groupKey, slots]) => {
-      const sortedSlots = [...slots].sort(
-        (left, right) =>
-          left.start_time.localeCompare(right.start_time) ||
-          left.end_time.localeCompare(right.end_time) ||
-          left.id.localeCompare(right.id)
-      );
-      const representativeSlot = sortedSlots[0];
-
-      if (!representativeSlot) {
-        return [];
-      }
-
-      const assignedCount = sortedSlots.filter((slot) =>
-        assignedSlotIds.has(slot.id)
-      ).length;
-      const requiredCount = sortedSlots.length;
-
-      if (assignedCount >= requiredCount) {
-        return [];
-      }
-
-      const roleName =
-        roles.find((role) => role.id === representativeSlot.role_id)?.name ??
-        (language === "en" ? "role" : "ρόλο");
-      const shiftName = shiftNameForSlot(
-        representativeSlot,
-        staffingRequirements,
-        shiftTemplates
-      );
-      const missingCount = requiredCount - assignedCount;
-      const missingHours = missingCount * getSlotDurationHours(representativeSlot);
-      const dateLabel = `${localizedDayName(
-        getDayOfWeek(representativeSlot.date),
-        language
-      )} ${formatDateEu(representativeSlot.date)}`;
-      const requiredLabel = formatManagerEmployeeCount(requiredCount, language);
-      const assignedLabel = formatManagerEmployeeCount(assignedCount, language);
-      const severity: ManagerCoverageIssue["severity"] =
-        assignedCount === 0 ? "critical" : "partial";
-
-      return [
-        {
-          groupKey,
-          severity,
-          date: representativeSlot.date,
-          dateLabel,
-          shiftName,
-          startTime: representativeSlot.start_time,
-          endTime: representativeSlot.end_time,
-          roleName,
-          requiredCount,
-          assignedCount,
-          missingCount,
-          missingHours,
-          summary:
-            language === "en"
-              ? `${requiredLabel} ${
-                  requiredCount === 1 ? "is" : "are"
-                } needed, but only ${assignedLabel} ${
-                  assignedCount === 1 ? "was" : "were"
-                } assigned.`
-              : `${requiredCount === 1 ? "Χρειάζεται" : "Χρειάζονται"} ${requiredLabel}, αλλά ${
-                  assignedCount === 1 ? "καλύφθηκε" : "καλύφθηκαν"
-                } ${assignedLabel}.`,
-          cause:
-            language === "en"
-              ? `There is no other available ${roleName} employee without breaking work rules.`
-              : `Δεν υπάρχει άλλος διαθέσιμος εργαζόμενος για ${roleName} χωρίς να παραβιαστούν οι κανόνες εργασίας.`,
-          recommendations:
-            language === "en"
-              ? [
-                  `Add another ${roleName} employee.`,
-                  `Give the ${roleName} role to an available employee.`,
-                  `Reduce the ${roleName} requirement for this shift from ${requiredCount} to ${assignedCount}.`
-                ]
-              : [
-                  `Πρόσθεσε έναν ακόμη εργαζόμενο με ρόλο ${roleName}.`,
-                  `Δώσε ρόλο ${roleName} σε κάποιον διαθέσιμο εργαζόμενο.`,
-                  `Μείωσε την ανάγκη ${roleName} για αυτή τη βάρδια από ${requiredCount} σε ${assignedCount}.`
-                ]
-        }
-      ];
-    })
-    .sort(
-      (left, right) =>
-        (left.severity === "critical" && right.severity !== "critical" ? -1 : 0) ||
-        (right.severity === "critical" && left.severity !== "critical" ? 1 : 0) ||
-        left.date.localeCompare(right.date) ||
-        left.startTime.localeCompare(right.startTime) ||
-        left.roleName.localeCompare(right.roleName)
-    );
-}
-
-function buildRoleShortageSummaries(
-  issues: ManagerCoverageIssue[],
-  language: UiLanguage
-): string[] {
-  const byRole = new Map<string, { missingCount: number; missingHours: number }>();
-
-  for (const issue of issues) {
-    const existing = byRole.get(issue.roleName) ?? {
-      missingCount: 0,
-      missingHours: 0
-    };
-    byRole.set(issue.roleName, {
-      missingCount: existing.missingCount + issue.missingCount,
-      missingHours: existing.missingHours + issue.missingHours
-    });
-  }
-
-  return [...byRole.entries()]
-    .sort(
-      (left, right) =>
-        right[1].missingCount - left[1].missingCount ||
-        right[1].missingHours - left[1].missingHours ||
-        left[0].localeCompare(right[0])
-    )
-    .map(([roleName, shortage]) =>
-      language === "en"
-        ? `${roleName}: about ${formatHours(shortage.missingHours)} more hours are needed (${shortage.missingCount} unfilled position${
-            shortage.missingCount === 1 ? "" : "s"
-          }).`
-        : `${roleName}: χρειάζονται περίπου ${formatHours(
-            shortage.missingHours
-          )} επιπλέον ώρες (${shortage.missingCount} κεν${
-            shortage.missingCount === 1 ? "ή θέση" : "ές θέσεις"
-          }).`
-    );
-}
-
-function buildShortageSummaryLines({
-  issues,
-  unfilledSlotCount,
-  language
-}: {
-  issues: ManagerCoverageIssue[];
-  unfilledSlotCount: number;
-  language: UiLanguage;
-}): string[] {
-  if (unfilledSlotCount === 0) {
-    return [
-      language === "en"
-        ? "The schedule is fully covered."
-        : "Το πρόγραμμα καλύπτεται πλήρως."
-    ];
-  }
-
-  const roleShortages = buildRoleShortageSummaries(issues, language);
-  const primaryRole =
-    issues.length > 0
-      ? buildPrimaryShortageRole(issues)
-      : language === "en"
-        ? "one role"
-        : "έναν ρόλο";
-
-  return [
-    language === "en"
-      ? `The schedule was generated, but it is not fully covered. There ${
-          unfilledSlotCount === 1 ? "is" : "are"
-        } ${unfilledSlotCount} unfilled position${
-          unfilledSlotCount === 1 ? "" : "s"
-        }.`
-      : `Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως. Υπάρχ${
-          unfilledSlotCount === 1 ? "ει" : "ουν"
-        } ${unfilledSlotCount} κεν${unfilledSlotCount === 1 ? "ή θέση" : "ές θέσεις"}.`,
-    language === "en"
-      ? `The main shortage is in ${primaryRole}.`
-      : `Το πρόβλημα εντοπίζεται κυρίως στον ρόλο ${primaryRole}.`,
-    ...roleShortages.slice(0, 3)
-  ];
-}
-
-function buildPrimaryShortageRole(issues: ManagerCoverageIssue[]): string {
-  const counts = new Map<string, number>();
-
-  for (const issue of issues) {
-    counts.set(issue.roleName, (counts.get(issue.roleName) ?? 0) + issue.missingCount);
-  }
-
-  return (
-    [...counts.entries()].sort(
-      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0])
-    )[0]?.[0] ?? "Role"
-  );
-}
-
-function formatManagerEmployeeCount(count: number, language: UiLanguage): string {
-  if (language === "en") {
-    return `${count} employee${count === 1 ? "" : "s"}`;
-  }
-
-  return `${count} ${count === 1 ? "άτομο" : "άτομα"}`;
-}
-
-function uniqueRecommendations(issues: ManagerCoverageIssue[]): string[] {
-  return Array.from(new Set(issues.flatMap((issue) => issue.recommendations)));
-}
-
-function managerFriendlyWarningMessage({
-  warning,
-  slot,
-  coverageIssues,
-  staffingRequirements,
-  language
-}: {
-  warning: ScheduleWarning;
-  slot: ScheduleSlot;
-  coverageIssues: ManagerCoverageIssue[];
-  staffingRequirements: StaffingRequirement[];
-  language: UiLanguage;
-}): string {
-  const coverageIssue = coverageIssues.find(
-    (issue) => issue.groupKey === scheduleCoverageGroupKey(slot, staffingRequirements)
-  );
-
-  if (
-    coverageIssue &&
-    ["critical_coverage_gap", "role_group_understaffed", "slot_unfilled"].includes(
-      warning.warning_type
-    )
-  ) {
-    return `${coverageIssue.dateLabel} · ${coverageIssue.shiftName} · ${coverageIssue.roleName}: ${coverageIssue.summary} ${coverageIssue.cause}`;
-  }
-
-  if (warning.warning_type === "weak_team_composition") {
-    return language === "en"
-      ? "This shift needs at least one employee with prior experience for this role."
-      : "Η βάρδια χρειάζεται τουλάχιστον έναν εργαζόμενο με προϋπηρεσία για αυτόν τον ρόλο.";
-  }
-
-  return humanizeSchedulerWarningText(warning.message, language);
-}
-
-function humanizeSchedulerWarningText(message: string, language: UiLanguage): string {
-  if (/Manual override/i.test(message)) {
-    return language === "en"
-      ? "This assignment was changed manually and has manager-confirmed warnings."
-      : "Αυτή η ανάθεση άλλαξε χειροκίνητα και έχει προειδοποιήσεις που επιβεβαιώθηκαν από manager.";
-  }
-
-  if (/Employee (is inactive|does not have|has time off|cannot work|is not available|already has|would exceed)/.test(message)) {
-    return language === "en"
-      ? "This warning is related to an employee work rule or availability limit."
-      : "Η προειδοποίηση σχετίζεται με κανόνα εργασίας ή διαθεσιμότητα εργαζομένου.";
-  }
-
-  if (/This schedule run has no unfilled slots to assign/i.test(message)) {
-    return language === "en"
-      ? "There were no open positions left for automatic assignment."
-      : "Δεν υπήρχαν κενές θέσεις για αυτόματη ανάθεση.";
-  }
-
-  const hidesDebugDetails =
-    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
-      message
-    );
-
-  if (!hidesDebugDetails) {
-    return message;
-  }
-
-  return language === "en"
-    ? "This warning is related to employee availability or work-rule limits."
-    : "Η προειδοποίηση σχετίζεται με διαθεσιμότητα εργαζομένων ή όρια εργασίας.";
-}
-
-function buildEmployeeScheduleRows({
-  employees,
-  runSlots,
-  runAssignments,
-  roles,
-  shiftTemplates,
-  staffingRequirements,
-  warningsBySlotId,
-  coverageIssues,
-  language
-}: {
-  employees: Employee[];
-  runSlots: ScheduleSlot[];
-  runAssignments: ScheduleAssignment[];
-  roles: Role[];
-  shiftTemplates: ShiftTemplate[];
-  staffingRequirements: StaffingRequirement[];
-  warningsBySlotId: Map<string, ScheduleWarning[]>;
-  coverageIssues: ManagerCoverageIssue[];
-  language: UiLanguage;
-}): EmployeeScheduleRow[] {
-  const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
-  const assignedEmployeeIds = new Set(
-    runAssignments.map((assignment) => assignment.employee_id)
-  );
-  const rowEmployees = employees
-    .filter((employee) => employee.is_active === 1 || assignedEmployeeIds.has(employee.id))
-    .sort(
-      (left, right) =>
-        left.last_name.localeCompare(right.last_name) ||
-        left.first_name.localeCompare(right.first_name) ||
-        left.id.localeCompare(right.id)
-    );
-
-  return rowEmployees.map((employee) => {
-    const assignmentsByDate = new Map<string, EmployeeScheduleItem[]>();
-
-    for (const assignment of runAssignments) {
-      if (assignment.employee_id !== employee.id) {
-        continue;
-      }
-
-      const slot = slotById.get(assignment.schedule_slot_id);
-
-      if (!slot) {
-        continue;
-      }
-
-      const existing = assignmentsByDate.get(slot.date) ?? [];
-      assignmentsByDate.set(slot.date, [
-        ...existing,
-        {
-          employee,
-          assignment,
-          slot,
-          role: roles.find((role) => role.id === slot.role_id) ?? null,
-          shiftName: shiftNameForSlot(slot, staffingRequirements, shiftTemplates),
-          warningCount: warningsBySlotId.get(slot.id)?.length ?? 0,
-          warningMessages: (warningsBySlotId.get(slot.id) ?? []).map(
-            (warning) =>
-              managerFriendlyWarningMessage({
-                warning,
-                slot,
-                coverageIssues,
-                staffingRequirements,
-                language
-              })
-          )
-        }
-      ]);
-    }
-
-    for (const [date, items] of assignmentsByDate.entries()) {
-      assignmentsByDate.set(
-        date,
-        [...items].sort(
-          (left, right) =>
-            left.slot.start_time.localeCompare(right.slot.start_time) ||
-            left.slot.end_time.localeCompare(right.slot.end_time) ||
-            (left.role?.name ?? "").localeCompare(right.role?.name ?? "")
-        )
-      );
-    }
-
-    return {
-      employee,
-      assignmentsByDate,
-      assignmentCount: [...assignmentsByDate.values()].reduce(
-        (total, items) => total + items.length,
-        0
-      )
-    };
-  });
-}
-
-function groupUnfilledSlotsByDate({
-  runSlots,
-  assignmentBySlotId
-}: {
-  runSlots: ScheduleSlot[];
-  assignmentBySlotId: Map<string, ScheduleAssignment>;
-}): Map<string, ScheduleSlot[]> {
-  const grouped = new Map<string, ScheduleSlot[]>();
-
-  for (const slot of runSlots) {
-    if (slot.status === "filled" || assignmentBySlotId.has(slot.id)) {
-      continue;
-    }
-
-    const existing = grouped.get(slot.date) ?? [];
-    grouped.set(slot.date, [...existing, slot]);
-  }
-
-  for (const [date, slots] of grouped.entries()) {
-    grouped.set(
-      date,
-      [...slots].sort(
-        (left, right) =>
-          left.start_time.localeCompare(right.start_time) ||
-          left.end_time.localeCompare(right.end_time) ||
-          left.role_id.localeCompare(right.role_id)
-      )
-    );
-  }
-
-  return grouped;
-}
-
-function buildScheduleRows(
-  slots: ScheduleSlot[],
-  requirements: StaffingRequirement[],
-  shiftTemplates: ShiftTemplate[]
-): ScheduleRow[] {
-  const rows = new Map<string, ScheduleRow>();
-
-  for (const slot of slots) {
-    const key = scheduleRowKey(slot, requirements);
-
-    if (rows.has(key)) {
-      continue;
-    }
-
-    const requirement = requirements.find((item) => item.id === slot.source_id);
-    const shiftTemplate = requirement?.shift_template_id
-      ? shiftTemplates.find((item) => item.id === requirement.shift_template_id)
-      : null;
-
-    rows.set(key, {
-      key,
-      label: shiftTemplate?.name ?? `${slot.start_time} - ${slot.end_time}`,
-      startTime: slot.start_time,
-      endTime: slot.end_time
-    });
-  }
-
-  return [...rows.values()].sort(
-    (left, right) =>
-      left.startTime.localeCompare(right.startTime) ||
-      left.endTime.localeCompare(right.endTime) ||
-      left.label.localeCompare(right.label)
-  );
-}
-
-function shiftNameForSlot(
-  slot: ScheduleSlot,
-  requirements: StaffingRequirement[],
-  shiftTemplates: ShiftTemplate[]
-): string {
-  const requirement = requirements.find((item) => item.id === slot.source_id);
-  const shiftTemplate = requirement?.shift_template_id
-    ? shiftTemplates.find((item) => item.id === requirement.shift_template_id)
-    : null;
-
-  return shiftTemplate?.name ?? `${slot.start_time}-${slot.end_time}`;
-}
-
-function shortEmployeeName(employee: Employee): string {
-  const firstInitial = employee.first_name.slice(0, 1).toUpperCase();
-  return `${firstInitial}. ${employee.last_name}`;
-}
-
-function scheduleRowKey(
-  slot: ScheduleSlot,
-  requirements: StaffingRequirement[]
-): string {
-  const requirement = requirements.find((item) => item.id === slot.source_id);
-
-  if (requirement?.shift_template_id) {
-    return `template:${requirement.shift_template_id}`;
-  }
-
-  return `time:${slot.start_time}-${slot.end_time}`;
-}
-
-function groupWarningsBySlot(
-  warnings: ScheduleWarning[],
-  runId: string
-): Map<string, ScheduleWarning[]> {
-  const grouped = new Map<string, ScheduleWarning[]>();
-
-  for (const warning of warnings) {
-    if (warning.schedule_run_id !== runId || !warning.schedule_slot_id) {
-      continue;
-    }
-
-    const existing = grouped.get(warning.schedule_slot_id) ?? [];
-    grouped.set(warning.schedule_slot_id, [...existing, warning]);
-  }
-
-  return grouped;
-}
-
-function scheduleRunTypeLabel(run: ScheduleRun): string {
-  try {
-    const parameters = run.parameters_json
-      ? (JSON.parse(run.parameters_json) as { type?: string })
-      : {};
-    return parameters.type === "weekly" ? "Weekly" : "Program";
-  } catch {
-    return "Program";
-  }
-}
-
-function programStatusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    generated: "Generated",
-    assigned: "Proposed",
-    partially_assigned: "Needs review",
-    needs_review: "Needs review",
-    unfilled: "Needs review",
-    draft: "Draft"
-  };
-
-  return labels[status] ?? status;
-}
-
-function formatDateEu(date: string): string {
-  const [year, month, day] = date.split("-");
-  return `${day}/${month}/${year}`;
-}
-
-function formatDateRangeEu(startDate: string, endDate: string): string {
-  return `${formatDateEu(startDate)} - ${formatDateEu(endDate)}`;
-}
-
-function formatCompactDateRange(
-  startDate: string,
-  endDate: string,
-  language: UiLanguage
-): string {
-  const start = parseDateParts(startDate);
-  const end = parseDateParts(endDate);
-
-  if (!start || !end) {
-    return formatDateRangeEu(startDate, endDate);
-  }
-
-  const [startYear, startMonth, startDay] = start;
-  const [endYear, endMonth, endDay] = end;
-  const greekMonths = [
-    "Ιανουαρίου",
-    "Φεβρουαρίου",
-    "Μαρτίου",
-    "Απριλίου",
-    "Μαΐου",
-    "Ιουνίου",
-    "Ιουλίου",
-    "Αυγούστου",
-    "Σεπτεμβρίου",
-    "Οκτωβρίου",
-    "Νοεμβρίου",
-    "Δεκεμβρίου"
-  ];
-  const englishMonths = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December"
-  ];
-
-  if (language === "en") {
-    const startMonthName = englishMonths[startMonth - 1] ?? "";
-    const endMonthName = englishMonths[endMonth - 1] ?? "";
-
-    if (startYear === endYear && startMonth === endMonth) {
-      return `${startMonthName} ${startDay}–${endDay}, ${startYear}`;
-    }
-
-    if (startYear === endYear) {
-      return `${startMonthName} ${startDay}\u00a0–\u00a0${endMonthName} ${endDay}, ${startYear}`;
-    }
-
-    return `${startMonthName} ${startDay}, ${startYear}\u00a0–\u00a0${endMonthName} ${endDay}, ${endYear}`;
-  }
-
-  const startMonthName = greekMonths[startMonth - 1] ?? "";
-  const endMonthName = greekMonths[endMonth - 1] ?? "";
-
-  if (startYear === endYear && startMonth === endMonth) {
-    return `${startDay}–${endDay} ${startMonthName} ${startYear}`;
-  }
-
-  if (startYear === endYear) {
-    return `${startDay} ${startMonthName}\u00a0–\u00a0${endDay} ${endMonthName} ${startYear}`;
-  }
-
-  return `${startDay} ${startMonthName} ${startYear}\u00a0–\u00a0${endDay} ${endMonthName} ${endYear}`;
-}
-
-function parseDateParts(date: string): [number, number, number] | null {
-  const [year, month, day] = date.split("-").map(Number);
-
-  if (!year || !month || !day) {
-    return null;
-  }
-
-  return [year, month, day];
-}
-
-function formatWeekRangeWithDays(startDate: string, endDate: string): string {
-  return `${dayLabel(getDayOfWeek(startDate))} ${formatDateEu(startDate)} - ${dayLabel(
-    getDayOfWeek(endDate)
-  )} ${formatDateEu(endDate)}`;
-}
-
-function RolePill({ role }: { role: Role | null }) {
-  return (
-    <span className="inline-flex min-w-0 items-center gap-1.5 rounded bg-slate-100 px-2 py-1 font-semibold text-slate-700">
-      <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full"
-        style={{ backgroundColor: role?.color ?? "#64748b" }}
-      />
-      <span className="truncate">{role?.name ?? "Role"}</span>
-    </span>
-  );
-}
-
-function WarningBadge({ messages }: { messages: string[] }) {
-  const label = messages.length > 0 ? messages.join("\n") : "Προειδοποίηση";
-
-  return (
-    <span
-      title={label}
-      aria-label={label}
-      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[11px] font-bold text-amber-800 ring-1 ring-amber-200"
-    >
-      !
-    </span>
-  );
-}
-
-function buildTeamSchedulePdfHtml({
-  businessName,
-  run,
-  dates,
-  employeeRows
-}: {
-  businessName: string;
-  run: ScheduleRun;
-  dates: string[];
-  employeeRows: EmployeeScheduleRow[];
-}): string {
-  return `<!doctype html>
-<html lang="el">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(businessName)} Program</title>
-  <style>
-    @page { size: A4 landscape; margin: 12mm; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      color: #111827;
-      font-family: "Segoe UI", Arial, sans-serif;
-      font-size: 10px;
-      line-height: 1.35;
-      background: white;
-    }
-    .header {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 14px;
-      border-bottom: 2px solid #0f766e;
-      padding-bottom: 10px;
-    }
-    h1 { margin: 0; font-size: 21px; letter-spacing: 0; }
-    .subtitle { margin: 4px 0 0; color: #475569; font-size: 12px; }
-    .meta { text-align: right; color: #64748b; font-size: 10px; white-space: nowrap; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    th, td { border: 1px solid #cbd5e1; vertical-align: top; padding: 6px; }
-    th { background: #f1f5f9; color: #334155; font-size: 9px; text-transform: uppercase; }
-    th.employee, td.employee { width: 18%; font-weight: 700; }
-    .cell-off { color: #94a3b8; font-weight: 600; }
-    .shift {
-      border-left: 4px solid #64748b;
-      border-radius: 4px;
-      padding-left: 6px;
-      break-inside: avoid;
-    }
-    .shift + .shift { margin-top: 5px; }
-    .shift-name { font-weight: 700; }
-    .shift-time, .shift-role { color: #475569; }
-  </style>
-</head>
-<body>
-  <header class="header">
-    <div>
-      <h1>${escapeHtml(businessName)}</h1>
-      <p class="subtitle">Πρόγραμμα εβδομάδας: ${escapeHtml(
-        formatDateRangeEu(run.start_date, run.end_date)
-      )}</p>
-    </div>
-    <div class="meta">Πρόγραμμα ομάδας</div>
-  </header>
-
-  <table>
-    <thead>
-      <tr>
-        <th class="employee">Εργαζόμενος</th>
-        ${dates
-          .map(
-            (date) =>
-              `<th>${escapeHtml(dayLabel(getDayOfWeek(date)))}<br />${escapeHtml(
-                formatDateEu(date)
-              )}</th>`
-          )
-          .join("")}
-      </tr>
-    </thead>
-    <tbody>
-      ${employeeRows
-        .map(
-          (employeeRow) => `<tr>
-            <td class="employee">${escapeHtml(
-              employeeName(employeeRow.employee.id, [employeeRow.employee], "el")
-            )}</td>
-            ${dates
-              .map((date) => {
-                const items = employeeRow.assignmentsByDate.get(date) ?? [];
-
-                if (items.length === 0) {
-                  return `<td><span class="cell-off">Ρεπό</span></td>`;
-                }
-
-                return `<td>${items
-                  .map(
-                    (item) =>
-                      `<div class="shift" style="border-left-color: ${escapeHtml(
-                        item.role?.color ?? "#64748b"
-                      )};">
-                        <div class="shift-name">${escapeHtml(item.shiftName)}</div>
-                        <div class="shift-time">${escapeHtml(
-                          item.slot.start_time
-                        )}-${escapeHtml(item.slot.end_time)}</div>
-                        <div class="shift-role">${escapeHtml(
-                          item.role?.name ?? "Ρόλος"
-                        )}</div>
-                      </div>`
-                  )
-                  .join("")}</td>`;
-              })
-              .join("")}
-          </tr>`
-        )
-        .join("")}
-    </tbody>
-  </table>
-</body>
-</html>`;
-}
-
-function buildManagerReportPdfHtml({
-  businessName,
-  run,
-  dates,
-  employeeRows,
-  runSlots,
-  roles,
-  shiftTemplates,
-  staffingRequirements,
-  warnings,
-  unfilledSlots,
-  employeeWorkRules,
-  coverageIssues,
-  language
-}: {
-  businessName: string;
-  run: ScheduleRun;
-  dates: string[];
-  employeeRows: EmployeeScheduleRow[];
-  runSlots: ScheduleSlot[];
-  roles: Role[];
-  shiftTemplates: ShiftTemplate[];
-  staffingRequirements: StaffingRequirement[];
-  warnings: ScheduleWarning[];
-  unfilledSlots: ScheduleSlot[];
-  employeeWorkRules: EmployeeWorkRules[];
-  coverageIssues: ManagerCoverageIssue[];
-  language: UiLanguage;
-}): string {
-  const shortageSummaryRows = buildShortageSummaryLines({
-    issues: coverageIssues,
-    unfilledSlotCount: unfilledSlots.length,
-    language
-  })
-    .map((line) => `<p>${escapeHtml(line)}</p>`)
-    .join("");
-  const issueRows = coverageIssues
-    .map(
-      (issue) => `<article class="issue-card ${
-        issue.severity === "critical" ? "critical" : ""
-      }">
-        <h3>${escapeHtml(issue.dateLabel)} · ${escapeHtml(
-          issue.shiftName
-        )} · ${escapeHtml(issue.roleName)}</h3>
-        <p>${escapeHtml(issue.summary)}</p>
-        <p>${escapeHtml(issue.cause)}</p>
-        <ul>${issue.recommendations
-          .map((recommendation) => `<li>${escapeHtml(recommendation)}</li>`)
-          .join("")}</ul>
-      </article>`
-    )
-    .join("");
-  const coverageIssueKeys = new Set(coverageIssues.map((issue) => issue.groupKey));
-  const coverageWarningTypes = new Set([
-    "critical_coverage_gap",
-    "role_group_understaffed",
-    "slot_unfilled"
-  ]);
-  const managerWarningRows = Array.from(
-    new Set(
-      warnings.flatMap((warning) => {
-        const slot = warning.schedule_slot_id
-          ? runSlots.find((item) => item.id === warning.schedule_slot_id)
-          : null;
-
-        if (
-          slot &&
-          coverageWarningTypes.has(warning.warning_type) &&
-          coverageIssueKeys.has(scheduleCoverageGroupKey(slot, staffingRequirements))
-        ) {
-          return [];
-        }
-
-        const friendlyMessage = slot
-          ? managerFriendlyWarningMessage({
-              warning,
-              slot,
-              coverageIssues,
-              staffingRequirements,
-              language
-            })
-          : humanizeSchedulerWarningText(warning.message, language);
-
-        if (
-          friendlyMessage ===
-          (language === "en"
-            ? "This warning is related to employee availability or work-rule limits."
-            : "Η προειδοποίηση σχετίζεται με διαθεσιμότητα εργαζομένων ή όρια εργασίας.")
-        ) {
-          return [];
-        }
-
-        return [friendlyMessage];
-      })
-    )
-  )
-    .map((message) => `<li>${escapeHtml(message)}</li>`)
-    .join("");
-  const recommendationRows = uniqueRecommendations(coverageIssues)
-    .map((recommendation) => `<li>${escapeHtml(recommendation)}</li>`)
-    .join("");
-  const technicalWarningCount = warnings.filter((warning) =>
-    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
-      warning.message
-    )
-  ).length;
-  const employeeSummaryRows = employeeRows
-    .map((employeeRow) => {
-      const totalHours = getEmployeeScheduleHours(employeeRow);
-      const weekendShifts = getEmployeeWeekendShiftCount(employeeRow);
-      const difficultShifts = getEmployeeDifficultShiftCount(employeeRow);
-      const workRules = employeeWorkRules.find(
-        (rules) => rules.employee_id === employeeRow.employee.id
-      );
-      const targetHours =
-        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week ?? null;
-      const maxHours = workRules?.max_hours_per_week ?? null;
-
-      return `<tr>
-        <td>${escapeHtml(
-          employeeName(employeeRow.employee.id, [employeeRow.employee], language)
-        )}</td>
-        <td>${employeeRow.assignmentCount}</td>
-        <td>${escapeHtml(formatHours(totalHours))}</td>
-        <td>${weekendShifts}</td>
-        <td>${difficultShifts}</td>
-        <td>${escapeHtml(formatOptionalHours(targetHours))}</td>
-        <td>${escapeHtml(formatOptionalHours(maxHours))}</td>
-      </tr>`;
-    })
-    .join("");
-  const overLimitRows = employeeRows
-    .flatMap((employeeRow) => {
-      const totalHours = getEmployeeScheduleHours(employeeRow);
-      const workRules = employeeWorkRules.find(
-        (rules) => rules.employee_id === employeeRow.employee.id
-      );
-      const rows: string[] = [];
-
-      if (
-        workRules?.max_hours_per_week !== null &&
-        workRules?.max_hours_per_week !== undefined &&
-        totalHours > workRules.max_hours_per_week
-      ) {
-        rows.push(
-          language === "en"
-            ? `${employeeName(
-                employeeRow.employee.id,
-                [employeeRow.employee],
-                language
-              )}: above the configured weekly limit (${formatHours(
-                totalHours
-              )}/${formatHours(workRules.max_hours_per_week)} hours).`
-            : `${employeeName(
-                employeeRow.employee.id,
-                [employeeRow.employee],
-                language
-              )}: πάνω από το εβδομαδιαίο όριο (${formatHours(
-                totalHours
-              )}/${formatHours(workRules.max_hours_per_week)} ώρες).`
-        );
-      }
-
-      return rows;
-    })
-    .map((row) => `<li>${escapeHtml(row)}</li>`)
-    .join("");
-  const assignedShiftCount = employeeRows.reduce(
-    (total, employeeRow) => total + employeeRow.assignmentCount,
-    0
-  );
-  const text =
-    language === "en"
-      ? {
-          assignedShifts: "Assigned shifts",
-          difficult: "Difficult",
-          employee: "Employee",
-          employeeSummary: "Employee hours summary",
-          employees: "Employees",
-          exportMeta: "PDF export",
-          hours: "Hours",
-          issueSection: "Issues to fix",
-          max: "Limit",
-          notesTitle: "Notes / limitations",
-          off: "Off",
-          recommendations: "Recommendations",
-          role: "Role",
-          scheduleTitle: "Weekly schedule",
-          shifts: "Shifts",
-          summaryTitle: "Coverage summary",
-          target: "Contract",
-          technicalDetails: "Technical details",
-          technicalHidden:
-            "Detailed scoring factors and blocked-candidate counts are kept internally and are not included in the normal manager report.",
-          totalHours: "Total hours",
-          unfilled: "Unfilled shifts",
-          warnings: "Warnings",
-          week: "Schedule week",
-          weekend: "Weekend"
-        }
-      : {
-          assignedShifts: "Ανατεθειμένες βάρδιες",
-          difficult: "Δύσκολες",
-          employee: "Εργαζόμενος",
-          employeeSummary: "Σύνοψη ωρών εργαζομένων",
-          employees: "Εργαζόμενοι",
-          exportMeta: "Εξαγωγή PDF",
-          hours: "Ώρες",
-          issueSection: "Θέματα προς διόρθωση",
-          max: "Όριο",
-          notesTitle: "Σημειώσεις / περιορισμοί",
-          off: "Ρεπό",
-          recommendations: "Προτάσεις",
-          role: "Ρόλος",
-          scheduleTitle: "Εβδομαδιαίο πρόγραμμα",
-          shifts: "Βάρδιες",
-          summaryTitle: "Σύνοψη κάλυψης",
-          target: "Συμφωνία",
-          technicalDetails: "Τεχνικές λεπτομέρειες",
-          technicalHidden:
-            "Οι αναλυτικοί παράγοντες βαθμολόγησης και οι τεχνικές μετρήσεις υποψηφίων παραμένουν εσωτερικά και δεν εμφανίζονται στην κανονική αναφορά manager.",
-          totalHours: "Σύνολο ωρών",
-          unfilled: "Κενές βάρδιες",
-          warnings: "Προειδοποιήσεις",
-          week: "Πρόγραμμα εβδομάδας",
-          weekend: "Σ/Κ"
-        };
-
-  return `<!doctype html>
-<html lang="${language}">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(businessName)} Manager Report</title>
-  <style>
-    @page { size: A4 landscape; margin: 12mm; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      color: #0f172a;
-      font-family: "Segoe UI", Arial, sans-serif;
-      font-size: 10px;
-      line-height: 1.35;
-      background: white;
-    }
-    .header {
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 14px;
-      border-bottom: 2px solid #0f766e;
-      padding-bottom: 10px;
-    }
-    h1 {
-      margin: 0;
-      font-size: 20px;
-      letter-spacing: 0;
-    }
-    .subtitle {
-      margin: 4px 0 0;
-      color: #475569;
-      font-size: 12px;
-    }
-    .meta {
-      text-align: right;
-      color: #475569;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-    }
-    th, td {
-      border: 1px solid #cbd5e1;
-      vertical-align: top;
-      padding: 6px;
-    }
-    th {
-      background: #f1f5f9;
-      color: #334155;
-      font-size: 9px;
-      text-transform: uppercase;
-    }
-    th.employee, td.employee {
-      width: 18%;
-      font-weight: 700;
-    }
-    .cell-off {
-      color: #94a3b8;
-      font-weight: 600;
-    }
-    .shift {
-      border-left: 4px solid #64748b;
-      border-radius: 4px;
-      padding-left: 6px;
-      break-inside: avoid;
-    }
-    .shift + .shift { margin-top: 5px; }
-    .shift-name { font-weight: 700; }
-    .shift-time, .shift-role { color: #475569; }
-    .warning-mark {
-      display: inline-block;
-      margin-left: 4px;
-      border-radius: 999px;
-      background: #fef3c7;
-      color: #92400e;
-      font-weight: 800;
-      min-width: 14px;
-      text-align: center;
-    }
-    .hours {
-      margin-top: 4px;
-      color: #64748b;
-      font-size: 9px;
-      font-weight: 600;
-    }
-    .summary {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-      margin: 10px 0 12px;
-    }
-    .summary-item {
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      padding: 7px 8px;
-      background: #f8fafc;
-    }
-    .summary-label { color: #64748b; font-size: 9px; }
-    .summary-value { margin-top: 2px; font-size: 13px; font-weight: 700; }
-    .manager-summary {
-      border: 1px solid #f59e0b;
-      border-radius: 7px;
-      background: #fffbeb;
-      color: #78350f;
-      padding: 9px 10px;
-      margin: 10px 0 12px;
-    }
-    .manager-summary p { margin: 0 0 3px; }
-    .section {
-      margin-top: 14px;
-      break-inside: avoid;
-    }
-    .section h2 {
-      margin: 0 0 6px;
-      font-size: 13px;
-    }
-    .section ul {
-      margin: 0;
-      padding-left: 18px;
-    }
-    .section li {
-      margin-bottom: 3px;
-    }
-    .section table {
-      table-layout: auto;
-    }
-    .section .numeric {
-      text-align: right;
-      white-space: nowrap;
-    }
-    .issue-card {
-      border: 1px solid #fed7aa;
-      border-radius: 7px;
-      background: #fff7ed;
-      padding: 8px 10px;
-      margin-bottom: 8px;
-      break-inside: avoid;
-    }
-    .issue-card.critical {
-      border-color: #fecaca;
-      background: #fef2f2;
-    }
-    .issue-card h3 {
-      margin: 0 0 4px;
-      font-size: 12px;
-    }
-    .issue-card p {
-      margin: 0 0 4px;
-    }
-    .technical-note {
-      color: #64748b;
-      font-size: 9px;
-    }
-  </style>
-</head>
-<body>
-  <header class="header">
-    <div>
-      <h1>${escapeHtml(businessName)}</h1>
-      <p class="subtitle">${escapeHtml(text.week)}: ${escapeHtml(
-        formatDateRangeEu(run.start_date, run.end_date)
-      )}</p>
-    </div>
-    <div class="meta">${escapeHtml(text.exportMeta)} · ${escapeHtml(formatDateEu(todayInputValue()))}</div>
-  </header>
-
-  <section class="summary">
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.employees)}</div><div class="summary-value">${employeeRows.length}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.assignedShifts)}</div><div class="summary-value">${assignedShiftCount}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.unfilled)}</div><div class="summary-value">${unfilledSlots.length}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.warnings)}</div><div class="summary-value">${warnings.length}</div></div>
-  </section>
-
-  <section class="manager-summary">
-    <strong>${escapeHtml(text.summaryTitle)}</strong>
-    ${shortageSummaryRows}
-  </section>
-
-  <section class="section">
-    <h2>${escapeHtml(text.scheduleTitle)}</h2>
-  <table>
-    <thead>
-      <tr>
-        <th class="employee">${escapeHtml(text.employee)}</th>
-        ${dates
-          .map(
-            (date) =>
-              `<th>${escapeHtml(
-                localizedDayName(getDayOfWeek(date), language)
-              )}<br />${escapeHtml(
-                formatDateEu(date)
-              )}</th>`
-          )
-          .join("")}
-      </tr>
-    </thead>
-    <tbody>
-      ${employeeRows
-        .map((employeeRow) => {
-          const totalHours = getEmployeeScheduleHours(employeeRow);
-
-          return `<tr>
-            <td class="employee">${escapeHtml(
-              employeeName(employeeRow.employee.id, [employeeRow.employee], language)
-            )}<div class="hours">${escapeHtml(text.totalHours)}: ${escapeHtml(formatHours(totalHours))}</div></td>
-            ${dates
-              .map((date) => {
-                const items = employeeRow.assignmentsByDate.get(date) ?? [];
-
-                if (items.length === 0) {
-                  return `<td><span class="cell-off">${escapeHtml(text.off)}</span></td>`;
-                }
-
-                return `<td>${items
-                  .map(
-                    (item) =>
-                      `<div class="shift" style="border-left-color: ${escapeHtml(
-                        item.role?.color ?? "#64748b"
-                      )};">
-                        <div class="shift-name">${escapeHtml(item.shiftName)}${
-                          item.warningCount > 0
-                            ? `<span class="warning-mark">!</span>`
-                            : ""
-                        }</div>
-                        <div class="shift-time">${escapeHtml(
-                          item.slot.start_time
-                        )}-${escapeHtml(item.slot.end_time)}</div>
-                        <div class="shift-role">${escapeHtml(
-                          item.role?.name ?? text.role
-                        )}</div>
-                      </div>`
-                  )
-                  .join("")}</td>`;
-              })
-              .join("")}
-          </tr>`;
-        })
-        .join("")}
-    </tbody>
-  </table>
-  </section>
-
-  <section class="section">
-    <h2>${escapeHtml(text.employeeSummary)}</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>${escapeHtml(text.employee)}</th>
-          <th class="numeric">${escapeHtml(text.shifts)}</th>
-          <th class="numeric">${escapeHtml(text.hours)}</th>
-          <th class="numeric">${escapeHtml(text.weekend)}</th>
-          <th class="numeric">${escapeHtml(text.difficult)}</th>
-          <th class="numeric">${escapeHtml(text.target)}</th>
-          <th class="numeric">${escapeHtml(text.max)}</th>
-        </tr>
-      </thead>
-      <tbody>${employeeSummaryRows}</tbody>
-    </table>
-  </section>
-
-  ${
-    overLimitRows
-      ? `<section class="section"><h2>${escapeHtml(
-          language === "en" ? "Employee limit issues" : "Υπερβάσεις ορίων"
-        )}</h2><ul>${overLimitRows}</ul></section>`
-      : ""
-  }
-
-  ${
-    issueRows
-      ? `<section class="section"><h2>${escapeHtml(text.issueSection)}</h2>${issueRows}</section>`
-      : `<section class="section"><h2>${escapeHtml(text.issueSection)}</h2><p>${escapeHtml(
-          language === "en"
-            ? "No unfilled shift issues were found."
-            : "Δεν εντοπίστηκαν κενές θέσεις."
-        )}</p></section>`
-  }
-  ${
-    recommendationRows
-      ? `<section class="section"><h2>${escapeHtml(text.recommendations)}</h2><ul>${recommendationRows}</ul></section>`
-      : ""
-  }
-  ${
-    managerWarningRows
-      ? `<section class="section"><h2>${escapeHtml(text.warnings)}</h2><ul>${managerWarningRows}</ul></section>`
-      : ""
-  }
-  ${
-    technicalWarningCount > 0
-      ? `<section class="section technical-note"><h2>${escapeHtml(
-          text.technicalDetails
-        )}</h2><p>${escapeHtml(text.technicalHidden)}</p></section>`
-      : ""
-  }
-  <section class="section">
-    <h2>${escapeHtml(text.notesTitle)}</h2>
-    <ul>
-      <li>${escapeHtml(
-        language === "en"
-          ? "Assignment score logs are intentionally excluded from this report."
-          : "Οι τεχνικές σημειώσεις βαθμολόγησης αναθέσεων δεν εμφανίζονται στην κανονική αναφορά."
-      )}</li>
-      <li>${escapeHtml(
-        language === "en"
-          ? "The team PDF remains a clean employee schedule without constraints, preferences, explanations or contact details."
-          : "Το PDF ομάδας κρατά μόνο το καθαρό πρόγραμμα και δεν περιλαμβάνει περιορισμούς, προτιμήσεις, εξηγήσεις ή στοιχεία επικοινωνίας."
-      )}</li>
-    </ul>
-  </section>
-</body>
-</html>`;
-}
-
-function getEmployeeScheduleHours(employeeRow: EmployeeScheduleRow): number {
-  return [...employeeRow.assignmentsByDate.values()]
-    .flat()
-    .reduce((total, item) => total + getSlotDurationHours(item.slot), 0);
-}
-
-function getEmployeeWeekendShiftCount(employeeRow: EmployeeScheduleRow): number {
-  return [...employeeRow.assignmentsByDate.values()]
-    .flat()
-    .filter((item) => {
-      const day = getDayOfWeek(item.slot.date);
-      return day === 0 || day === 6;
-    }).length;
-}
-
-function getEmployeeDifficultShiftCount(employeeRow: EmployeeScheduleRow): number {
-  return [...employeeRow.assignmentsByDate.values()]
-    .flat()
-    .filter((item) => isDifficultScheduleSlot(item.slot)).length;
-}
-
-function isDifficultScheduleSlot(slot: ScheduleSlot): boolean {
-  const startMinutes = timeStringToMinutes(slot.start_time);
-  const endMinutes = timeStringToMinutes(slot.end_time);
-
-  return endMinutes <= startMinutes || endMinutes > 22 * 60 || startMinutes < 6 * 60;
-}
-
-function timeStringToMinutes(value: string): number {
-  const [hour = "0", minute = "0"] = value.split(":");
-  return Number(hour) * 60 + Number(minute);
-}
-
-function formatHours(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function formatOptionalHours(value: number | null | undefined): string {
-  return value === null || value === undefined ? "-" : formatHours(value);
-}
-
-function safeFileNamePart(value: string): string {
-  const cleaned = value.trim().replace(/[^a-zA-Z0-9]+/g, "");
-  return cleaned || "JProgrammer";
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function employeePageText(language: UiLanguage) {
   if (language === "en") {
     return {
@@ -7770,7 +5241,6 @@ function employeePageText(language: UiLanguage) {
       canWorkWeekends: "Can work weekends",
       chooseEmployeeFirst: "Choose an employee first.",
       close: "Close",
-      confirmDeleteTimeOff: "Delete this time off entry?",
       dateFrom: "Date from",
       dateTo: "Date to",
       day: "Day",
@@ -7848,7 +5318,6 @@ function employeePageText(language: UiLanguage) {
     canWorkWeekends: "Μπορεί να δουλεύει Σαββατοκύριακο",
     chooseEmployeeFirst: "Επιλέξτε πρώτα εργαζόμενο.",
     close: "Κλείσιμο",
-    confirmDeleteTimeOff: "Να διαγραφεί αυτή η άδεια;",
     dateFrom: "Από",
     dateTo: "Έως",
     day: "Ημέρα",
@@ -7908,61 +5377,6 @@ function employeePageText(language: UiLanguage) {
     wholeDay: "Ολόκληρη ημέρα",
     workRules: "Σύμβαση / Κανόνες εργασίας"
   };
-}
-
-function LocalizedStatusBadge({
-  isActive,
-  language
-}: {
-  isActive: boolean;
-  language: UiLanguage;
-}) {
-  return (
-    <span
-      className={[
-        "inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold",
-        isActive
-          ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-          : "bg-slate-100 text-slate-500 ring-1 ring-slate-200"
-      ].join(" ")}
-    >
-      {isActive
-        ? language === "en"
-          ? "Active"
-          : "Ενεργός"
-        : language === "en"
-          ? "Inactive"
-          : "Ανενεργός"}
-    </span>
-  );
-}
-
-function localizedDayLabels(language: UiLanguage): Array<{
-  dayOfWeek: DayOfWeek;
-  label: string;
-  shortLabel: string;
-}> {
-  if (language === "en") {
-    return [
-      { dayOfWeek: 1, label: "Monday", shortLabel: "Mon" },
-      { dayOfWeek: 2, label: "Tuesday", shortLabel: "Tue" },
-      { dayOfWeek: 3, label: "Wednesday", shortLabel: "Wed" },
-      { dayOfWeek: 4, label: "Thursday", shortLabel: "Thu" },
-      { dayOfWeek: 5, label: "Friday", shortLabel: "Fri" },
-      { dayOfWeek: 6, label: "Saturday", shortLabel: "Sat" },
-      { dayOfWeek: 0, label: "Sunday", shortLabel: "Sun" }
-    ];
-  }
-
-  return [
-    { dayOfWeek: 1, label: "Δευτέρα", shortLabel: "Δευ" },
-    { dayOfWeek: 2, label: "Τρίτη", shortLabel: "Τρι" },
-    { dayOfWeek: 3, label: "Τετάρτη", shortLabel: "Τετ" },
-    { dayOfWeek: 4, label: "Πέμπτη", shortLabel: "Πεμ" },
-    { dayOfWeek: 5, label: "Παρασκευή", shortLabel: "Παρ" },
-    { dayOfWeek: 6, label: "Σάββατο", shortLabel: "Σαβ" },
-    { dayOfWeek: 0, label: "Κυριακή", shortLabel: "Κυρ" }
-  ];
 }
 
 function experienceOptions(language: UiLanguage): Array<{
@@ -8341,20 +5755,6 @@ function createTimeOffForm(employees: Employee[]): TimeOffForm {
     type: "day_off",
     reason: ""
   };
-}
-
-function employeeName(
-  employeeId: string,
-  employees: Employee[],
-  language: UiLanguage = "en"
-): string {
-  const employee = employees.find((item) => item.id === employeeId);
-
-  if (!employee) {
-    return language === "en" ? "Unknown employee" : "Άγνωστος εργαζόμενος";
-  }
-
-  return `${employee.first_name} ${employee.last_name}`;
 }
 
 function createEmployeeForm(): EmployeeForm {
@@ -8817,203 +6217,6 @@ function renderPage(
   return null;
 }
 
-function SimpleInfoPage({
-  title,
-  description
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="max-w-3xl">
-      <SectionHeading title={title} description={description} />
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 text-sm leading-6 text-slate-600">
-        {description}
-      </div>
-    </div>
-  );
-}
-
-function BackupRestorePage({
-  language,
-  isResetting,
-  onResetLocalData
-}: {
-  language: UiLanguage;
-  isResetting: boolean;
-  onResetLocalData: () => void;
-}) {
-  return (
-    <div className="max-w-4xl">
-      <SectionHeading
-        title={
-          language === "en"
-            ? "Backup / Restore"
-            : "Αντίγραφα ασφαλείας / Επαναφορά"
-        }
-        description={
-          language === "en"
-            ? "Local backup, restore and reset tools for the SQLite database."
-            : "Τοπικά εργαλεία αντιγράφων ασφαλείας, επαναφοράς και καθαρισμού της βάσης SQLite."
-        }
-      />
-
-      <div className="mt-6 rounded-lg border border-red-200 bg-white p-5">
-        <h3 className="text-base font-semibold tracking-normal text-red-900">
-          {language === "en"
-            ? "Reset app / Clear local database"
-            : "Επαναφορά εφαρμογής / Καθαρισμός τοπικής βάσης"}
-        </h3>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
-          {language === "en"
-            ? "This permanently deletes all local app data and returns the app to first setup. It does not delete project files."
-            : "Διαγράφει οριστικά όλα τα τοπικά δεδομένα της εφαρμογής και επιστρέφει στην πρώτη ρύθμιση. Δεν διαγράφει αρχεία του project."}
-        </p>
-        <button
-          type="button"
-          onClick={onResetLocalData}
-          disabled={isResetting}
-          className="mt-4 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isResetting
-            ? language === "en"
-              ? "Resetting..."
-              : "Γίνεται επαναφορά..."
-            : language === "en"
-              ? "Reset app / Clear local database"
-              : "Επαναφορά εφαρμογής / Καθαρισμός τοπικής βάσης"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SummaryTile({
-  label,
-  value
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="flex min-h-[104px] flex-col justify-between rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xs font-semibold uppercase leading-4 tracking-wide text-slate-500 [overflow-wrap:anywhere]">
-        {label}
-      </p>
-      <p className="mt-2 break-words text-xl font-semibold leading-tight tracking-normal text-slate-950">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  required,
-  children
-}: {
-  label: string;
-  required?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-slate-700">
-        {label}
-        {required ? <span className="text-red-600"> *</span> : null}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Field label={label}>
-      <input
-        type="number"
-        min={0}
-        step={1}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={inputClassName}
-      />
-    </Field>
-  );
-}
-
-function ColorSelect({
-  value,
-  onChange
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={inputClassName}
-      >
-        {roleColors.map((color) => (
-          <option key={color} value={color}>
-            {color}
-          </option>
-        ))}
-      </select>
-      <span
-        className="h-8 w-8 rounded-md border border-slate-200"
-        style={{ backgroundColor: value }}
-      />
-    </div>
-  );
-}
-
-function SectionHeading({
-  title,
-  description
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div>
-      <h3 className="text-lg font-semibold tracking-normal">{title}</h3>
-      <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
-    </div>
-  );
-}
-
-function ErrorList({ errors }: { errors: string[] }) {
-  return (
-    <div className="mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-      <p className="font-semibold">Ελέγξτε τα παρακάτω:</p>
-      <ul className="mt-2 list-disc space-y-1 pl-5">
-        {errors.map((error) => (
-          <li key={error}>{error}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function LoadingScreen() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-600">
-      Φόρτωση τοπικής βάσης...
-    </div>
-  );
-}
-
 async function saveSetupDraft(draft: SetupDraft): Promise<void> {
   await upsertBusinessSettings(draft.businessInfo);
   await saveOpeningHours(draft.openingHours);
@@ -9184,38 +6387,7 @@ function validateOpeningHoursForm(
   return errors;
 }
 
-function dayLabel(dayOfWeek: number): string {
-  return (
-    dayLabels.find((day) => day.dayOfWeek === dayOfWeek)?.label ??
-    `Day ${dayOfWeek}`
-  );
-}
-
-function localizedDayName(dayOfWeek: DayOfWeek, language: UiLanguage): string {
-  return (
-    localizedDayLabels(language).find((day) => day.dayOfWeek === dayOfWeek)
-      ?.label ?? String(dayOfWeek)
-  );
-}
-
 function openDayCount(openingHours: OpeningHours[]): number {
   return openingHours.filter((day) => day.is_open).length;
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === "string") {
-    return error;
-  }
-
-  return "Παρουσιάστηκε άγνωστο σφάλμα.";
-}
-
-const inputClassName =
-  "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100 disabled:text-slate-400";
-
-const secondaryButtonClassName =
-  "rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60";
