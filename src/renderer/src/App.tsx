@@ -614,7 +614,7 @@ function SetupWizard({
         nextRoles = [createBlankRole()];
       } else if (
         window.confirm(
-          "Η επιλογή Custom μπορεί να καθαρίσει τους προτεινόμενους ρόλους. Θέλετε να ξεκινήσετε από κενή λίστα;"
+          "Η επιλογή Προσαρμοσμένο μπορεί να καθαρίσει τους προτεινόμενους ρόλους. Θέλετε να ξεκινήσετε από κενή λίστα;"
         )
       ) {
         nextRoles = [createBlankRole()];
@@ -2414,7 +2414,9 @@ function ScheduleViewPage({
         scheduleAssignments
       });
       setEditor(null);
-      await onChanged("Proposed program updated.");
+      await onChanged(
+        language === "en" ? "Proposed program updated." : "Το πρόγραμμα ενημερώθηκε."
+      );
     } catch (error) {
       setEditor({ ...editor, error: getErrorMessage(error) });
     } finally {
@@ -2446,7 +2448,9 @@ function ScheduleViewPage({
         scheduleAssignments
       });
       setEditor(null);
-      await onChanged("Assignment removed.");
+      await onChanged(
+        language === "en" ? "Assignment removed." : "Η ανάθεση αφαιρέθηκε."
+      );
     } catch (error) {
       setEditor({ ...editor, error: getErrorMessage(error) });
     } finally {
@@ -2684,7 +2688,7 @@ function ScheduleViewPage({
                   : "text-slate-600 hover:bg-slate-50"
               }`}
             >
-              Ανά εργαζόμενο
+              {language === "en" ? "By employee" : "Ανά εργαζόμενο"}
             </button>
             <button
               type="button"
@@ -2695,7 +2699,7 @@ function ScheduleViewPage({
                   : "text-slate-600 hover:bg-slate-50"
               }`}
             >
-              Ανά βάρδια
+              {language === "en" ? "By shift" : "Ανά βάρδια"}
             </button>
           </div>
         </div>
@@ -2704,10 +2708,14 @@ function ScheduleViewPage({
           {viewMode === "employee" ? (
             <div className="min-w-[1180px]">
               <div className="grid grid-cols-[220px_repeat(7,minmax(130px,1fr))] bg-slate-100 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div className="px-4 py-3">Εργαζόμενος</div>
+                <div className="px-4 py-3">
+                  {language === "en" ? "Employee" : "Εργαζόμενος"}
+                </div>
                 {dates.map((date) => (
                   <div key={date} className="px-3 py-3">
-                    <p className="whitespace-nowrap">{dayLabel(getDayOfWeek(date))}</p>
+                    <p className="whitespace-nowrap">
+                      {localizedDayName(getDayOfWeek(date), language)}
+                    </p>
                     <p className="whitespace-nowrap font-medium normal-case tracking-normal text-slate-700">
                       {formatDateEu(date)}
                     </p>
@@ -2716,7 +2724,9 @@ function ScheduleViewPage({
               </div>
               {employeeRows.length === 0 ? (
                 <div className="px-5 py-6 text-sm text-slate-500">
-                  No employees are available for this proposed program.
+                  {language === "en"
+                    ? "No employees are available for this proposed program."
+                    : "Δεν υπάρχουν εργαζόμενοι για αυτό το πρόγραμμα."}
                 </div>
               ) : (
                 employeeRows.map((employeeRow) => (
@@ -2726,11 +2736,15 @@ function ScheduleViewPage({
                   >
                     <div className="border-r border-slate-200 px-4 py-3">
                       <p className="truncate text-sm font-semibold text-slate-900">
-                        {employeeName(employeeRow.employee.id, employees)}
+                        {employeeName(employeeRow.employee.id, employees, language)}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {employeeRow.assignmentCount} shift
-                        {employeeRow.assignmentCount === 1 ? "" : "s"}
+                        {employeeRow.assignmentCount}{" "}
+                        {language === "en"
+                          ? `shift${employeeRow.assignmentCount === 1 ? "" : "s"}`
+                          : employeeRow.assignmentCount === 1
+                            ? "βάρδια"
+                            : "βάρδιες"}
                       </p>
                     </div>
                     {dates.map((date) => {
@@ -2758,7 +2772,7 @@ function ScheduleViewPage({
                             }}
                             className="min-h-20 border-r border-slate-100 px-3 py-3 text-left text-sm text-slate-400 hover:bg-emerald-50 disabled:hover:bg-transparent"
                           >
-                            Ρεπό
+                            {language === "en" ? "Off" : "Ρεπό"}
                           </button>
                         );
                       }
@@ -2802,7 +2816,7 @@ function ScheduleViewPage({
                                   {item.slot.start_time}–{item.slot.end_time}
                                 </p>
                                 <p className="truncate text-xs text-slate-500">
-                                  {item.role?.name ?? "Role"}
+                                  {item.role?.name ?? (language === "en" ? "Role" : "Ρόλος")}
                                 </p>
                               </button>
                             ))}
@@ -2817,10 +2831,14 @@ function ScheduleViewPage({
           ) : (
             <div className="min-w-[1180px]">
               <div className="grid grid-cols-[180px_repeat(7,minmax(130px,1fr))] bg-slate-100 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <div className="px-4 py-3">Βάρδια</div>
+                <div className="px-4 py-3">
+                  {language === "en" ? "Shift" : "Βάρδια"}
+                </div>
                 {dates.map((date) => (
                   <div key={date} className="px-3 py-3">
-                    <p className="whitespace-nowrap">{dayLabel(getDayOfWeek(date))}</p>
+                    <p className="whitespace-nowrap">
+                      {localizedDayName(getDayOfWeek(date), language)}
+                    </p>
                     <p className="whitespace-nowrap font-medium normal-case tracking-normal text-slate-700">
                       {formatDateEu(date)}
                     </p>
@@ -2829,7 +2847,9 @@ function ScheduleViewPage({
               </div>
               {shiftRows.length === 0 ? (
                 <div className="px-5 py-6 text-sm text-slate-500">
-                  This proposed program has no slots.
+                  {language === "en"
+                    ? "This proposed program has no slots."
+                    : "Αυτό το πρόγραμμα δεν έχει θέσεις."}
                 </div>
               ) : (
                 shiftRows.map((row) => (
@@ -2908,7 +2928,9 @@ function ScheduleViewPage({
                                     <span className="truncate text-slate-700">
                                       {assignedEmployee
                                         ? shortEmployeeName(assignedEmployee)
-                                        : "Unfilled"}
+                                        : language === "en"
+                                          ? "Unfilled"
+                                          : "Κενή"}
                                     </span>
                                     {warningMessages.length > 0 ? (
                                       <span className="ml-auto">
@@ -3041,7 +3063,7 @@ function AssignmentEditorModal({
     translateManualAssignmentViolation(violation, roleName, language)
   );
   const selectedEmployeeName = validation?.employee
-    ? employeeName(validation.employee.id, [validation.employee])
+    ? employeeName(validation.employee.id, [validation.employee], language)
     : "";
   const title = editor.assignment
     ? language === "en"
@@ -3127,7 +3149,7 @@ function AssignmentEditorModal({
                 {language === "en" ? "Current assignment" : "Τρέχουσα ανάθεση"}:{" "}
                 <span className="font-semibold text-slate-900">
                   {currentEmployee
-                    ? employeeName(currentEmployee.id, [currentEmployee])
+                    ? employeeName(currentEmployee.id, [currentEmployee], language)
                     : language === "en"
                       ? "Unfilled"
                       : "Κενή θέση"}
@@ -3206,7 +3228,11 @@ function AssignmentEditorModal({
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-950">
-                          {employeeName(candidate.employee.id, [candidate.employee])}
+                          {employeeName(
+                            candidate.employee.id,
+                            [candidate.employee],
+                            language
+                          )}
                         </p>
                         <p className="mt-1 text-xs leading-5 text-slate-600">
                           {candidate.roleSummary} · {candidate.hoursSummary}
@@ -4731,11 +4757,13 @@ function UnifiedEmployeesPage({
 }
 
 function StaffingRequirementsPage({
+  language,
   roles,
   shiftTemplates,
   requirements,
   onChanged
 }: {
+  language: UiLanguage;
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
   requirements: StaffingRequirement[];
@@ -4759,8 +4787,8 @@ function StaffingRequirementsPage({
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const groupedRequirements = useMemo(
-    () => groupStaffingRequirements(requirements, shiftTemplates),
-    [requirements, shiftTemplates]
+    () => groupStaffingRequirements(requirements, shiftTemplates, language),
+    [requirements, shiftTemplates, language]
   );
   const selectedShiftTemplate = shiftTemplates.find(
     (template) => template.id === form.shiftTemplateId
@@ -5280,9 +5308,11 @@ function StaffingRequirementsPage({
 }
 
 function RolesCrudPage({
+  language,
   roles,
   onChanged
 }: {
+  language: UiLanguage;
   roles: Role[];
   onChanged: (message: string) => Promise<void>;
 }) {
@@ -5291,9 +5321,63 @@ function RolesCrudPage({
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const text =
+    language === "en"
+      ? {
+          title: "Roles",
+          description: "Manage the roles used in schedules.",
+          addRole: "Add role",
+          editRole: "Edit role",
+          cancel: "Cancel",
+          roleName: "Role name",
+          color: "Color",
+          descriptionLabel: "Description",
+          status: "Status",
+          actions: "Actions",
+          active: "Active",
+          saving: "Saving...",
+          saveRole: "Save role",
+          role: "Role",
+          noRoles: "No roles have been created yet.",
+          noNotes: "No notes",
+          edit: "Edit",
+          deactivate: "Deactivate",
+          reactivate: "Reactivate",
+          roleUpdated: "Role updated.",
+          roleAdded: "Role added.",
+          roleReactivated: "Role reactivated.",
+          roleDeactivated: "Role deactivated.",
+          placeholder: "Optional"
+        }
+      : {
+          title: "Ρόλοι",
+          description: "Διαχειριστείτε τους ρόλους που χρησιμοποιούνται στα προγράμματα.",
+          addRole: "Προσθήκη ρόλου",
+          editRole: "Επεξεργασία ρόλου",
+          cancel: "Ακύρωση",
+          roleName: "Όνομα ρόλου",
+          color: "Χρώμα",
+          descriptionLabel: "Περιγραφή",
+          status: "Κατάσταση",
+          actions: "Ενέργειες",
+          active: "Ενεργός",
+          saving: "Αποθήκευση...",
+          saveRole: "Αποθήκευση ρόλου",
+          role: "Ρόλος",
+          noRoles: "Δεν έχουν δημιουργηθεί ρόλοι ακόμα.",
+          noNotes: "Δεν υπάρχουν σημειώσεις",
+          edit: "Επεξεργασία",
+          deactivate: "Απενεργοποίηση",
+          reactivate: "Ενεργοποίηση",
+          roleUpdated: "Ο ρόλος ενημερώθηκε.",
+          roleAdded: "Ο ρόλος προστέθηκε.",
+          roleReactivated: "Ο ρόλος ενεργοποιήθηκε.",
+          roleDeactivated: "Ο ρόλος απενεργοποιήθηκε.",
+          placeholder: "Προαιρετικό"
+        };
 
   async function saveRole() {
-    const nextErrors = validateRoleCrudForm(form, roles, editingRoleId);
+    const nextErrors = validateRoleCrudForm(form, roles, editingRoleId, language);
 
     if (nextErrors.length > 0) {
       setErrors(nextErrors);
@@ -5313,10 +5397,10 @@ function RolesCrudPage({
 
       if (editingRoleId) {
         await databaseApi.updateRecord("roles", editingRoleId, payload);
-        await onChanged("Role updated.");
+        await onChanged(text.roleUpdated);
       } else {
         await databaseApi.createRecord("roles", payload);
-        await onChanged("Role added.");
+        await onChanged(text.roleAdded);
       }
 
       closeForm();
@@ -5336,7 +5420,7 @@ function RolesCrudPage({
       await databaseApi.updateRecord("roles", role.id, {
         is_active: nextIsActive
       });
-      await onChanged(nextIsActive ? "Role reactivated." : "Role deactivated.");
+      await onChanged(nextIsActive ? text.roleReactivated : text.roleDeactivated);
 
       if (editingRoleId === role.id) {
         setForm((current) => ({ ...current, isActive: nextIsActive }));
@@ -5378,15 +5462,15 @@ function RolesCrudPage({
     <div className="max-w-6xl">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <SectionHeading
-          title="Roles"
-          description="Manage the roles used in schedules."
+          title={text.title}
+          description={text.description}
         />
         <button
           type="button"
           onClick={openAddForm}
           className={secondaryButtonClassName}
         >
-          Προσθήκη ρόλου
+          {text.addRole}
         </button>
       </div>
 
@@ -5396,19 +5480,19 @@ function RolesCrudPage({
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
-            {editingRoleId ? "Edit role" : "Add role"}
+            {editingRoleId ? text.editRole : text.addRole}
           </h3>
           <button
             type="button"
             onClick={closeForm}
             className={secondaryButtonClassName}
           >
-            Cancel
+            {text.cancel}
           </button>
         </div>
 
         <div className="mt-4 grid grid-cols-[1fr_180px_1.5fr_120px] gap-4">
-          <Field label="Role name" required>
+          <Field label={text.roleName} required>
             <input
               value={form.name}
               onChange={(event) =>
@@ -5418,23 +5502,23 @@ function RolesCrudPage({
               placeholder="Barista"
             />
           </Field>
-          <Field label="Color">
+          <Field label={text.color}>
             <ColorSelect
               value={form.color}
               onChange={(color) => setForm({ ...form, color })}
             />
           </Field>
-          <Field label="Description">
+          <Field label={text.descriptionLabel}>
             <input
               value={form.description}
               onChange={(event) =>
                 setForm({ ...form, description: event.target.value })
               }
               className={inputClassName}
-              placeholder="Optional"
+              placeholder={text.placeholder}
             />
           </Field>
-          <Field label="Status">
+          <Field label={text.status}>
             <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -5444,7 +5528,7 @@ function RolesCrudPage({
                 }
                 className="h-4 w-4"
               />
-              Active
+              {text.active}
             </label>
           </Field>
         </div>
@@ -5455,22 +5539,22 @@ function RolesCrudPage({
           disabled={isSaving}
           className="mt-5 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
         >
-          {isSaving ? "Saving..." : editingRoleId ? "Save role" : "Add role"}
+          {isSaving ? text.saving : editingRoleId ? text.saveRole : text.addRole}
         </button>
       </div>
       ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid grid-cols-[1.2fr_1.6fr_120px_190px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Role</span>
-          <span>Description</span>
-          <span>Status</span>
-          <span>Actions</span>
+          <span>{text.role}</span>
+          <span>{text.descriptionLabel}</span>
+          <span>{text.status}</span>
+          <span>{text.actions}</span>
         </div>
 
         {roles.length === 0 ? (
           <p className="px-5 py-5 text-sm text-slate-500">
-            No roles have been created yet.
+            {text.noRoles}
           </p>
         ) : (
           roles.map((role) => (
@@ -5488,23 +5572,23 @@ function RolesCrudPage({
                 </span>
               </div>
               <p className="text-sm text-slate-600">
-                {role.description || "No description"}
+                {role.description || text.noNotes}
               </p>
-              <StatusBadge isActive={Boolean(role.is_active)} />
+              <StatusBadge isActive={Boolean(role.is_active)} language={language} />
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => startEditing(role)}
                   className={secondaryButtonClassName}
                 >
-                  Edit
+                  {text.edit}
                 </button>
                 <button
                   type="button"
                   onClick={() => void toggleRoleActive(role)}
                   className={secondaryButtonClassName}
                 >
-                  {role.is_active ? "Deactivate" : "Reactivate"}
+                  {role.is_active ? text.deactivate : text.reactivate}
                 </button>
               </div>
             </div>
@@ -5516,9 +5600,11 @@ function RolesCrudPage({
 }
 
 function ShiftTemplatesCrudPage({
+  language,
   shiftTemplates,
   onChanged
 }: {
+  language: UiLanguage;
   shiftTemplates: ShiftTemplate[];
   onChanged: (message: string) => Promise<void>;
 }) {
@@ -5529,9 +5615,76 @@ function ShiftTemplatesCrudPage({
   const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const text =
+    language === "en"
+      ? {
+          title: "Shift Templates",
+          description: "Manage reusable shifts for future programs.",
+          addShift: "Add shift",
+          editShift: "Edit shift",
+          cancel: "Cancel",
+          name: "Name",
+          start: "Start",
+          end: "End",
+          overnight: "Overnight",
+          color: "Color",
+          status: "Status",
+          notes: "Notes",
+          template: "Template",
+          time: "Time",
+          actions: "Actions",
+          active: "Active",
+          yes: "Yes",
+          no: "No",
+          saving: "Saving...",
+          saveShift: "Save shift",
+          noShifts: "No shift templates have been created yet.",
+          noNotes: "No notes",
+          edit: "Edit",
+          deactivate: "Deactivate",
+          reactivate: "Reactivate",
+          shiftUpdated:
+            "Shift template updated. Future generated programs will use the new template values; existing programs stay unchanged.",
+          shiftAdded: "Shift template added.",
+          shiftReactivated: "Shift template reactivated.",
+          shiftDeactivated: "Shift template deactivated.",
+          optionalNotes: "Optional notes"
+        }
+      : {
+          title: "Βάρδιες",
+          description: "Διαχειριστείτε τις επαναχρησιμοποιούμενες βάρδιες για μελλοντικά προγράμματα.",
+          addShift: "Προσθήκη βάρδιας",
+          editShift: "Επεξεργασία βάρδιας",
+          cancel: "Ακύρωση",
+          name: "Όνομα",
+          start: "Έναρξη",
+          end: "Λήξη",
+          overnight: "Περνάει τα μεσάνυχτα",
+          color: "Χρώμα",
+          status: "Κατάσταση",
+          notes: "Σημειώσεις",
+          template: "Βάρδια",
+          time: "Ώρες",
+          actions: "Ενέργειες",
+          active: "Ενεργή",
+          yes: "Ναι",
+          no: "Όχι",
+          saving: "Αποθήκευση...",
+          saveShift: "Αποθήκευση βάρδιας",
+          noShifts: "Δεν έχουν δημιουργηθεί βάρδιες ακόμα.",
+          noNotes: "Δεν υπάρχουν σημειώσεις",
+          edit: "Επεξεργασία",
+          deactivate: "Απενεργοποίηση",
+          reactivate: "Ενεργοποίηση",
+          shiftUpdated: "Η βάρδια ενημερώθηκε.",
+          shiftAdded: "Η βάρδια προστέθηκε.",
+          shiftReactivated: "Η βάρδια ενεργοποιήθηκε.",
+          shiftDeactivated: "Η βάρδια απενεργοποιήθηκε.",
+          optionalNotes: "Προαιρετικές σημειώσεις"
+        };
 
   async function saveShiftTemplate() {
-    const nextErrors = validateShiftTemplateCrudForm(form);
+    const nextErrors = validateShiftTemplateCrudForm(form, language);
 
     if (nextErrors.length > 0) {
       setErrors(nextErrors);
@@ -5560,12 +5713,10 @@ function ShiftTemplatesCrudPage({
           editingShiftId,
           payload
         );
-        await onChanged(
-          "Shift template updated. Future generated programs will use the new template values; existing programs stay unchanged."
-        );
+        await onChanged(text.shiftUpdated);
       } else {
         await databaseApi.createRecord("shift_templates", payload);
-        await onChanged("Shift template added.");
+        await onChanged(text.shiftAdded);
       }
 
       closeForm();
@@ -5585,11 +5736,7 @@ function ShiftTemplatesCrudPage({
       await databaseApi.updateRecord("shift_templates", template.id, {
         is_active: nextIsActive
       });
-      await onChanged(
-        nextIsActive
-          ? "Shift template reactivated."
-          : "Shift template deactivated."
-      );
+      await onChanged(nextIsActive ? text.shiftReactivated : text.shiftDeactivated);
 
       if (editingShiftId === template.id) {
         setForm((current) => ({ ...current, isActive: nextIsActive }));
@@ -5634,15 +5781,15 @@ function ShiftTemplatesCrudPage({
     <div className="max-w-6xl">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <SectionHeading
-          title="Shift Templates"
-          description="Manage reusable shifts for future programs."
+          title={text.title}
+          description={text.description}
         />
         <button
           type="button"
           onClick={openAddForm}
           className={secondaryButtonClassName}
         >
-          Προσθήκη βάρδιας
+          {text.addShift}
         </button>
       </div>
 
@@ -5652,19 +5799,19 @@ function ShiftTemplatesCrudPage({
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold tracking-normal">
-            {editingShiftId ? "Edit shift template" : "Add shift template"}
+            {editingShiftId ? text.editShift : text.addShift}
           </h3>
           <button
             type="button"
             onClick={closeForm}
             className={secondaryButtonClassName}
           >
-            Cancel
+            {text.cancel}
           </button>
         </div>
 
         <div className="mt-4 grid grid-cols-[1fr_130px_130px_120px_180px_120px] gap-4">
-          <Field label="Name" required>
+          <Field label={text.name} required>
             <input
               value={form.name}
               onChange={(event) =>
@@ -5674,7 +5821,7 @@ function ShiftTemplatesCrudPage({
               placeholder="Morning"
             />
           </Field>
-          <Field label="Start" required>
+          <Field label={text.start} required>
             <input
               type="time"
               value={form.startTime}
@@ -5684,7 +5831,7 @@ function ShiftTemplatesCrudPage({
               className={inputClassName}
             />
           </Field>
-          <Field label="End" required>
+          <Field label={text.end} required>
             <input
               type="time"
               value={form.endTime}
@@ -5694,7 +5841,7 @@ function ShiftTemplatesCrudPage({
               className={inputClassName}
             />
           </Field>
-          <Field label="Overnight">
+          <Field label={text.overnight}>
             <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -5704,16 +5851,16 @@ function ShiftTemplatesCrudPage({
                 }
                 className="h-4 w-4"
               />
-              Yes
+              {text.yes}
             </label>
           </Field>
-          <Field label="Color">
+          <Field label={text.color}>
             <ColorSelect
               value={form.color}
               onChange={(color) => setForm({ ...form, color })}
             />
           </Field>
-          <Field label="Status">
+          <Field label={text.status}>
             <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -5723,19 +5870,19 @@ function ShiftTemplatesCrudPage({
                 }
                 className="h-4 w-4"
               />
-              Active
+              {text.active}
             </label>
           </Field>
         </div>
 
-        <Field label="Notes">
+        <Field label={text.notes}>
           <textarea
             value={form.notes}
             onChange={(event) =>
               setForm({ ...form, notes: event.target.value })
             }
             className={`${inputClassName} mt-4 min-h-20 resize-y`}
-            placeholder="Optional notes"
+            placeholder={text.optionalNotes}
           />
         </Field>
 
@@ -5746,27 +5893,27 @@ function ShiftTemplatesCrudPage({
           className="mt-5 rounded-md bg-emerald-700 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-60"
         >
           {isSaving
-            ? "Saving..."
+            ? text.saving
             : editingShiftId
-              ? "Save shift template"
-              : "Add shift template"}
+              ? text.saveShift
+              : text.addShift}
         </button>
       </div>
       ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="grid grid-cols-[1.1fr_140px_110px_1.3fr_120px_210px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <span>Template</span>
-          <span>Time</span>
-          <span>Overnight</span>
-          <span>Notes</span>
-          <span>Status</span>
-          <span>Actions</span>
+          <span>{text.template}</span>
+          <span>{text.time}</span>
+          <span>{text.overnight}</span>
+          <span>{text.notes}</span>
+          <span>{text.status}</span>
+          <span>{text.actions}</span>
         </div>
 
         {shiftTemplates.length === 0 ? (
           <p className="px-5 py-5 text-sm text-slate-500">
-            No shift templates have been created yet.
+            {text.noShifts}
           </p>
         ) : (
           shiftTemplates.map((template) => (
@@ -5787,26 +5934,29 @@ function ShiftTemplatesCrudPage({
                 {template.start_time} - {template.end_time}
               </p>
               <p className="text-sm text-slate-600">
-                {template.is_overnight ? "Yes" : "No"}
+                {template.is_overnight ? text.yes : text.no}
               </p>
               <p className="text-sm text-slate-600">
-                {template.notes || "No notes"}
+                {template.notes || text.noNotes}
               </p>
-              <StatusBadge isActive={Boolean(template.is_active)} />
+              <StatusBadge
+                isActive={Boolean(template.is_active)}
+                language={language}
+              />
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => startEditing(template)}
                   className={secondaryButtonClassName}
                 >
-                  Edit
+                  {text.edit}
                 </button>
                 <button
                   type="button"
                   onClick={() => void toggleShiftTemplateActive(template)}
                   className={secondaryButtonClassName}
                 >
-                  {template.is_active ? "Deactivate" : "Reactivate"}
+                  {template.is_active ? text.deactivate : text.reactivate}
                 </button>
               </div>
             </div>
@@ -5817,7 +5967,13 @@ function ShiftTemplatesCrudPage({
   );
 }
 
-function StatusBadge({ isActive }: { isActive: boolean }) {
+function StatusBadge({
+  isActive,
+  language
+}: {
+  isActive: boolean;
+  language: UiLanguage;
+}) {
   return (
     <span
       className={[
@@ -5827,7 +5983,13 @@ function StatusBadge({ isActive }: { isActive: boolean }) {
           : "bg-slate-100 text-slate-500 ring-1 ring-slate-200"
       ].join(" ")}
     >
-      {isActive ? "Active" : "Inactive"}
+      {isActive
+        ? language === "en"
+          ? "Active"
+          : "Ενεργός"
+        : language === "en"
+          ? "Inactive"
+          : "Ανενεργός"}
     </span>
   );
 }
@@ -5856,17 +6018,24 @@ function createShiftTemplateCrudForm(): ShiftTemplateCrudForm {
 function validateRoleCrudForm(
   form: RoleCrudForm,
   existingRoles: Role[],
-  editingRoleId: string | null
+  editingRoleId: string | null,
+  language: UiLanguage
 ): string[] {
   const errors: string[] = [];
   const trimmedName = form.name.trim();
 
   if (!trimmedName) {
-    errors.push("Role name is required.");
+    errors.push(
+      language === "en"
+        ? "Role name is required."
+        : "Το όνομα ρόλου είναι υποχρεωτικό."
+    );
   }
 
   if (!form.color) {
-    errors.push("Choose a role color.");
+    errors.push(
+      language === "en" ? "Choose a role color." : "Επιλέξτε χρώμα ρόλου."
+    );
   }
 
   const duplicate = existingRoles.find(
@@ -5877,37 +6046,60 @@ function validateRoleCrudForm(
   );
 
   if (duplicate) {
-    errors.push(`A role named "${trimmedName}" already exists.`);
+    errors.push(
+      language === "en"
+        ? "A role with this name already exists."
+        : "Υπάρχει ήδη ρόλος με αυτό το όνομα."
+    );
   }
 
   return errors;
 }
 
 function validateShiftTemplateCrudForm(
-  form: ShiftTemplateCrudForm
+  form: ShiftTemplateCrudForm,
+  language: UiLanguage
 ): string[] {
   const errors: string[] = [];
 
   if (!form.name.trim()) {
-    errors.push("Shift template name is required.");
+    errors.push(
+      language === "en"
+        ? "Shift template name is required."
+        : "Το όνομα βάρδιας είναι υποχρεωτικό."
+    );
   }
 
   if (!form.startTime) {
-    errors.push("Start time is required.");
+    errors.push(
+      language === "en"
+        ? "Start time is required."
+        : "Η ώρα έναρξης είναι υποχρεωτική."
+    );
   }
 
   if (!form.endTime) {
-    errors.push("End time is required.");
+    errors.push(
+      language === "en"
+        ? "End time is required."
+        : "Η ώρα λήξης είναι υποχρεωτική."
+    );
   }
 
   if (form.startTime && form.endTime && !form.isOvernight) {
     if (form.endTime <= form.startTime) {
-      errors.push("End time must be after start time unless overnight is enabled.");
+      errors.push(
+        language === "en"
+          ? "End time must be after start time unless overnight is enabled."
+          : "Η λήξη πρέπει να είναι μετά την έναρξη, εκτός αν η βάρδια περνάει τα μεσάνυχτα."
+      );
     }
   }
 
   if (!form.color) {
-    errors.push("Choose a shift color.");
+    errors.push(
+      language === "en" ? "Choose a shift color." : "Επιλέξτε χρώμα βάρδιας."
+    );
   }
 
   return errors;
@@ -6004,7 +6196,8 @@ function parseStaffingRoleCount(value: string | undefined): number | null {
 
 function groupStaffingRequirements(
   requirements: StaffingRequirement[],
-  shiftTemplates: ShiftTemplate[]
+  shiftTemplates: ShiftTemplate[],
+  language: UiLanguage = "en"
 ): StaffingRequirementGroup[] {
   const groups = new Map<string, StaffingRequirementGroup>();
 
@@ -6032,7 +6225,9 @@ function groupStaffingRequirements(
       key,
       dayOfWeek: requirement.day_of_week,
       shiftTemplateId,
-      label: shiftTemplate?.name ?? "Custom shift",
+      label:
+        shiftTemplate?.name ??
+        (language === "en" ? "Custom shift" : "Προσαρμοσμένη βάρδια"),
       startTime: shiftTemplate?.start_time ?? requirement.start_time,
       endTime: shiftTemplate?.end_time ?? requirement.end_time,
       requirements: [requirement],
@@ -6919,7 +7114,7 @@ function buildTeamSchedulePdfHtml({
         .map(
           (employeeRow) => `<tr>
             <td class="employee">${escapeHtml(
-              employeeName(employeeRow.employee.id, [employeeRow.employee])
+              employeeName(employeeRow.employee.id, [employeeRow.employee], "el")
             )}</td>
             ${dates
               .map((date) => {
@@ -6940,7 +7135,7 @@ function buildTeamSchedulePdfHtml({
                           item.slot.start_time
                         )}-${escapeHtml(item.slot.end_time)}</div>
                         <div class="shift-role">${escapeHtml(
-                          item.role?.name ?? "Role"
+                          item.role?.name ?? "Ρόλος"
                         )}</div>
                       </div>`
                   )
@@ -7075,7 +7270,9 @@ function buildManagerReportPdfHtml({
       const maxHours = workRules?.max_hours_per_week ?? null;
 
       return `<tr>
-        <td>${escapeHtml(employeeName(employeeRow.employee.id, [employeeRow.employee]))}</td>
+        <td>${escapeHtml(
+          employeeName(employeeRow.employee.id, [employeeRow.employee], language)
+        )}</td>
         <td>${employeeRow.assignmentCount}</td>
         <td>${escapeHtml(formatHours(totalHours))}</td>
         <td>${weekendShifts}</td>
@@ -7102,13 +7299,15 @@ function buildManagerReportPdfHtml({
           language === "en"
             ? `${employeeName(
                 employeeRow.employee.id,
-                [employeeRow.employee]
+                [employeeRow.employee],
+                language
               )}: above the configured weekly limit (${formatHours(
                 totalHours
               )}/${formatHours(workRules.max_hours_per_week)} hours).`
             : `${employeeName(
                 employeeRow.employee.id,
-                [employeeRow.employee]
+                [employeeRow.employee],
+                language
               )}: πάνω από το εβδομαδιαίο όριο (${formatHours(
                 totalHours
               )}/${formatHours(workRules.max_hours_per_week)} ώρες).`
@@ -7138,6 +7337,7 @@ function buildManagerReportPdfHtml({
           notesTitle: "Notes / limitations",
           off: "Off",
           recommendations: "Recommendations",
+          role: "Role",
           scheduleTitle: "Weekly schedule",
           shifts: "Shifts",
           summaryTitle: "Coverage summary",
@@ -7164,6 +7364,7 @@ function buildManagerReportPdfHtml({
           notesTitle: "Σημειώσεις / περιορισμοί",
           off: "Ρεπό",
           recommendations: "Προτάσεις",
+          role: "Ρόλος",
           scheduleTitle: "Εβδομαδιαίο πρόγραμμα",
           shifts: "Βάρδιες",
           summaryTitle: "Σύνοψη κάλυψης",
@@ -7386,7 +7587,7 @@ function buildManagerReportPdfHtml({
 
           return `<tr>
             <td class="employee">${escapeHtml(
-              employeeName(employeeRow.employee.id, [employeeRow.employee])
+              employeeName(employeeRow.employee.id, [employeeRow.employee], language)
             )}<div class="hours">${escapeHtml(text.totalHours)}: ${escapeHtml(formatHours(totalHours))}</div></td>
             ${dates
               .map((date) => {
@@ -7411,7 +7612,7 @@ function buildManagerReportPdfHtml({
                           item.slot.start_time
                         )}-${escapeHtml(item.slot.end_time)}</div>
                         <div class="shift-role">${escapeHtml(
-                          item.role?.name ?? "Role"
+                          item.role?.name ?? text.role
                         )}</div>
                       </div>`
                   )
@@ -7798,7 +7999,7 @@ function employmentTypeSelectOptions(language: UiLanguage): Array<{
     { value: "full_time", label: "Πλήρης απασχόληση" },
     { value: "part_time", label: "Μερική απασχόληση" },
     { value: "weekly_hours", label: "Συμφωνημένες εβδομαδιαίες ώρες" },
-    { value: "custom", label: "Custom" }
+    { value: "custom", label: "Προσαρμοσμένο" }
   ];
 }
 
@@ -7889,14 +8090,14 @@ function workRulesSummaryLocalized(
 ): string {
   if (!workRules) {
     return language === "en"
-      ? "No work rules set"
+      ? "No work rules configured"
       : "Δεν έχουν οριστεί κανόνες εργασίας";
   }
 
   const employmentType =
     employmentTypeSelectOptions(language).find(
       (option) => option.value === normalizeEmploymentType(workRules.employment_type)
-    )?.label ?? "Custom";
+    )?.label ?? (language === "en" ? "Custom" : "Προσαρμοσμένο");
   const days =
     workRules.contract_days_per_week ??
     workRules.target_days_per_week ??
@@ -8029,18 +8230,26 @@ function validateTimeOffFormForLanguage(
   }
 
   if (!form.dateFrom) {
-    errors.push(language === "en" ? "Date from is required." : "Η ημερομηνία από είναι υποχρεωτική.");
+    errors.push(
+      language === "en"
+        ? "Date from is required."
+        : "Η ημερομηνία έναρξης είναι υποχρεωτική."
+    );
   }
 
   if (!form.dateTo) {
-    errors.push(language === "en" ? "Date to is required." : "Η ημερομηνία έως είναι υποχρεωτική.");
+    errors.push(
+      language === "en"
+        ? "Date to is required."
+        : "Η ημερομηνία λήξης είναι υποχρεωτική."
+    );
   }
 
   if (form.dateFrom && form.dateTo && form.dateTo < form.dateFrom) {
     errors.push(
       language === "en"
         ? "Date to cannot be before date from."
-        : "Η ημερομηνία έως δεν μπορεί να είναι πριν από την ημερομηνία από."
+        : "Η ημερομηνία λήξης δεν μπορεί να είναι πριν την ημερομηνία έναρξης."
     );
   }
 
@@ -8134,11 +8343,15 @@ function createTimeOffForm(employees: Employee[]): TimeOffForm {
   };
 }
 
-function employeeName(employeeId: string, employees: Employee[]): string {
+function employeeName(
+  employeeId: string,
+  employees: Employee[],
+  language: UiLanguage = "en"
+): string {
   const employee = employees.find((item) => item.id === employeeId);
 
   if (!employee) {
-    return "Unknown employee";
+    return language === "en" ? "Unknown employee" : "Άγνωστος εργαζόμενος";
   }
 
   return `${employee.first_name} ${employee.last_name}`;
@@ -8477,6 +8690,7 @@ function renderPage(
   if (pageId === "staffing-requirements") {
     return (
       <StaffingRequirementsPage
+        language={appLanguage(summary.businessSettings)}
         roles={summary.roles}
         shiftTemplates={summary.shiftTemplates}
         requirements={summary.staffingRequirements}
@@ -8556,6 +8770,7 @@ function renderPage(
   if (pageId === "roles") {
     return (
       <RolesCrudPage
+        language={appLanguage(summary.businessSettings)}
         roles={summary.roles}
         onChanged={(message) => onDataChanged(message)}
       />
@@ -8565,6 +8780,7 @@ function renderPage(
   if (pageId === "shift-templates") {
     return (
       <ShiftTemplatesCrudPage
+        language={appLanguage(summary.businessSettings)}
         shiftTemplates={summary.shiftTemplates}
         onChanged={(message) => onDataChanged(message)}
       />
