@@ -98,6 +98,23 @@ export type AssignmentResult = {
   evaluation: ScheduleEvaluationResult;
 };
 
+export type InMemoryScheduleOptimizationResult = {
+  runId: string;
+  totalSlots: number;
+  alreadyAssignedSlots: number;
+  attemptedSlots: number;
+  assignedSlots: number;
+  unfilledSlots: number;
+  assignments: ScheduleAssignment[];
+  generatedAssignments: ScheduleAssignment[];
+  warnings: SchedulerWarningDraft[];
+  explanations: string[];
+  evaluation: ScheduleEvaluationResult;
+  selectedProfile: string | null;
+  selectedScore: number;
+  repairIterations: number;
+};
+
 type AssignmentCandidate = {
   employee: Employee;
   score: CandidateScore;
@@ -478,6 +495,266 @@ export async function assignEmployeesToRun({
     warningsCreated,
     explanations: selectedSchedule.explanations,
     evaluation: finalEvaluation
+  };
+}
+
+export function optimizeScheduleInMemory({
+  run,
+  slots,
+  employees,
+  employeeRoles,
+  employeeWorkRules,
+  employeeDayConstraints,
+  employeeShiftAvailability = [],
+  timeOff,
+  assignments,
+  roles = [],
+  shiftTemplates = [],
+  staffingRequirements = [],
+  manualOverrides = {},
+  qualityMode = "balanced"
+}: {
+  run: ScheduleRun;
+  slots: ScheduleSlot[];
+  employees: Employee[];
+  employeeRoles: EmployeeRole[];
+  employeeWorkRules: EmployeeWorkRules[];
+  employeeDayConstraints: EmployeeDayConstraint[];
+  employeeShiftAvailability?: EmployeeShiftAvailability[];
+  timeOff: TimeOff[];
+  assignments: ScheduleAssignment[];
+  roles?: Role[];
+  shiftTemplates?: ShiftTemplate[];
+  staffingRequirements?: StaffingRequirement[];
+  manualOverrides?: ManualOverrideMap;
+  qualityMode?: SchedulerQualityMode;
+}): InMemoryScheduleOptimizationResult {
+  const runSlots = slots
+    .filter((slot) => slot.schedule_run_id === run.id)
+    .sort(compareSlots);
+  const activeRunAssignments = assignments.filter(
+    (assignment) =>
+      assignment.schedule_run_id === run.id &&
+      assignment.status !== "cancelled" &&
+      assignment.status !== "removed"
+  );
+  const assignedSlotIds = new Set(
+    activeRunAssignments.map((assignment) => assignment.schedule_slot_id)
+  );
+  const alreadyAssignedSlots = assignedSlotIds.size;
+  const slotsToAssign = runSlots.filter(
+    (slot) => slot.status !== "filled" && !assignedSlotIds.has(slot.id)
+  );
+  const data: SchedulerData = {
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    staffingRequirements,
+    timeOff
+  };
+  const initialAssignedShifts = buildExistingAssignedShifts({
+    slots: runSlots,
+    assignments: activeRunAssignments
+  });
+  const activeEmployees = sortEmployees(employees).filter(
+    (employee) => employee.is_active === 1
+  );
+  const rotationHistory = buildRotationHistory({
+    run,
+    slots,
+    assignments,
+    staffingRequirements
+  });
+  const optimizationConfig = getSchedulerOptimizationConfig(qualityMode);
+  const warnings: SchedulerWarningDraft[] = [];
+
+  if (slotsToAssign.length === 0) {
+    warnings.push(createNoSlotsWarning(run.id));
+    const evaluation = evaluateSchedule({
+      run,
+      slots: runSlots,
+      assignments: activeRunAssignments,
+      employees,
+      roles,
+      employeeRoles,
+      employeeWorkRules,
+      employeeDayConstraints,
+      employeeShiftAvailability,
+      timeOff,
+      staffingRequirements,
+      shiftTemplates,
+      manualOverrides
+    });
+
+    return {
+      runId: run.id,
+      totalSlots: runSlots.length,
+      alreadyAssignedSlots,
+      attemptedSlots: 0,
+      assignedSlots: 0,
+      unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
+      assignments: activeRunAssignments,
+      generatedAssignments: [],
+      warnings,
+      explanations: [],
+      evaluation,
+      selectedProfile: null,
+      selectedScore: evaluation.reward,
+      repairIterations: 0
+    };
+  }
+
+  const diagnostics = buildSchedulerDiagnostics({
+    slots: runSlots,
+    employees,
+    roles,
+    data,
+    assignedShifts: initialAssignedShifts,
+    manualOverrides
+  });
+  const feasibility = buildScheduleFeasibilityAnalysis({
+    slots: runSlots,
+    employees,
+    roles,
+    shiftTemplates,
+    data,
+    assignedShifts: initialAssignedShifts,
+    manualOverrides
+  });
+
+  warnings.push(...createFeasibilityWarnings(run.id, feasibility));
+  warnings.push(
+    ...diagnostics.warnings.map(
+      (message): SchedulerWarningDraft => ({
+        scheduleRunId: run.id,
+        scheduleSlotId: null,
+        scheduleAssignmentId: null,
+        severity: "warning",
+        warningType: "role_under_supplied",
+        message
+      })
+    )
+  );
+
+  const selectedSchedule = optimizeCandidateSchedules({
+    run,
+    runSlots,
+    slotsToAssign,
+    employees,
+    roles,
+    activeEmployees,
+    data,
+    initialAssignedShifts,
+    fixedAssignments: activeRunAssignments,
+    rotationHistory,
+    manualOverrides,
+    staffingRequirements,
+    feasibility,
+    optimizationConfig
+  });
+  const generatedAssignments = buildSyntheticAssignments({
+    run,
+    fixedAssignments: [],
+    plannedAssignments: sortPlannedAssignments(
+      selectedSchedule.plannedAssignments,
+      runSlots
+    )
+  }).map((assignment, index) => ({
+    ...assignment,
+    id: `benchmark-${run.id}-${index}-${assignment.schedule_slot_id}`,
+    notes:
+      selectedSchedule.plannedAssignments.find(
+        (plannedAssignment) =>
+          plannedAssignment.scheduleSlotId === assignment.schedule_slot_id
+      )?.explanation ?? assignment.notes
+  }));
+  const finalAssignments = [...activeRunAssignments, ...generatedAssignments];
+  const finalAssignedSlotIds = new Set([
+    ...assignedSlotIds,
+    ...generatedAssignments.map((assignment) => assignment.schedule_slot_id)
+  ]);
+  const finalAssignedShifts = buildExistingAssignedShifts({
+    slots: runSlots,
+    assignments: finalAssignments
+  });
+  const finalHardConstraintViolations = validateFinalScheduleHardConstraints({
+    runSlots,
+    assignments: finalAssignments,
+    employees,
+    data,
+    manualOverrides
+  });
+
+  warnings.push(
+    ...finalHardConstraintViolations.map(
+      (violation): SchedulerWarningDraft => ({
+        scheduleRunId: run.id,
+        scheduleSlotId: violation.slotId,
+        scheduleAssignmentId: violation.assignmentId,
+        severity: "critical",
+        warningType: "final_hard_constraint_violation",
+        message: violation.message
+      })
+    )
+  );
+  warnings.push(
+    ...createRoleGroupCoverageWarnings({
+      runId: run.id,
+      runSlots,
+      assignedShifts: finalAssignedShifts,
+      employees,
+      data,
+      roles,
+      shiftTemplates,
+      staffingRequirements,
+      manualOverrides
+    })
+  );
+  warnings.push(
+    ...createTeamQualityWarnings({
+      runId: run.id,
+      runSlots,
+      assignments: finalAssignments,
+      employees,
+      employeeRoles,
+      roles,
+      shiftTemplates,
+      staffingRequirements
+    })
+  );
+
+  const evaluation = evaluateSchedule({
+    run,
+    slots: runSlots,
+    assignments: finalAssignments,
+    employees,
+    roles,
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    timeOff,
+    staffingRequirements,
+    shiftTemplates,
+    manualOverrides
+  });
+
+  return {
+    runId: run.id,
+    totalSlots: runSlots.length,
+    alreadyAssignedSlots,
+    attemptedSlots: slotsToAssign.length,
+    assignedSlots: generatedAssignments.length,
+    unfilledSlots: Math.max(0, runSlots.length - finalAssignedSlotIds.size),
+    assignments: finalAssignments,
+    generatedAssignments,
+    warnings,
+    explanations: selectedSchedule.explanations,
+    evaluation,
+    selectedProfile: selectedSchedule.profile.id,
+    selectedScore: selectedSchedule.score,
+    repairIterations: selectedSchedule.repairIterations
   };
 }
 

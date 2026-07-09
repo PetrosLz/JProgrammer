@@ -1,292 +1,204 @@
 import { performance } from "node:perf_hooks";
 
-import { evaluateSchedule } from "../src/renderer/services/scheduler/evaluator";
-import type { SchedulerFixture } from "./scheduler-fixtures";
 import {
-  createAssignment,
-  createEmployee,
-  createEmployeeRole,
-  createFixture,
-  createRole,
+  buildScheduleGenerationPlan,
+  evaluateSchedule,
+  optimizeScheduleInMemory,
+  type SchedulerQualityMode
+} from "../src/renderer/services/scheduler";
+import {
+  createBenchmarkScenarios,
   createSlot,
-  createStaffingRequirement,
-  createWorkRules
+  type SchedulerBenchmarkScenario
 } from "./scheduler-fixtures";
 
-type BenchmarkScenario = {
-  name: string;
-  fixture: SchedulerFixture;
+type BenchmarkResult = {
+  scenario: SchedulerBenchmarkScenario;
+  qualityMode: SchedulerQualityMode;
+  generatedSlots: number;
+  assignedSlots: number;
+  unfilledSlots: number;
+  coverageRate: number;
+  hardViolationCount: number;
+  warningCount: number;
+  reward: number;
+  grade: string;
+  elapsedMs: number;
+  repairIterations: number;
+  notes: string[];
 };
 
-const scenarios: BenchmarkScenario[] = [
-  {
-    name: "easy cafe",
-    fixture: createFixture()
-  },
-  {
-    name: "understaffed cafe",
-    fixture: createUnderstaffedCafe()
-  },
-  {
-    name: "many part-time employees",
-    fixture: createManyPartTimeEmployees()
-  },
-  {
-    name: "weekend shortage",
-    fixture: createWeekendShortage()
-  },
-  {
-    name: "one prior-experience employee",
-    fixture: createOneExperiencedEmployee()
-  },
-  {
-    name: "impossible schedule",
-    fixture: createImpossibleSchedule()
-  },
-  {
-    name: "multi-role flexible employees",
-    fixture: createFlexibleEmployees()
-  },
-  {
-    name: "high-demand Saturday",
-    fixture: createHighDemandSaturday()
+const qualityModes: SchedulerQualityMode[] = ["fast", "balanced", "best"];
+const results: BenchmarkResult[] = [];
+
+for (const scenario of createBenchmarkScenarios()) {
+  for (const qualityMode of qualityModes) {
+    const startedAt = performance.now();
+    const plan = buildScheduleGenerationPlan({
+      weekStartDate: scenario.weekStartDate,
+      openingHours: scenario.openingHours,
+      staffingRequirements: scenario.staffingRequirements,
+      shiftTemplates: scenario.shiftTemplates,
+      specialDays: scenario.specialDays
+    });
+    const slots = plan.slots.map((slot, index) =>
+      createSlot({
+        id: `${scenario.run.id}-slot-${index}`,
+        runId: scenario.run.id,
+        date: slot.date,
+        roleId: slot.roleId,
+        sourceId: slot.sourceId,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        status: "unfilled"
+      })
+    );
+    const assignmentResult = optimizeScheduleInMemory({
+      run: scenario.run,
+      slots,
+      employees: scenario.employees,
+      employeeRoles: scenario.employeeRoles,
+      employeeWorkRules: scenario.employeeWorkRules,
+      employeeDayConstraints: scenario.employeeDayConstraints,
+      employeeShiftAvailability: scenario.employeeShiftAvailability,
+      timeOff: scenario.timeOff,
+      assignments: scenario.existingAssignments,
+      roles: scenario.roles,
+      shiftTemplates: scenario.shiftTemplates,
+      staffingRequirements: scenario.staffingRequirements,
+      qualityMode
+    });
+    const evaluation = evaluateSchedule({
+      run: scenario.run,
+      slots,
+      assignments: assignmentResult.assignments,
+      employees: scenario.employees,
+      roles: scenario.roles,
+      employeeRoles: scenario.employeeRoles,
+      employeeWorkRules: scenario.employeeWorkRules,
+      employeeDayConstraints: scenario.employeeDayConstraints,
+      employeeShiftAvailability: scenario.employeeShiftAvailability,
+      timeOff: scenario.timeOff,
+      staffingRequirements: scenario.staffingRequirements,
+      shiftTemplates: scenario.shiftTemplates
+    });
+    const elapsedMs = performance.now() - startedAt;
+    const warningCount =
+      evaluation.metrics.warningCount +
+      assignmentResult.warnings.filter(
+        (warning) => warning.warningType !== "feasibility_feasible"
+      ).length +
+      plan.warnings.filter((warning) => warning.severity === "warning").length;
+    const notes = [
+      ...evaluation.explanations,
+      ...evaluation.softWarnings.map((warning) => warning.message),
+      ...assignmentResult.warnings.map((warning) => warning.message),
+      ...plan.warnings
+        .filter((warning) => warning.severity === "warning")
+        .map((warning) => warning.message)
+    ].slice(0, 3);
+    const result: BenchmarkResult = {
+      scenario,
+      qualityMode,
+      generatedSlots: slots.length,
+      assignedSlots: assignmentResult.assignments.length,
+      unfilledSlots: evaluation.metrics.unfilledSlots,
+      coverageRate: evaluation.metrics.coverageRate,
+      hardViolationCount: evaluation.metrics.hardViolationCount,
+      warningCount,
+      reward: evaluation.reward,
+      grade: evaluation.grade,
+      elapsedMs,
+      repairIterations: assignmentResult.repairIterations,
+      notes
+    };
+
+    results.push(result);
+    printResult(result);
   }
-];
+}
 
-for (const scenario of scenarios) {
-  const startedAt = performance.now();
-  const evaluation = evaluateSchedule({
-    run: scenario.fixture.run,
-    slots: scenario.fixture.slots,
-    assignments: scenario.fixture.assignments,
-    employees: scenario.fixture.employees,
-    roles: scenario.fixture.roles,
-    employeeRoles: scenario.fixture.employeeRoles,
-    employeeWorkRules: scenario.fixture.employeeWorkRules,
-    employeeDayConstraints: scenario.fixture.employeeDayConstraints,
-    employeeShiftAvailability: scenario.fixture.employeeShiftAvailability,
-    timeOff: scenario.fixture.timeOff,
-    staffingRequirements: scenario.fixture.staffingRequirements,
-    shiftTemplates: scenario.fixture.shiftTemplates
-  });
-  const elapsedMs = performance.now() - startedAt;
+assertBenchmarkThresholds(results);
+console.log(`Scheduler end-to-end benchmark passed (${results.length} runs).`);
 
+function printResult(result: BenchmarkResult) {
   console.log(
     [
-      scenario.name.padEnd(28),
-      `grade=${evaluation.grade.padEnd(12)}`,
-      `coverage=${Math.round(evaluation.metrics.coverageRate * 100)
+      result.scenario.name.padEnd(28),
+      result.qualityMode.padEnd(8),
+      `grade=${result.grade.padEnd(12)}`,
+      `slots=${String(result.generatedSlots).padStart(2)}`,
+      `assigned=${String(result.assignedSlots).padStart(2)}`,
+      `unfilled=${String(result.unfilledSlots).padStart(2)}`,
+      `coverage=${Math.round(result.coverageRate * 100)
         .toString()
         .padStart(3)}%`,
-      `hard=${evaluation.metrics.hardViolationCount}`,
-      `warnings=${evaluation.metrics.warningCount}`,
-      `reward=${Math.round(evaluation.reward)}`,
-      `weekendRange=${evaluation.metrics.weekendDistributionRange}`,
-      `difficultRange=${evaluation.metrics.difficultShiftDistributionRange}`,
-      `time=${elapsedMs.toFixed(2)}ms`
+      `hard=${result.hardViolationCount}`,
+      `warnings=${result.warningCount}`,
+      `reward=${Math.round(result.reward)}`,
+      `repair=${result.repairIterations}`,
+      `time=${result.elapsedMs.toFixed(0)}ms`
     ].join(" | ")
   );
+
+  if (result.notes.length > 0) {
+    console.log(`  notes: ${result.notes.join(" / ")}`);
+  }
 }
 
-function createUnderstaffedCafe(): SchedulerFixture {
-  const fixture = createFixture({ assignments: [] });
-  fixture.slots = [
-    ...fixture.slots,
-    createSlot({
-      id: "slot-service-tuesday",
-      runId: fixture.run.id,
-      date: "2026-05-19",
-      roleId: fixture.roles[0].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "17:00",
-      status: "unfilled"
-    }),
-    createSlot({
-      id: "slot-kitchen-tuesday",
-      runId: fixture.run.id,
-      date: "2026-05-19",
-      roleId: fixture.roles[1].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "17:00",
-      status: "unfilled"
-    })
-  ];
+function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
+  const byScenario = new Map<string, BenchmarkResult[]>();
 
-  return fixture;
-}
+  for (const result of resultsToCheck) {
+    const scenarioResults = byScenario.get(result.scenario.name) ?? [];
+    byScenario.set(result.scenario.name, [...scenarioResults, result]);
 
-function createManyPartTimeEmployees(): SchedulerFixture {
-  const employees = Array.from({ length: 8 }, (_, index) =>
-    createEmployee(`emp-pt-${index}`, `Part${index}`, "Timer")
-  );
-  const fixture = createFixture({ employees });
-  fixture.employeeRoles = employees.map((employee, index) =>
-    createEmployeeRole(`er-pt-${index}`, employee.id, fixture.roles[0].id)
-  );
-  fixture.employeeWorkRules = employees.map((employee, index) =>
-    createWorkRules(`wr-pt-${index}`, employee.id, 20, 24, 4, 5)
-  );
-  fixture.slots = Array.from({ length: 8 }, (_, index) =>
-    createSlot({
-      id: `slot-pt-${index}`,
-      runId: fixture.run.id,
-      date: `2026-05-${18 + index}`,
-      roleId: fixture.roles[0].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "13:00"
-    })
-  );
-  fixture.assignments = fixture.slots.map((slot, index) =>
-    createAssignment(`as-pt-${index}`, fixture.run.id, slot.id, employees[index].id)
-  );
+    if (
+      result.hardViolationCount > 0 &&
+      result.scenario.difficulty !== "impossible"
+    ) {
+      throw new Error(
+        `${result.scenario.name} ${result.qualityMode} produced ${result.hardViolationCount} hard violations.`
+      );
+    }
+  }
 
-  return fixture;
-}
+  const easyCafe = byScenario.get("easy cafe") ?? [];
+  for (const result of easyCafe) {
+    if (result.coverageRate !== 1 || result.hardViolationCount !== 0) {
+      throw new Error(
+        `easy cafe ${result.qualityMode} should reach 100% coverage with 0 hard violations.`
+      );
+    }
+  }
 
-function createWeekendShortage(): SchedulerFixture {
-  const fixture = createFixture();
-  fixture.slots = [
-    createSlot({
-      id: "slot-sat-service",
-      runId: fixture.run.id,
-      date: "2026-05-23",
-      roleId: fixture.roles[0].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "17:00",
-      endTime: "23:00"
-    }),
-    createSlot({
-      id: "slot-sat-kitchen",
-      runId: fixture.run.id,
-      date: "2026-05-23",
-      roleId: fixture.roles[1].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "17:00",
-      endTime: "23:00",
-      status: "unfilled"
-    })
-  ];
-  fixture.assignments = [
-    createAssignment("as-sat-service", fixture.run.id, fixture.slots[0].id, "emp-alex")
-  ];
+  const impossibleSchedule = byScenario.get("impossible schedule") ?? [];
+  for (const result of impossibleSchedule) {
+    if (result.hardViolationCount !== 0) {
+      throw new Error(
+        `impossible schedule ${result.qualityMode} should not force hard violations.`
+      );
+    }
 
-  return fixture;
-}
+    if (result.coverageRate >= 1 || result.warningCount === 0) {
+      throw new Error(
+        `impossible schedule ${result.qualityMode} should remain partially uncovered with warnings.`
+      );
+    }
+  }
 
-function createOneExperiencedEmployee(): SchedulerFixture {
-  const fixture = createFixture();
-  fixture.employeeRoles = [
-    createEmployeeRole("er-alex-service", "emp-alex", fixture.roles[0].id, "some_experience"),
-    createEmployeeRole("er-nina-service", "emp-nina", fixture.roles[0].id, "no_experience")
-  ];
-  fixture.slots = [
-    fixture.slots[0],
-    createSlot({
-      id: "slot-service-second",
-      runId: fixture.run.id,
-      date: "2026-05-18",
-      roleId: fixture.roles[0].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "17:00"
-    })
-  ];
-  fixture.assignments = [
-    createAssignment("as-alex-service", fixture.run.id, fixture.slots[0].id, "emp-alex"),
-    createAssignment("as-nina-service", fixture.run.id, fixture.slots[1].id, "emp-nina")
-  ];
+  for (const [scenarioName, scenarioResults] of byScenario.entries()) {
+    const fast = scenarioResults.find((result) => result.qualityMode === "fast");
+    const best = scenarioResults.find((result) => result.qualityMode === "best");
 
-  return fixture;
-}
+    if (!fast || !best) {
+      continue;
+    }
 
-function createImpossibleSchedule(): SchedulerFixture {
-  const fixture = createFixture();
-  fixture.slots = Array.from({ length: 6 }, (_, index) =>
-    createSlot({
-      id: `slot-impossible-${index}`,
-      runId: fixture.run.id,
-      date: `2026-05-${18 + index}`,
-      roleId: fixture.roles[1].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "17:00",
-      status: "unfilled"
-    })
-  );
-  fixture.assignments = [];
-
-  return fixture;
-}
-
-function createFlexibleEmployees(): SchedulerFixture {
-  const fixture = createFixture();
-  fixture.employeeRoles = [
-    createEmployeeRole("er-alex-service", "emp-alex", fixture.roles[0].id),
-    createEmployeeRole("er-alex-kitchen", "emp-alex", fixture.roles[1].id),
-    createEmployeeRole("er-nina-kitchen", "emp-nina", fixture.roles[1].id)
-  ];
-  fixture.slots = [
-    fixture.slots[0],
-    createSlot({
-      id: "slot-flex-kitchen",
-      runId: fixture.run.id,
-      date: "2026-05-19",
-      roleId: fixture.roles[1].id,
-      sourceId: fixture.staffingRequirements[0].id,
-      startTime: "09:00",
-      endTime: "17:00"
-    })
-  ];
-  fixture.assignments = [
-    createAssignment("as-alex-service", fixture.run.id, fixture.slots[0].id, "emp-alex"),
-    createAssignment("as-nina-kitchen", fixture.run.id, fixture.slots[1].id, "emp-nina")
-  ];
-
-  return fixture;
-}
-
-function createHighDemandSaturday(): SchedulerFixture {
-  const roles = [
-    createRole("role-service", "Service"),
-    createRole("role-kitchen", "Kitchen"),
-    createRole("role-cashier", "Cashier")
-  ];
-  const fixture = createFixture({ roles });
-  fixture.employeeRoles = [
-    createEmployeeRole("er-alex-service", "emp-alex", roles[0].id),
-    createEmployeeRole("er-alex-cashier", "emp-alex", roles[2].id),
-    createEmployeeRole("er-nina-kitchen", "emp-nina", roles[1].id)
-  ];
-  fixture.staffingRequirements = roles.map((role) =>
-    createStaffingRequirement({
-      id: `req-sat-${role.id}`,
-      roleId: role.id,
-      shiftTemplateId: fixture.shiftTemplates[1].id,
-      startTime: "17:00",
-      endTime: "23:00"
-    })
-  );
-  fixture.slots = roles.flatMap((role, roleIndex) =>
-    Array.from({ length: roleIndex === 0 ? 3 : 2 }, (_, index) =>
-      createSlot({
-        id: `slot-sat-${role.id}-${index}`,
-        runId: fixture.run.id,
-        date: "2026-05-23",
-        roleId: role.id,
-        sourceId: fixture.staffingRequirements[roleIndex].id,
-        startTime: "17:00",
-        endTime: "23:00",
-        status: index === 0 ? "filled" : "unfilled"
-      })
-    )
-  );
-  fixture.assignments = [
-    createAssignment("as-sat-service", fixture.run.id, fixture.slots[0].id, "emp-alex"),
-    createAssignment("as-sat-kitchen", fixture.run.id, fixture.slots[3].id, "emp-nina")
-  ];
-
-  return fixture;
+    if (best.reward < fast.reward && best.coverageRate < fast.coverageRate) {
+      throw new Error(
+        `${scenarioName} best quality regressed below fast by reward and coverage.`
+      );
+    }
+  }
 }

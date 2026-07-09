@@ -11,7 +11,9 @@ export {
 } from "./generateSlots";
 export {
   assignEmployeesToRun,
-  type AssignmentResult
+  optimizeScheduleInMemory,
+  type AssignmentResult,
+  type InMemoryScheduleOptimizationResult
 } from "./assignEmployees";
 export {
   evaluateSchedule,

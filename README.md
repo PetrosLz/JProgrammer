@@ -20,4 +20,6 @@ npm run benchmark:scheduler
 npm run build
 ```
 
-`test:scheduler` checks core hard-constraint guarantees and evaluator detection. `benchmark:scheduler` runs realistic scenarios such as understaffed cafes, weekend shortages, flexible employees, and high-demand Saturdays, then prints coverage, hard violations, reward, fairness metrics, warnings, and runtime.
+`test:scheduler` checks evaluator behavior and hard-constraint guarantees with small focused fixtures.
+
+`benchmark:scheduler` runs end-to-end generation scenarios. Each scenario defines opening hours, roles, shift templates, staffing requirements, employees, work rules, availability, and time off; the benchmark then generates slots, runs the real in-memory assignment optimizer, evaluates the final schedule, and compares `fast`, `balanced`, and `best` quality modes. It prints generated slots, assigned/unfilled counts, coverage, hard violations, warnings, reward, grade, repair iterations, runtime, and top notes. The benchmark also fails on obvious regressions, such as hard violations in normal scenarios, easy cafe not reaching full coverage, impossible schedules pretending to be fully covered, or `best` regressing below `fast` by both reward and coverage.
