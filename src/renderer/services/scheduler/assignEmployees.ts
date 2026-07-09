@@ -81,10 +81,9 @@ import {
   type ScheduleEvaluationResult
 } from "./evaluator";
 import {
-  getSchedulerOptimizationConfig,
-  type OptimizationConfig,
-  type SchedulerQualityMode
-} from "./qualityModes";
+  defaultSchedulerOptimizationConfig,
+  type OptimizationConfig
+} from "./optimizationConfig";
 
 export type AssignmentResult = {
   runId: string;
@@ -127,7 +126,7 @@ type AttemptProfileId =
   | "experienceFocused"
   | "fairnessFocused"
   | "weekendFocused"
-  | "balanced";
+  | "baseline";
 
 type AttemptProfile = {
   id: AttemptProfileId;
@@ -209,8 +208,7 @@ export async function assignEmployeesToRun({
   roles = [],
   shiftTemplates = [],
   staffingRequirements = [],
-  manualOverrides = {},
-  qualityMode = "balanced"
+  manualOverrides = {}
 }: {
   run: ScheduleRun;
   slots: ScheduleSlot[];
@@ -225,7 +223,6 @@ export async function assignEmployeesToRun({
   shiftTemplates?: ShiftTemplate[];
   staffingRequirements?: StaffingRequirement[];
   manualOverrides?: ManualOverrideMap;
-  qualityMode?: SchedulerQualityMode;
 }): Promise<AssignmentResult> {
   const runSlots = slots
     .filter((slot) => slot.schedule_run_id === run.id)
@@ -251,7 +248,7 @@ export async function assignEmployeesToRun({
     staffingRequirements,
     timeOff
   };
-  const optimizationConfig = getSchedulerOptimizationConfig(qualityMode);
+  const optimizationConfig = defaultSchedulerOptimizationConfig;
   const initialAssignedShifts: AssignedShift[] = buildExistingAssignedShifts({
     slots: runSlots,
     assignments: activeRunAssignments
@@ -291,7 +288,6 @@ export async function assignEmployeesToRun({
       undefined,
       undefined,
       undefined,
-      qualityMode,
       optimizationConfig,
       evaluation
     );
@@ -358,7 +354,8 @@ export async function assignEmployeesToRun({
     manualOverrides,
     staffingRequirements,
     feasibility,
-    optimizationConfig
+    optimizationConfig,
+    shiftTemplates
   });
   const savedAssignments: ScheduleAssignment[] = [];
 
@@ -474,7 +471,6 @@ export async function assignEmployeesToRun({
     diagnostics,
     selectedSchedule,
     feasibility,
-    qualityMode,
     optimizationConfig,
     finalEvaluation
   );
@@ -511,8 +507,7 @@ export function optimizeScheduleInMemory({
   roles = [],
   shiftTemplates = [],
   staffingRequirements = [],
-  manualOverrides = {},
-  qualityMode = "balanced"
+  manualOverrides = {}
 }: {
   run: ScheduleRun;
   slots: ScheduleSlot[];
@@ -527,7 +522,6 @@ export function optimizeScheduleInMemory({
   shiftTemplates?: ShiftTemplate[];
   staffingRequirements?: StaffingRequirement[];
   manualOverrides?: ManualOverrideMap;
-  qualityMode?: SchedulerQualityMode;
 }): InMemoryScheduleOptimizationResult {
   const runSlots = slots
     .filter((slot) => slot.schedule_run_id === run.id)
@@ -566,7 +560,7 @@ export function optimizeScheduleInMemory({
     assignments,
     staffingRequirements
   });
-  const optimizationConfig = getSchedulerOptimizationConfig(qualityMode);
+  const optimizationConfig = defaultSchedulerOptimizationConfig;
   const warnings: SchedulerWarningDraft[] = [];
 
   if (slotsToAssign.length === 0) {
@@ -651,7 +645,8 @@ export function optimizeScheduleInMemory({
     manualOverrides,
     staffingRequirements,
     feasibility,
-    optimizationConfig
+    optimizationConfig,
+    shiftTemplates
   });
   const generatedAssignments = buildSyntheticAssignments({
     run,
@@ -806,7 +801,8 @@ function optimizeCandidateSchedules({
   manualOverrides,
   staffingRequirements,
   feasibility,
-  optimizationConfig
+  optimizationConfig,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -822,6 +818,7 @@ function optimizeCandidateSchedules({
   staffingRequirements: StaffingRequirement[];
   feasibility: FeasibilityResult;
   optimizationConfig: OptimizationConfig;
+  shiftTemplates: ShiftTemplate[];
 }): CandidateSchedule {
   const startedAt = Date.now();
   const deadlineMs = startedAt + optimizationConfig.timeBudgetMs;
@@ -852,7 +849,8 @@ function optimizeCandidateSchedules({
       profile,
       deadlineMs,
       feasibility,
-      optimizationConfig
+      optimizationConfig,
+      shiftTemplates
     });
 
     if (!bestSchedule || candidateSchedule.score > bestSchedule.score) {
@@ -879,7 +877,8 @@ function optimizeCandidateSchedules({
       profile: profiles[0] ?? buildAttemptProfiles(1)[0],
       repairIterations: 0,
       rotationHistory,
-      feasibility
+      feasibility,
+      shiftTemplates
     })
   );
 }
@@ -900,7 +899,8 @@ function buildCandidateSchedule({
   profile,
   deadlineMs,
   feasibility,
-  optimizationConfig
+  optimizationConfig,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -918,6 +918,7 @@ function buildCandidateSchedule({
   deadlineMs: number;
   feasibility: FeasibilityResult;
   optimizationConfig: OptimizationConfig;
+  shiftTemplates: ShiftTemplate[];
 }): CandidateSchedule {
   const state: SimulationState = {
     plannedAssignments: new Map(),
@@ -1023,7 +1024,8 @@ function buildCandidateSchedule({
     profile,
     deadlineMs,
     feasibility,
-    optimizationConfig
+    optimizationConfig,
+    shiftTemplates
   });
 
   state.explanations.push(...repairResult.explanations);
@@ -1041,7 +1043,8 @@ function buildCandidateSchedule({
     profile,
     repairIterations: repairResult.iterations,
     rotationHistory,
-    feasibility
+    feasibility,
+    shiftTemplates
   });
 }
 
@@ -1186,8 +1189,8 @@ function buildAttemptProfiles(attempts: number): AttemptProfile[] {
       weekendMultiplier: 1.6
     },
     {
-      id: "balanced",
-      label: "Balanced",
+      id: "baseline",
+      label: "Baseline",
       candidateRankOffset: 0,
       selectionWindow: 55,
       coverageMultiplier: 1,
@@ -1371,7 +1374,8 @@ function repairCandidateSchedule({
   profile,
   deadlineMs,
   feasibility,
-  optimizationConfig
+  optimizationConfig,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -1389,6 +1393,7 @@ function repairCandidateSchedule({
   deadlineMs: number;
   feasibility: FeasibilityResult;
   optimizationConfig: OptimizationConfig;
+  shiftTemplates: ShiftTemplate[];
 }): RepairResult {
   const explanations: string[] = [];
   let iterations = 0;
@@ -1410,7 +1415,8 @@ function repairCandidateSchedule({
       manualOverrides,
       profile,
       repairIterations: iterations,
-      feasibility
+      feasibility,
+      shiftTemplates
     }).score;
     const moveRepair = findBestMoveRepair({
       run,
@@ -1427,7 +1433,8 @@ function repairCandidateSchedule({
       staffingRequirements,
       profile,
       currentScore,
-      feasibility
+      feasibility,
+      shiftTemplates
     });
 
     if (moveRepair) {
@@ -1451,7 +1458,8 @@ function repairCandidateSchedule({
       staffingRequirements,
       profile,
       currentScore,
-      feasibility
+      feasibility,
+      shiftTemplates
     });
 
     if (replacementRepair) {
@@ -1479,7 +1487,8 @@ function repairCandidateSchedule({
       manualOverrides,
       profile,
       currentScore,
-      feasibility
+      feasibility,
+      shiftTemplates
     });
 
     if (swapRepair) {
@@ -1510,7 +1519,8 @@ function findBestMoveRepair({
   staffingRequirements,
   profile,
   currentScore,
-  feasibility
+  feasibility,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -1527,6 +1537,7 @@ function findBestMoveRepair({
   profile: AttemptProfile;
   currentScore: number;
   feasibility: FeasibilityResult;
+  shiftTemplates: ShiftTemplate[];
 }): { plannedAssignments: Map<string, PlannedAssignment>; score: number; explanation: string } | null {
   const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
   const difficultyMap = buildSlotDifficultyMap({
@@ -1668,7 +1679,8 @@ function findBestMoveRepair({
           profile,
           repairIterations: 0,
           rotationHistory,
-          feasibility
+          feasibility,
+          shiftTemplates
         }).score;
 
         if (candidateScore <= currentScore || candidateScore <= (bestRepair?.score ?? -Infinity)) {
@@ -1760,7 +1772,8 @@ function findBestReplacementRepair({
   staffingRequirements,
   profile,
   currentScore,
-  feasibility
+  feasibility,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -1776,6 +1789,7 @@ function findBestReplacementRepair({
   profile: AttemptProfile;
   currentScore: number;
   feasibility: FeasibilityResult;
+  shiftTemplates: ShiftTemplate[];
 }): { plannedAssignments: Map<string, PlannedAssignment>; score: number; explanation: string } | null {
   const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
   const difficultyMap = buildSlotDifficultyMap({
@@ -1869,7 +1883,8 @@ function findBestReplacementRepair({
       profile,
       repairIterations: 0,
       rotationHistory,
-      feasibility
+      feasibility,
+      shiftTemplates
     }).score;
 
     if (candidateScore <= currentScore || candidateScore <= (bestRepair?.score ?? -Infinity)) {
@@ -1899,7 +1914,8 @@ function findBestSwapRepair({
   staffingRequirements,
   manualOverrides,
   profile,
-  currentScore
+  currentScore,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -1914,6 +1930,7 @@ function findBestSwapRepair({
   profile: AttemptProfile;
   currentScore: number;
   feasibility: FeasibilityResult;
+  shiftTemplates: ShiftTemplate[];
 }): { plannedAssignments: Map<string, PlannedAssignment>; score: number; explanation: string } | null {
   const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
   const plannedAssignments = [...state.plannedAssignments.values()];
@@ -2033,7 +2050,8 @@ function findBestSwapRepair({
         profile,
         repairIterations: 0,
         rotationHistory,
-        feasibility
+        feasibility,
+        shiftTemplates
       }).score;
 
       if (candidateScore <= currentScore || candidateScore <= (bestRepair?.score ?? -Infinity)) {
@@ -2064,7 +2082,8 @@ function scoreCandidateSchedule({
   staffingRequirements,
   manualOverrides,
   profile,
-  repairIterations
+  repairIterations,
+  shiftTemplates
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -2079,6 +2098,7 @@ function scoreCandidateSchedule({
   manualOverrides: ManualOverrideMap;
   profile: AttemptProfile;
   repairIterations: number;
+  shiftTemplates: ShiftTemplate[];
 }): CandidateSchedule {
   const plannedAssignments = [...state.plannedAssignments.values()];
   const syntheticAssignments = buildSyntheticAssignments({
@@ -2087,7 +2107,7 @@ function scoreCandidateSchedule({
     plannedAssignments
   });
   const runSlotIds = new Set(runSlots.map((slot) => slot.id));
-  const filledSlotIds = new Set(
+  const filledSlotIds = new Set<string>(
     syntheticAssignments
       .filter(
         (assignment) =>
@@ -2098,151 +2118,6 @@ function scoreCandidateSchedule({
       .map((assignment) => assignment.schedule_slot_id)
   );
   const unfilledSlots = runSlots.filter((slot) => !filledSlotIds.has(slot.id));
-  const coverageGroups = buildRoleGroupCoverage({
-    slots: runSlots,
-    assignedShifts: state.assignedShifts,
-    staffingRequirements
-  });
-  const details: string[] = [];
-  let score = 0;
-
-  function add(label: string, points: number) {
-    if (points === 0) {
-      return;
-    }
-
-    score += points;
-    details.push(`${label}: ${formatSignedScore(points)}`);
-  }
-
-  add("Filled slots", filledSlotIds.size * 1000);
-  add("Unfilled slots", unfilledSlots.length * -1000);
-  addShortageDistributionScore({
-    unfilledSlots,
-    runSlots,
-    coverageGroups,
-    roles,
-    staffingRequirements,
-    feasibility,
-    add
-  });
-
-  for (const group of coverageGroups) {
-    const representativeSlot = group.slots[0];
-    const isCritical = representativeSlot
-      ? isCriticalCoverageGroup(representativeSlot, roles)
-      : false;
-    const missingCount = Math.max(0, group.requiredCount - group.assignedCount);
-
-    if (group.assignedCount === 0) {
-      add(
-        `Zero coverage ${group.groupKey}`,
-        isCritical ? -5000 : -3000
-      );
-      continue;
-    }
-
-    add("Covered role group", 2500);
-
-    if (isCritical) {
-      add("Critical role group covered", 1500);
-    }
-
-    if (missingCount > 0) {
-      add("Partial coverage shortage", missingCount * -500);
-    }
-  }
-
-  const seenGroupKeys = new Set<string>();
-  for (const slot of runSlots) {
-    const groupKey = getRoleGroupKey(slot, staffingRequirements);
-
-    if (seenGroupKeys.has(groupKey)) {
-      continue;
-    }
-
-    seenGroupKeys.add(groupKey);
-
-    const quality = assessRoleGroupQuality({
-      slot,
-      slots: runSlots,
-      assignments: syntheticAssignments,
-      employees,
-      employeeRoles: data.employeeRoles,
-      roles,
-      staffingRequirements
-    });
-
-    if (quality.warnings.length > 0) {
-      add("Weak team composition", quality.warnings.length * -500);
-    }
-
-    if (
-      quality.requiredCount >= 2 &&
-      quality.assignedEmployeeIds.length > 0 &&
-      quality.experienceLevels.some((level) => experienceLevelRank(level) >= 2)
-    ) {
-      add("Team has prior experience", 250);
-    }
-
-    if (
-      quality.experiencedRequiredCount > 0 &&
-      quality.experiencedAssignedCount >= quality.experiencedRequiredCount
-    ) {
-      add("Prior-experience requirement covered", 350);
-    }
-  }
-
-  const scoringRotationHistory =
-    rotationHistory ??
-    buildRotationHistory({
-      run,
-      slots: runSlots,
-      assignments: fixedAssignments,
-      staffingRequirements
-    });
-
-  addContractAndFairnessScore({
-    employees,
-    employeeWorkRules: data.employeeWorkRules,
-    assignedShifts: state.assignedShifts,
-    rotationHistory: scoringRotationHistory,
-    add
-  });
-
-  for (const plannedAssignment of plannedAssignments) {
-    const slot = runSlots.find(
-      (item) => item.id === plannedAssignment.scheduleSlotId
-    );
-    const employee = employees.find(
-      (item) => item.id === plannedAssignment.employeeId
-    );
-
-    if (!slot || !employee) {
-      continue;
-    }
-
-    if (
-      getRotationHistoryForEmployee(
-        employee.id,
-        scoringRotationHistory
-      ).assignmentKeys.has(buildRotationAssignmentKey(slot, staffingRequirements))
-    ) {
-      add("Repeated recent assignment", -100);
-    }
-
-    if (isFlexibleEmployeeUsedWhereSpecialistCouldCover({
-      employee,
-      slot,
-      employees,
-      data,
-      assignedShifts: state.assignedShifts,
-      manualOverrides
-    })) {
-      add("Flexible employee used where specialist could cover", -200);
-    }
-  }
-
   const hardConstraintViolations = validateScheduleHardConstraints({
     runSlots,
     plannedAssignments,
@@ -2263,7 +2138,7 @@ function scoreCandidateSchedule({
     employeeShiftAvailability: data.employeeShiftAvailability ?? [],
     timeOff: data.timeOff,
     staffingRequirements,
-    shiftTemplates: [],
+    shiftTemplates,
     manualOverrides
   });
   const evaluationHardConstraintViolations = evaluation.hardViolations.map(
@@ -2273,203 +2148,18 @@ function scoreCandidateSchedule({
     ...new Set([...hardConstraintViolations, ...evaluationHardConstraintViolations])
   ];
 
-  if (combinedHardConstraintViolations.length > 0) {
-    add(
-      "Hard constraint validation failed",
-      -1_000_000 * combinedHardConstraintViolations.length
-    );
-  }
-
   return {
     profile,
     plannedAssignments,
     assignedShifts: state.assignedShifts,
     unfilledSlots,
     score: evaluation.reward,
-    scoreDetails: [
-      ...formatEvaluationScoreDetails(evaluation),
-      ...details.slice(0, 20)
-    ],
+    scoreDetails: formatEvaluationScoreDetails(evaluation),
     explanations: state.explanations,
     hardConstraintViolations: combinedHardConstraintViolations,
     repairIterations,
     evaluation
   };
-}
-
-function addShortageDistributionScore({
-  unfilledSlots,
-  runSlots,
-  coverageGroups,
-  roles,
-  staffingRequirements,
-  feasibility,
-  add
-}: {
-  unfilledSlots: ScheduleSlot[];
-  runSlots: ScheduleSlot[];
-  coverageGroups: RoleGroupCoverage[];
-  roles: Role[];
-  staffingRequirements: StaffingRequirement[];
-  feasibility?: FeasibilityResult;
-  add: (label: string, points: number) => void;
-}) {
-  if (unfilledSlots.length === 0) {
-    return;
-  }
-
-  const multiplier =
-    feasibility?.status === "infeasible"
-      ? 1.6
-      : feasibility?.status === "risky"
-        ? 1.25
-        : 1;
-  const unfilledByDate = countSlotsBy(unfilledSlots, (slot) => slot.date);
-  const unfilledByDateRole = countSlotsBy(
-    unfilledSlots,
-    (slot) => `${slot.date}|${slot.role_id}`
-  );
-  const unfilledCriticalByShift = countSlotsBy(
-    unfilledSlots.filter((slot) => isCriticalCoverageGroup(slot, roles)),
-    (slot) =>
-      `${slot.date}|${
-        getSlotShiftTemplateId(slot, staffingRequirements) ??
-        `${slot.start_time}-${slot.end_time}`
-      }`
-  );
-  const requiredByDate = countSlotsBy(runSlots, (slot) => slot.date);
-
-  for (const [date, count] of unfilledByDate.entries()) {
-    if (count <= 1) {
-      continue;
-    }
-
-    add("Shortages concentrated on one day", -300 * (count - 1) * multiplier);
-
-    const requiredSlots = requiredByDate.get(date) ?? count;
-    if (count / Math.max(1, requiredSlots) >= 0.4) {
-      add("Heavy day understaffing", -1200 * multiplier);
-    }
-
-    if (getDayOfWeek(date) === 6 && count >= 3) {
-      add("Saturday shortage concentration", -1000 * multiplier);
-    }
-  }
-
-  for (const count of unfilledByDateRole.values()) {
-    if (count > 1) {
-      add("Same role missing repeatedly on one day", -500 * (count - 1) * multiplier);
-    }
-  }
-
-  for (const count of unfilledCriticalByShift.values()) {
-    if (count > 1) {
-      add(
-        "Multiple critical roles missing in one shift",
-        -700 * (count - 1) * multiplier
-      );
-    }
-  }
-
-  const datesWithDemand = new Set(runSlots.map((slot) => slot.date));
-  for (const date of datesWithDemand) {
-    const dayGroups = coverageGroups.filter(
-      (group) => group.slots[0]?.date === date
-    );
-
-    if (dayGroups.length === 0) {
-      continue;
-    }
-
-    const allGroupsPartiallyCovered = dayGroups.every(
-      (group) => group.assignedCount > 0
-    );
-    const criticalGroupsCovered = dayGroups
-      .filter((group) => {
-        const representativeSlot = group.slots[0];
-        return representativeSlot
-          ? isCriticalCoverageGroup(representativeSlot, roles)
-          : false;
-      })
-      .every((group) => group.assignedCount > 0);
-
-    if (allGroupsPartiallyCovered) {
-      add("Shortages distributed with partial daily coverage", 450 * multiplier);
-    }
-
-    if (criticalGroupsCovered) {
-      add("Critical daily role groups protected", 650 * multiplier);
-    }
-  }
-}
-
-function addContractAndFairnessScore({
-  employees,
-  employeeWorkRules,
-  assignedShifts,
-  rotationHistory,
-  add
-}: {
-  employees: Employee[];
-  employeeWorkRules: EmployeeWorkRules[];
-  assignedShifts: AssignedShift[];
-  rotationHistory: RotationHistoryMap;
-  add: (label: string, points: number) => void;
-}) {
-  const activeEmployees = employees.filter((employee) => employee.is_active === 1);
-  const weekendCounts = activeEmployees.map((employee) =>
-    getWeekendShiftCount(employee.id, assignedShifts)
-  );
-  const difficultCounts = activeEmployees.map((employee) =>
-    getNightShiftCount(employee.id, assignedShifts)
-  );
-
-  for (const employee of activeEmployees) {
-    const workRules = getEmployeeWorkRules(employee.id, employeeWorkRules);
-    const contractHours = getContractHoursPerWeek(workRules);
-    const contractDays = getContractDaysPerWeek(workRules);
-    const assignedHours = getAssignedHours(employee.id, assignedShifts);
-    const assignedDays = getAssignedDayCount(employee.id, assignedShifts);
-
-    if (assignedHours > 0 && contractHours !== null) {
-      const hourDifference = Math.abs(contractHours - assignedHours);
-      add("Close to contract hours", Math.max(-500, 160 - hourDifference * 18));
-
-      if (assignedHours > contractHours + 4) {
-        add("Above contract hours", -500);
-      }
-    }
-
-    if (assignedDays > 0 && contractDays !== null) {
-      const dayDifference = Math.abs(contractDays - assignedDays);
-      add("Close to contract days", Math.max(-250, 100 - dayDifference * 45));
-
-      if (assignedDays > contractDays + 1) {
-        add("Above contract days", -250);
-      }
-    }
-  }
-
-  if (weekendCounts.length > 0) {
-    add("Weekend distribution", -300 * getRange(weekendCounts));
-  }
-
-  if (difficultCounts.length > 0) {
-    add("Difficult shift distribution", -220 * getRange(difficultCounts));
-  }
-
-  const recentWeekendCounts = activeEmployees.map(
-    (employee) =>
-      getRotationHistoryForEmployee(employee.id, rotationHistory).weekendAssignments
-  );
-  const recentDifficultCounts = activeEmployees.map(
-    (employee) =>
-      getRotationHistoryForEmployee(employee.id, rotationHistory)
-        .difficultAssignments
-  );
-
-  add("Recent weekend rotation balance", -120 * getRange(recentWeekendCounts));
-  add("Recent difficult rotation balance", -90 * getRange(recentDifficultCounts));
 }
 
 function validateScheduleHardConstraints({
@@ -2735,70 +2425,12 @@ function sortPlannedAssignments(
   });
 }
 
-function isFlexibleEmployeeUsedWhereSpecialistCouldCover({
-  employee,
-  slot,
-  employees,
-  data,
-  assignedShifts,
-  manualOverrides
-}: {
-  employee: Employee;
-  slot: ScheduleSlot;
-  employees: Employee[];
-  data: SchedulerData;
-  assignedShifts: AssignedShift[];
-  manualOverrides: ManualOverrideMap;
-}): boolean {
-  if (getEmployeeRoleFlexibility(employee.id, data.employeeRoles) <= 1) {
-    return false;
-  }
-
-  return employees.some(
-    (candidate) =>
-      candidate.id !== employee.id &&
-      candidate.is_active === 1 &&
-      getEmployeeRoleFlexibility(candidate.id, data.employeeRoles) === 1 &&
-      employeeHasRole(candidate.id, slot.role_id, data.employeeRoles) &&
-      checkHardConstraints({
-        employee: candidate,
-        slot,
-        data,
-        assignedShifts,
-        manualOverrides
-      }).allowed
-  );
-}
-
-function isCriticalCoverageGroup(slot: ScheduleSlot, roles: Role[]): boolean {
-  const roleName = roles.find((role) => role.id === slot.role_id)?.name ?? "";
-  const normalizedRoleName = roleName.trim().toLocaleLowerCase();
-
-  return ["kitchen", "cashier", "manager"].some((keyword) =>
-    normalizedRoleName.includes(keyword)
-  );
-}
-
 function getRange(values: number[]): number {
   if (values.length === 0) {
     return 0;
   }
 
   return Math.max(...values) - Math.min(...values);
-}
-
-function countSlotsBy(
-  slots: ScheduleSlot[],
-  getKey: (slot: ScheduleSlot) => string
-): Map<string, number> {
-  const counts = new Map<string, number>();
-
-  for (const slot of slots) {
-    const key = getKey(slot);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-
-  return counts;
 }
 
 function formatSignedScore(value: number): string {
@@ -4347,8 +3979,7 @@ async function updateRunStatus(
   diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
   selectedSchedule?: CandidateSchedule,
   feasibility?: FeasibilityResult,
-  qualityMode: SchedulerQualityMode = "balanced",
-  optimizationConfig: OptimizationConfig = getSchedulerOptimizationConfig("balanced"),
+  optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
   evaluation?: ScheduleEvaluationResult
 ): Promise<void> {
   const status =
@@ -4367,7 +3998,6 @@ async function updateRunStatus(
       diagnostics,
       selectedSchedule,
       feasibility,
-      qualityMode,
       optimizationConfig,
       evaluation
     ),
@@ -4380,8 +4010,7 @@ function mergeRunParameters(
   diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
   selectedSchedule?: CandidateSchedule,
   feasibility?: FeasibilityResult,
-  qualityMode: SchedulerQualityMode = "balanced",
-  optimizationConfig: OptimizationConfig = getSchedulerOptimizationConfig("balanced"),
+  optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
   evaluation?: ScheduleEvaluationResult
 ): string {
   const assignedAt = new Date().toISOString();
@@ -4391,7 +4020,6 @@ function mergeRunParameters(
     assignedAt,
     optimization: selectedSchedule
       ? {
-          qualityMode,
           attempts: optimizationConfig.attempts,
           maxRepairIterations: optimizationConfig.maxRepairIterations,
           timeBudgetMs: optimizationConfig.timeBudgetMs,
@@ -4410,7 +4038,6 @@ function mergeRunParameters(
         }
       : evaluation
         ? {
-            qualityMode,
             attempts: optimizationConfig.attempts,
             maxRepairIterations: optimizationConfig.maxRepairIterations,
             timeBudgetMs: optimizationConfig.timeBudgetMs,

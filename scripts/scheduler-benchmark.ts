@@ -3,8 +3,7 @@ import { performance } from "node:perf_hooks";
 import {
   buildScheduleGenerationPlan,
   evaluateSchedule,
-  optimizeScheduleInMemory,
-  type SchedulerQualityMode
+  optimizeScheduleInMemory
 } from "../src/renderer/services/scheduler";
 import {
   createBenchmarkScenarios,
@@ -14,7 +13,6 @@ import {
 
 type BenchmarkResult = {
   scenario: SchedulerBenchmarkScenario;
-  qualityMode: SchedulerQualityMode;
   generatedSlots: number;
   assignedSlots: number;
   unfilledSlots: number;
@@ -28,104 +26,99 @@ type BenchmarkResult = {
   notes: string[];
 };
 
-const qualityModes: SchedulerQualityMode[] = ["fast", "balanced", "best"];
 const results: BenchmarkResult[] = [];
 
 for (const scenario of createBenchmarkScenarios()) {
-  for (const qualityMode of qualityModes) {
-    const startedAt = performance.now();
-    const plan = buildScheduleGenerationPlan({
-      weekStartDate: scenario.weekStartDate,
-      openingHours: scenario.openingHours,
-      staffingRequirements: scenario.staffingRequirements,
-      shiftTemplates: scenario.shiftTemplates,
-      specialDays: scenario.specialDays
-    });
-    const slots = plan.slots.map((slot, index) =>
-      createSlot({
-        id: `${scenario.run.id}-slot-${index}`,
-        runId: scenario.run.id,
-        date: slot.date,
-        roleId: slot.roleId,
-        sourceId: slot.sourceId,
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        status: "unfilled"
-      })
-    );
-    const assignmentResult = optimizeScheduleInMemory({
-      run: scenario.run,
-      slots,
-      employees: scenario.employees,
-      employeeRoles: scenario.employeeRoles,
-      employeeWorkRules: scenario.employeeWorkRules,
-      employeeDayConstraints: scenario.employeeDayConstraints,
-      employeeShiftAvailability: scenario.employeeShiftAvailability,
-      timeOff: scenario.timeOff,
-      assignments: scenario.existingAssignments,
-      roles: scenario.roles,
-      shiftTemplates: scenario.shiftTemplates,
-      staffingRequirements: scenario.staffingRequirements,
-      qualityMode
-    });
-    const evaluation = evaluateSchedule({
-      run: scenario.run,
-      slots,
-      assignments: assignmentResult.assignments,
-      employees: scenario.employees,
-      roles: scenario.roles,
-      employeeRoles: scenario.employeeRoles,
-      employeeWorkRules: scenario.employeeWorkRules,
-      employeeDayConstraints: scenario.employeeDayConstraints,
-      employeeShiftAvailability: scenario.employeeShiftAvailability,
-      timeOff: scenario.timeOff,
-      staffingRequirements: scenario.staffingRequirements,
-      shiftTemplates: scenario.shiftTemplates
-    });
-    const elapsedMs = performance.now() - startedAt;
-    const warningCount =
-      evaluation.metrics.warningCount +
-      assignmentResult.warnings.filter(
-        (warning) => warning.warningType !== "feasibility_feasible"
-      ).length +
-      plan.warnings.filter((warning) => warning.severity === "warning").length;
-    const notes = [
-      ...evaluation.explanations,
-      ...evaluation.softWarnings.map((warning) => warning.message),
-      ...assignmentResult.warnings.map((warning) => warning.message),
-      ...plan.warnings
-        .filter((warning) => warning.severity === "warning")
-        .map((warning) => warning.message)
-    ].slice(0, 3);
-    const result: BenchmarkResult = {
-      scenario,
-      qualityMode,
-      generatedSlots: slots.length,
-      assignedSlots: assignmentResult.assignments.length,
-      unfilledSlots: evaluation.metrics.unfilledSlots,
-      coverageRate: evaluation.metrics.coverageRate,
-      hardViolationCount: evaluation.metrics.hardViolationCount,
-      warningCount,
-      reward: evaluation.reward,
-      grade: evaluation.grade,
-      elapsedMs,
-      repairIterations: assignmentResult.repairIterations,
-      notes
-    };
+  const startedAt = performance.now();
+  const plan = buildScheduleGenerationPlan({
+    weekStartDate: scenario.weekStartDate,
+    openingHours: scenario.openingHours,
+    staffingRequirements: scenario.staffingRequirements,
+    shiftTemplates: scenario.shiftTemplates,
+    specialDays: scenario.specialDays
+  });
+  const slots = plan.slots.map((slot, index) =>
+    createSlot({
+      id: `${scenario.run.id}-slot-${index}`,
+      runId: scenario.run.id,
+      date: slot.date,
+      roleId: slot.roleId,
+      sourceId: slot.sourceId,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      status: "unfilled"
+    })
+  );
+  const assignmentResult = optimizeScheduleInMemory({
+    run: scenario.run,
+    slots,
+    employees: scenario.employees,
+    employeeRoles: scenario.employeeRoles,
+    employeeWorkRules: scenario.employeeWorkRules,
+    employeeDayConstraints: scenario.employeeDayConstraints,
+    employeeShiftAvailability: scenario.employeeShiftAvailability,
+    timeOff: scenario.timeOff,
+    assignments: scenario.existingAssignments,
+    roles: scenario.roles,
+    shiftTemplates: scenario.shiftTemplates,
+    staffingRequirements: scenario.staffingRequirements
+  });
+  const evaluation = evaluateSchedule({
+    run: scenario.run,
+    slots,
+    assignments: assignmentResult.assignments,
+    employees: scenario.employees,
+    roles: scenario.roles,
+    employeeRoles: scenario.employeeRoles,
+    employeeWorkRules: scenario.employeeWorkRules,
+    employeeDayConstraints: scenario.employeeDayConstraints,
+    employeeShiftAvailability: scenario.employeeShiftAvailability,
+    timeOff: scenario.timeOff,
+    staffingRequirements: scenario.staffingRequirements,
+    shiftTemplates: scenario.shiftTemplates
+  });
+  const elapsedMs = performance.now() - startedAt;
+  const warningCount =
+    evaluation.metrics.warningCount +
+    assignmentResult.warnings.filter(
+      (warning) => warning.warningType !== "feasibility_feasible"
+    ).length +
+    plan.warnings.filter((warning) => warning.severity === "warning").length;
+  const notes = [
+    ...evaluation.explanations,
+    ...evaluation.softWarnings.map((warning) => warning.message),
+    ...assignmentResult.warnings.map((warning) => warning.message),
+    ...plan.warnings
+      .filter((warning) => warning.severity === "warning")
+      .map((warning) => warning.message)
+  ].slice(0, 3);
+  const result: BenchmarkResult = {
+    scenario,
+    generatedSlots: slots.length,
+    assignedSlots: assignmentResult.assignments.length,
+    unfilledSlots: evaluation.metrics.unfilledSlots,
+    coverageRate: evaluation.metrics.coverageRate,
+    hardViolationCount: evaluation.metrics.hardViolationCount,
+    warningCount,
+    reward: evaluation.reward,
+    grade: evaluation.grade,
+    elapsedMs,
+    repairIterations: assignmentResult.repairIterations,
+    notes
+  };
 
-    results.push(result);
-    printResult(result);
-  }
+  results.push(result);
+  printResult(result);
 }
 
 assertBenchmarkThresholds(results);
-console.log(`Scheduler end-to-end benchmark passed (${results.length} runs).`);
+console.log(`Scheduler optimized benchmark passed (${results.length} scenarios).`);
 
 function printResult(result: BenchmarkResult) {
   console.log(
     [
       result.scenario.name.padEnd(28),
-      result.qualityMode.padEnd(8),
+      result.scenario.difficulty.padEnd(10),
       `grade=${result.grade.padEnd(12)}`,
       `slots=${String(result.generatedSlots).padStart(2)}`,
       `assigned=${String(result.assignedSlots).padStart(2)}`,
@@ -158,7 +151,7 @@ function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
       result.scenario.difficulty !== "impossible"
     ) {
       throw new Error(
-        `${result.scenario.name} ${result.qualityMode} produced ${result.hardViolationCount} hard violations.`
+        `${result.scenario.name} produced ${result.hardViolationCount} hard violations.`
       );
     }
   }
@@ -167,7 +160,7 @@ function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
   for (const result of easyCafe) {
     if (result.coverageRate !== 1 || result.hardViolationCount !== 0) {
       throw new Error(
-        `easy cafe ${result.qualityMode} should reach 100% coverage with 0 hard violations.`
+        "easy cafe should reach 100% coverage with 0 hard violations."
       );
     }
   }
@@ -176,28 +169,25 @@ function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
   for (const result of impossibleSchedule) {
     if (result.hardViolationCount !== 0) {
       throw new Error(
-        `impossible schedule ${result.qualityMode} should not force hard violations.`
+        "impossible schedule should not force hard violations."
       );
     }
 
     if (result.coverageRate >= 1 || result.warningCount === 0) {
       throw new Error(
-        `impossible schedule ${result.qualityMode} should remain partially uncovered with warnings.`
+        "impossible schedule should remain partially uncovered with warnings."
       );
     }
   }
 
-  for (const [scenarioName, scenarioResults] of byScenario.entries()) {
-    const fast = scenarioResults.find((result) => result.qualityMode === "fast");
-    const best = scenarioResults.find((result) => result.qualityMode === "best");
-
-    if (!fast || !best) {
-      continue;
-    }
-
-    if (best.reward < fast.reward && best.coverageRate < fast.coverageRate) {
+  for (const result of resultsToCheck) {
+    if (
+      result.scenario.difficulty !== "easy" &&
+      result.coverageRate < 1 &&
+      result.warningCount === 0
+    ) {
       throw new Error(
-        `${scenarioName} best quality regressed below fast by reward and coverage.`
+        `${result.scenario.name} is not fully covered but produced no useful warnings.`
       );
     }
   }

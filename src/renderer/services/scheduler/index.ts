@@ -25,12 +25,9 @@ export {
   type ScheduleEvaluationSoftWarning
 } from "./evaluator";
 export {
-  getSchedulerOptimizationConfig,
-  normalizeSchedulerQualityMode,
-  schedulerQualityConfigs,
-  type OptimizationConfig,
-  type SchedulerQualityMode
-} from "./qualityModes";
+  defaultSchedulerOptimizationConfig,
+  type OptimizationConfig
+} from "./optimizationConfig";
 export {
   scoreCandidate,
   scoreWeights,

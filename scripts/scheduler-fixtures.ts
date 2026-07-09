@@ -413,7 +413,9 @@ export function createBenchmarkScenarios(): SchedulerBenchmarkScenario[] {
     createOneExperiencedEmployeeScenario(),
     createImpossibleScheduleScenario(),
     createFlexibleEmployeesScenario(),
-    createHighDemandSaturdayScenario()
+    createHighDemandSaturdayScenario(),
+    createConflictingAvailabilityScenario(),
+    createExplicitRoleScarcityScenario()
   ];
 }
 
@@ -695,6 +697,73 @@ function createHighDemandSaturdayScenario(): SchedulerBenchmarkScenario {
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
     createWorkRules(`wr-${employee.id}`, employee.id, 40, 44, 5, 6)
+  );
+
+  return scenario;
+}
+
+function createConflictingAvailabilityScenario(): SchedulerBenchmarkScenario {
+  const scenario = createScenarioBase("conflicting availability", "hard");
+  const service = scenario.roles[0];
+  const evening = scenario.shiftTemplates[1];
+  scenario.staffingRequirements = ([1, 2, 3, 4, 5] as DayOfWeek[]).map(
+    (dayOfWeek) => createRequirementFor(scenario, dayOfWeek, evening, service, 2)
+  );
+  scenario.employees = [
+    createEmployee("emp-evening-1", "Evening", "One"),
+    createEmployee("emp-morning-1", "Morning", "One"),
+    createEmployee("emp-morning-2", "Morning", "Two"),
+    createEmployee("emp-morning-3", "Morning", "Three")
+  ];
+  scenario.employeeRoles = scenario.employees.map((employee) =>
+    roleFor(`er-${employee.id}-service`, employee.id, service)
+  );
+  scenario.employeeWorkRules = scenario.employees.map((employee) =>
+    createWorkRules(`wr-${employee.id}`, employee.id, 30, 34, 5, 6)
+  );
+  scenario.employeeShiftAvailability = ([1, 2, 3, 4, 5] as DayOfWeek[]).flatMap(
+    (dayOfWeek) =>
+      ["emp-morning-1", "emp-morning-2", "emp-morning-3"].map((employeeId) =>
+        createShiftAvailability(
+          `sa-${employeeId}-${dayOfWeek}`,
+          employeeId,
+          dayOfWeek,
+          evening.id,
+          "cannot_work"
+        )
+      )
+  );
+
+  return scenario;
+}
+
+function createExplicitRoleScarcityScenario(): SchedulerBenchmarkScenario {
+  const scenario = createScenarioBase("explicit role scarcity", "hard");
+  const cashier = scenario.roles[2];
+  const service = scenario.roles[0];
+  const morning = scenario.shiftTemplates[0];
+  scenario.staffingRequirements = ([1, 2, 3, 4, 5, 6] as DayOfWeek[]).flatMap(
+    (dayOfWeek) => [
+      createRequirementFor(scenario, dayOfWeek, morning, cashier, 2),
+      createRequirementFor(scenario, dayOfWeek, morning, service, 1)
+    ]
+  );
+  scenario.employees = [
+    createEmployee("emp-cashier-only", "Cashier", "Only"),
+    createEmployee("emp-service-1", "Service", "One"),
+    createEmployee("emp-service-2", "Service", "Two"),
+    createEmployee("emp-service-3", "Service", "Three"),
+    createEmployee("emp-flex-cashier", "Flexible", "Cashier")
+  ];
+  scenario.employeeRoles = [
+    roleFor("er-cashier-only", "emp-cashier-only", cashier),
+    roleFor("er-service-1", "emp-service-1", service),
+    roleFor("er-service-2", "emp-service-2", service),
+    roleFor("er-service-3", "emp-service-3", service),
+    roleFor("er-flex-service", "emp-flex-cashier", service)
+  ];
+  scenario.employeeWorkRules = scenario.employees.map((employee) =>
+    createWorkRules(`wr-${employee.id}`, employee.id, 32, 36, 5, 6)
   );
 
   return scenario;

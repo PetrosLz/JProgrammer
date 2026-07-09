@@ -6,8 +6,7 @@ import {
   buildScheduleGenerationPlan,
   getWeekRangeForDate,
   isDateInputValue,
-  type ScheduleEvaluationGrade,
-  type SchedulerQualityMode
+  type ScheduleEvaluationGrade
 } from "../../services/scheduler";
 import type {
   BusinessSettings,
@@ -89,8 +88,6 @@ export function GenerateSchedulePage({
   onViewProgram: (runId: string) => void;
 }) {
   const [weekStartDate, setWeekStartDate] = useState(() => todayInputValue());
-  const [qualityMode, setQualityMode] =
-    useState<SchedulerQualityMode>("balanced");
   const [errors, setErrors] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
@@ -137,8 +134,7 @@ export function GenerateSchedulePage({
           selectedDate: weekRange.selectedDate,
           weekStartsOn: weekRange.weekStartsOn,
           weekStartDate: plan.weekStartDate,
-          weekEndDate: plan.weekEndDate,
-          schedulerQualityMode: qualityMode
+          weekEndDate: plan.weekEndDate
         }),
         completed_at: new Date().toISOString()
       });
@@ -184,8 +180,7 @@ export function GenerateSchedulePage({
         roles,
         shiftTemplates,
         staffingRequirements,
-        assignments: scheduleAssignments,
-        qualityMode
+        assignments: scheduleAssignments
       });
 
       await onProgramGenerated(
@@ -294,25 +289,6 @@ export function GenerateSchedulePage({
                     : `Η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`}
               </p>
             </div>
-            <Field label={language === "en" ? "Scheduler quality" : "Ποιότητα βελτιστοποίησης"}>
-              <select
-                value={qualityMode}
-                onChange={(event) =>
-                  setQualityMode(event.target.value as SchedulerQualityMode)
-                }
-                className={inputClassName}
-              >
-                <option value="fast">
-                  {language === "en" ? "Fast draft" : "Γρήγορο draft"}
-                </option>
-                <option value="balanced">
-                  {language === "en" ? "Balanced" : "Ισορροπημένο"}
-                </option>
-                <option value="best">
-                  {language === "en" ? "Best quality" : "Καλύτερη ποιότητα"}
-                </option>
-              </select>
-            </Field>
           </div>
 
           <div className="rounded-lg bg-emerald-50 p-4 ring-1 ring-emerald-100">
