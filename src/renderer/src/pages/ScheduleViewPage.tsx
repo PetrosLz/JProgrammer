@@ -6,11 +6,14 @@ import {
   addDays,
   getDayOfWeek,
   getSlotDurationHours,
+  evaluateSchedule,
   saveManualAssignmentChange,
   splitManualAssignmentViolations,
   validateManualAssignmentChange,
   type AssignmentResult,
-  type ManualAssignmentValidation
+  type ManualAssignmentValidation,
+  type ScheduleEvaluationBreakdown,
+  type ScheduleEvaluationGrade
 } from "../../services/scheduler";
 import type {
   BusinessSettings,
@@ -196,6 +199,20 @@ export function ScheduleViewPage({
   const runWarnings = scheduleWarnings.filter(
     (warning) => warning.schedule_run_id === selectedRun.id
   );
+  const scheduleEvaluation = evaluateSchedule({
+    run: selectedRun,
+    slots: runSlots,
+    assignments: runAssignments,
+    employees,
+    roles,
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    timeOff,
+    staffingRequirements,
+    shiftTemplates
+  });
   const businessName = businessSettings?.business_name?.trim() || "JProgrammer";
   const modalValidation = editor
     ? validateManualAssignmentChange({
@@ -509,6 +526,85 @@ export function ScheduleViewPage({
           </div>
         </div>
       ) : null}
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {language === "en" ? "Schedule quality" : "Ποιότητα προγράμματος"}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${qualityGradeClassName(
+                  scheduleEvaluation.grade
+                )}`}
+              >
+                {qualityGradeLabel(scheduleEvaluation.grade, language)}
+              </span>
+              <span className="text-sm text-slate-600">
+                Reward{" "}
+                <span className="font-semibold text-slate-950">
+                  {Math.round(scheduleEvaluation.reward)}
+                </span>
+              </span>
+            </div>
+          </div>
+          <div className="grid min-w-[260px] grid-cols-3 gap-2 text-center">
+            <QualityMetric
+              label={language === "en" ? "Coverage" : "Κάλυψη"}
+              value={`${Math.round(
+                scheduleEvaluation.metrics.coverageRate * 100
+              )}%`}
+            />
+            <QualityMetric
+              label={language === "en" ? "Unfilled" : "Κενές"}
+              value={scheduleEvaluation.metrics.unfilledSlots}
+            />
+            <QualityMetric
+              label={language === "en" ? "Hard issues" : "Σκληρά θέματα"}
+              value={scheduleEvaluation.metrics.hardViolationCount}
+            />
+          </div>
+        </div>
+        <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
+          <div className="space-y-1 text-sm leading-6 text-slate-600">
+            {scheduleEvaluation.explanations.slice(0, 3).map((explanation) => (
+              <p key={explanation}>{explanation}</p>
+            ))}
+            {scheduleEvaluation.hardViolations.slice(0, 2).map((violation) => (
+              <p
+                key={`${violation.type}-${violation.slotId ?? ""}-${violation.employeeId ?? ""}`}
+                className="text-red-700"
+              >
+                {violation.message}
+              </p>
+            ))}
+            {scheduleEvaluation.softWarnings.slice(0, 2).map((warning) => (
+              <p
+                key={`${warning.type}-${warning.slotId ?? ""}-${warning.employeeId ?? ""}`}
+                className="text-amber-700"
+              >
+                {warning.message}
+              </p>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {qualityBreakdownItems(scheduleEvaluation.breakdown, language)
+              .slice(0, 8)
+              .map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200"
+                >
+                  <p className="font-semibold text-slate-500">{item.label}</p>
+                  <p className="mt-1 font-semibold text-slate-950">
+                    {formatSignedQualityValue(item.value)}
+                  </p>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
 
       <div className="mt-5 grid grid-cols-6 gap-4">
         <SummaryTile label={language === "en" ? "Business" : "Επιχείρηση"} value={businessName} />
@@ -847,6 +943,110 @@ export function ScheduleViewPage({
       ) : null}
     </div>
   );
+}
+
+function QualityMetric({
+  label,
+  value
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+      <p className="text-[10px] font-semibold uppercase leading-4 tracking-wide text-slate-500 [overflow-wrap:anywhere]">
+        {label}
+      </p>
+      <p className="mt-1 text-base font-semibold text-slate-950">{value}</p>
+    </div>
+  );
+}
+
+function qualityGradeLabel(
+  grade: ScheduleEvaluationGrade,
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    const labels: Record<ScheduleEvaluationGrade, string> = {
+      excellent: "Excellent",
+      good: "Good",
+      needs_review: "Needs review",
+      bad: "Bad",
+      invalid: "Invalid"
+    };
+
+    return labels[grade];
+  }
+
+  const labels: Record<ScheduleEvaluationGrade, string> = {
+    excellent: "Άριστη",
+    good: "Καλή",
+    needs_review: "Θέλει έλεγχο",
+    bad: "Προβληματική",
+    invalid: "Μη έγκυρη"
+  };
+
+  return labels[grade];
+}
+
+function qualityGradeClassName(grade: ScheduleEvaluationGrade): string {
+  if (grade === "excellent" || grade === "good") {
+    return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
+  }
+
+  if (grade === "needs_review") {
+    return "bg-amber-50 text-amber-800 ring-1 ring-amber-200";
+  }
+
+  return "bg-red-50 text-red-700 ring-1 ring-red-200";
+}
+
+function qualityBreakdownItems(
+  breakdown: ScheduleEvaluationBreakdown,
+  language: UiLanguage
+): Array<{ label: string; value: number }> {
+  const labels: Record<keyof ScheduleEvaluationBreakdown, string> =
+    language === "en"
+      ? {
+          coverage: "Coverage",
+          hardConstraints: "Hard rules",
+          fairness: "Fairness",
+          contractFit: "Contracts",
+          preferences: "Preferences",
+          experienceBalance: "Experience",
+          roleCoverage: "Roles",
+          weekendBalance: "Weekends",
+          difficultShiftBalance: "Difficult shifts",
+          stability: "Stability",
+          penalties: "Penalties",
+          total: "Total"
+        }
+      : {
+          coverage: "Κάλυψη",
+          hardConstraints: "Σκληροί κανόνες",
+          fairness: "Δικαιοσύνη",
+          contractFit: "Συμβάσεις",
+          preferences: "Προτιμήσεις",
+          experienceBalance: "Προϋπηρεσία",
+          roleCoverage: "Ρόλοι",
+          weekendBalance: "Σαβ/κα",
+          difficultShiftBalance: "Δύσκολες βάρδιες",
+          stability: "Σταθερότητα",
+          penalties: "Ποινές",
+          total: "Σύνολο"
+        };
+
+  return (Object.keys(breakdown) as Array<keyof ScheduleEvaluationBreakdown>)
+    .filter((key) => key !== "total" && breakdown[key] !== 0)
+    .map((key) => ({
+      label: labels[key],
+      value: breakdown[key]
+    }));
+}
+
+function formatSignedQualityValue(value: number): string {
+  const rounded = Math.round(value);
+  return rounded > 0 ? `+${rounded}` : String(rounded);
 }
 
 type ManualCandidateRow = {

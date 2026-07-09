@@ -27,8 +27,8 @@ export function experienceOptions(language: UiLanguage): Array<{
   }
 
   return [
-    { value: "no_experience", label: "Ξ§Ο‰ΟΞ―Ο‚ Ο€ΟΞΏΟ‹Ο€Ξ·ΟΞµΟƒΞ―Ξ±" },
-    { value: "some_experience", label: "ΞΞµ Ο€ΟΞΏΟ‹Ο€Ξ·ΟΞµΟƒΞ―Ξ±" }
+    { value: "no_experience", label: "Χωρίς προϋπηρεσία" },
+    { value: "some_experience", label: "Με προϋπηρεσία" }
   ];
 }
 
@@ -46,10 +46,10 @@ export function employmentTypeSelectOptions(language: UiLanguage): Array<{
   }
 
   return [
-    { value: "full_time", label: "Ξ Ξ»Ξ®ΟΞ·Ο‚ Ξ±Ο€Ξ±ΟƒΟ‡ΟΞ»Ξ·ΟƒΞ·" },
-    { value: "part_time", label: "ΞΞµΟΞΉΞΊΞ® Ξ±Ο€Ξ±ΟƒΟ‡ΟΞ»Ξ·ΟƒΞ·" },
-    { value: "weekly_hours", label: "Ξ£Ο…ΞΌΟ†Ο‰Ξ½Ξ·ΞΌΞ­Ξ½ΞµΟ‚ ΞµΞ²Ξ΄ΞΏΞΌΞ±Ξ΄ΞΉΞ±Ξ―ΞµΟ‚ ΟΟΞµΟ‚" },
-    { value: "custom", label: "Ξ ΟΞΏΟƒΞ±ΟΞΌΞΏΟƒΞΌΞ­Ξ½ΞΏ" }
+    { value: "full_time", label: "Πλήρης απασχόληση" },
+    { value: "part_time", label: "Μερική απασχόληση" },
+    { value: "weekly_hours", label: "Συμφωνημένες εβδομαδιαίες ώρες" },
+    { value: "custom", label: "Προσαρμοσμένο" }
   ];
 }
 
@@ -67,10 +67,10 @@ export function dayConstraintSelectOptions(language: UiLanguage): Array<{
   }
 
   return [
-    { value: "neutral", label: "ΞΟ…Ξ΄Ξ­Ο„ΞµΟΞΏ" },
-    { value: "cannot_work", label: "Ξ”ΞµΞ½ ΞΌΟ€ΞΏΟΞµΞ―" },
-    { value: "prefers_not_to_work", label: "Ξ ΟΞΏΟ„ΞΉΞΌΞ¬ Ξ½Ξ± ΞΌΞ· Ξ΄ΞΏΟ…Ξ»Ξ­ΟΞµΞΉ" },
-    { value: "prefers_to_work", label: "Ξ ΟΞΏΟ„ΞΉΞΌΞ¬ Ξ½Ξ± Ξ΄ΞΏΟ…Ξ»Ξ­ΟΞµΞΉ" }
+    { value: "neutral", label: "Ουδέτερο" },
+    { value: "cannot_work", label: "Δεν μπορεί" },
+    { value: "prefers_not_to_work", label: "Προτιμά να μη δουλέψει" },
+    { value: "prefers_to_work", label: "Προτιμά να δουλέψει" }
   ];
 }
 
@@ -88,10 +88,10 @@ export function shiftAvailabilitySelectOptions(language: UiLanguage): Array<{
   }
 
   return [
-    { value: "available", label: "Ξ”ΞΉΞ±ΞΈΞ­ΟƒΞΉΞΌΞΏΟ‚" },
-    { value: "cannot_work", label: "Ξ”ΞµΞ½ ΞΌΟ€ΞΏΟΞµΞ―" },
-    { value: "prefers_not_to_work", label: "Ξ ΟΞΏΟ„ΞΉΞΌΞ¬ Ξ½Ξ± ΞΌΞ· Ξ΄ΞΏΟ…Ξ»Ξ­ΟΞµΞΉ" },
-    { value: "prefers_to_work", label: "Ξ ΟΞΏΟ„ΞΉΞΌΞ¬ Ξ½Ξ± Ξ΄ΞΏΟ…Ξ»Ξ­ΟΞµΞΉ" }
+    { value: "available", label: "Διαθέσιμος" },
+    { value: "cannot_work", label: "Δεν μπορεί" },
+    { value: "prefers_not_to_work", label: "Προτιμά να μη δουλέψει" },
+    { value: "prefers_to_work", label: "Προτιμά να δουλέψει" }
   ];
 }
 
@@ -110,16 +110,22 @@ export function timeOffTypeOptions(language: UiLanguage): Array<{
   }
 
   return [
-    { value: "day_off", label: "Ξ΅ΞµΟ€Ο" },
-    { value: "vacation", label: "Ξ†Ξ΄ΞµΞΉΞ±" },
-    { value: "sick_leave", label: "Ξ‘ΟƒΞΈΞ­Ξ½ΞµΞΉΞ±" },
-    { value: "personal", label: "Ξ ΟΞΏΟƒΟ‰Ο€ΞΉΞΊΟ" },
-    { value: "other", label: "Ξ†Ξ»Ξ»ΞΏ" }
+    { value: "day_off", label: "Ρεπό" },
+    { value: "vacation", label: "Άδεια" },
+    { value: "sick_leave", label: "Ασθένεια" },
+    { value: "personal", label: "Προσωπικό" },
+    { value: "other", label: "Άλλο" }
   ];
 }
 
-export function timeOffTypeLabelLocalized(value: string, language: UiLanguage): string {
-  return timeOffTypeOptions(language).find((type) => type.value === value)?.label ?? value;
+export function timeOffTypeLabelLocalized(
+  value: string,
+  language: UiLanguage
+): string {
+  return (
+    timeOffTypeOptions(language).find((type) => type.value === value)?.label ??
+    value
+  );
 }
 
 export function employeeRoleLabelsLocalized(
@@ -128,7 +134,7 @@ export function employeeRoleLabelsLocalized(
   language: UiLanguage
 ): string {
   if (roleIds.length === 0) {
-    return language === "en" ? "No roles" : "Ξ§Ο‰ΟΞ―Ο‚ ΟΟΞ»ΞΏΟ…Ο‚";
+    return language === "en" ? "No roles" : "Χωρίς ρόλους";
   }
 
   return roleIds.map((roleId) => roleLabel(roleId, roles)).join(", ");
@@ -141,13 +147,14 @@ export function workRulesSummaryLocalized(
   if (!workRules) {
     return language === "en"
       ? "No work rules configured"
-      : "Ξ”ΞµΞ½ Ξ­Ο‡ΞΏΟ…Ξ½ ΞΏΟΞΉΟƒΟ„ΞµΞ― ΞΊΞ±Ξ½ΟΞ½ΞµΟ‚ ΞµΟΞ³Ξ±ΟƒΞ―Ξ±Ο‚";
+      : "Δεν έχουν οριστεί κανόνες εργασίας";
   }
 
   const employmentType =
     employmentTypeSelectOptions(language).find(
-      (option) => option.value === normalizeEmploymentType(workRules.employment_type)
-    )?.label ?? (language === "en" ? "Custom" : "Ξ ΟΞΏΟƒΞ±ΟΞΌΞΏΟƒΞΌΞ­Ξ½ΞΏ");
+      (option) =>
+        option.value === normalizeEmploymentType(workRules.employment_type)
+    )?.label ?? (language === "en" ? "Custom" : "Προσαρμοσμένο");
   const days =
     workRules.contract_days_per_week ??
     workRules.target_days_per_week ??
@@ -163,16 +170,16 @@ export function workRulesSummaryLocalized(
     workRules.can_work_weekends === 0
       ? language === "en"
         ? "no weekends"
-        : "ΟΟ‡ΞΉ Ξ£Ξ±Ξ²Ξ²Ξ±Ο„ΞΏΞΊΟΟΞΉΞ±ΞΊΞ±"
+        : "Όχι Σαββατοκύριακα"
       : language === "en"
         ? "weekends ok"
-        : "Ξ£Ξ±Ξ²Ξ²Ξ±Ο„ΞΏΞΊΟΟΞΉΞ±ΞΊΞ± ok";
+        : "Σαββατοκύριακα ok";
 
   if (language === "en") {
     return `${employmentType}: ${days} days, ${hoursPerDay} h/day, ${hours} h/week, ${weekends}`;
   }
 
-  return `${employmentType}: ${days} Ξ·ΞΌΞ­ΟΞµΟ‚, ${hoursPerDay} ΟΟΞµΟ‚/Ξ·ΞΌΞ­ΟΞ±, ${hours} ΟΟΞµΟ‚/ΞµΞ²Ξ΄ΞΏΞΌΞ¬Ξ΄Ξ±, ${weekends}`;
+  return `${employmentType}: ${days} ημέρες, ${hoursPerDay} ώρες/ημέρα, ${hours} ώρες/εβδομάδα, ${weekends}`;
 }
 
 export function employeeAvailabilitySummary(
@@ -194,12 +201,14 @@ export function employeeAvailabilitySummary(
   const totalBlocks = blockedDays + blockedShifts;
 
   if (totalBlocks === 0) {
-    return language === "en" ? "No hard availability blocks" : "Ξ§Ο‰ΟΞ―Ο‚ ΟƒΞΊΞ»Ξ·ΟΞΏΟΟ‚ Ο€ΞµΟΞΉΞΏΟΞΉΟƒΞΌΞΏΟΟ‚";
+    return language === "en"
+      ? "No hard availability blocks"
+      : "Χωρίς σκληρούς περιορισμούς";
   }
 
   return language === "en"
     ? `${totalBlocks} availability block${totalBlocks === 1 ? "" : "s"}`
-    : `${totalBlocks} Ο€ΞµΟΞΉΞΏΟΞΉΟƒΞΌΞΏΞ― Ξ΄ΞΉΞ±ΞΈΞµΟƒΞΉΞΌΟΟ„Ξ·Ο„Ξ±Ο‚`;
+    : `${totalBlocks} περιορισμοί διαθεσιμότητας`;
 }
 
 export function dayConstraintValue(
@@ -246,7 +255,9 @@ export function shiftAvailabilityValue(
   return "available";
 }
 
-export function shiftAvailabilityClassName(value: ShiftAvailabilityValue): string {
+export function shiftAvailabilityClassName(
+  value: ShiftAvailabilityValue
+): string {
   if (value === "cannot_work") {
     return "border-red-200 bg-red-50 text-red-900";
   }
@@ -259,5 +270,5 @@ export function shiftAvailabilityClassName(value: ShiftAvailabilityValue): strin
     return "border-emerald-200 bg-emerald-50 text-emerald-900";
   }
 
-  return "border-slate-200 bg-white text-slate-700";
+  return "";
 }

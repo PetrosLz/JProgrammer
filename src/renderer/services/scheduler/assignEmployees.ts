@@ -76,6 +76,15 @@ import {
   type SchedulerWarningDraft,
   createNoSlotsWarning
 } from "./warnings";
+import {
+  evaluateSchedule,
+  type ScheduleEvaluationResult
+} from "./evaluator";
+import {
+  getSchedulerOptimizationConfig,
+  type OptimizationConfig,
+  type SchedulerQualityMode
+} from "./qualityModes";
 
 export type AssignmentResult = {
   runId: string;
@@ -86,6 +95,7 @@ export type AssignmentResult = {
   unfilledSlots: number;
   warningsCreated: number;
   explanations: string[];
+  evaluation: ScheduleEvaluationResult;
 };
 
 type AssignmentCandidate = {
@@ -132,18 +142,13 @@ type CandidateSchedule = {
   explanations: string[];
   hardConstraintViolations: string[];
   repairIterations: number;
+  evaluation: ScheduleEvaluationResult;
 };
 
 type FinalHardConstraintViolation = {
   assignmentId: string | null;
   slotId: string | null;
   message: string;
-};
-
-type OptimizationConfig = {
-  attempts: number;
-  maxRepairIterations: number;
-  timeBudgetMs: number;
 };
 
 type SimulationState = {
@@ -174,12 +179,6 @@ type EmployeeRotationHistory = {
 
 type RotationHistoryMap = Map<string, EmployeeRotationHistory>;
 
-const schedulerOptimization: OptimizationConfig = {
-  attempts: 30,
-  maxRepairIterations: 200,
-  timeBudgetMs: 3000
-};
-
 export async function assignEmployeesToRun({
   run,
   slots,
@@ -193,7 +192,8 @@ export async function assignEmployeesToRun({
   roles = [],
   shiftTemplates = [],
   staffingRequirements = [],
-  manualOverrides = {}
+  manualOverrides = {},
+  qualityMode = "balanced"
 }: {
   run: ScheduleRun;
   slots: ScheduleSlot[];
@@ -208,6 +208,7 @@ export async function assignEmployeesToRun({
   shiftTemplates?: ShiftTemplate[];
   staffingRequirements?: StaffingRequirement[];
   manualOverrides?: ManualOverrideMap;
+  qualityMode?: SchedulerQualityMode;
 }): Promise<AssignmentResult> {
   const runSlots = slots
     .filter((slot) => slot.schedule_run_id === run.id)
@@ -233,6 +234,7 @@ export async function assignEmployeesToRun({
     staffingRequirements,
     timeOff
   };
+  const optimizationConfig = getSchedulerOptimizationConfig(qualityMode);
   const initialAssignedShifts: AssignedShift[] = buildExistingAssignedShifts({
     slots: runSlots,
     assignments: activeRunAssignments
@@ -250,7 +252,32 @@ export async function assignEmployeesToRun({
 
   if (slotsToAssign.length === 0) {
     await saveWarning(createNoSlotsWarning(run.id));
-    await updateRunStatus(run, runSlots.length, assignedSlotIds.size);
+    const evaluation = evaluateSchedule({
+      run,
+      slots: runSlots,
+      assignments: activeRunAssignments,
+      employees,
+      roles,
+      employeeRoles,
+      employeeWorkRules,
+      employeeDayConstraints,
+      employeeShiftAvailability,
+      timeOff,
+      staffingRequirements,
+      shiftTemplates,
+      manualOverrides
+    });
+    await updateRunStatus(
+      run,
+      runSlots.length,
+      assignedSlotIds.size,
+      undefined,
+      undefined,
+      undefined,
+      qualityMode,
+      optimizationConfig,
+      evaluation
+    );
 
     return {
       runId: run.id,
@@ -260,7 +287,8 @@ export async function assignEmployeesToRun({
       assignedSlots: 0,
       unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
       warningsCreated: 1,
-      explanations: []
+      explanations: [],
+      evaluation
     };
   }
 
@@ -312,7 +340,8 @@ export async function assignEmployeesToRun({
     rotationHistory,
     manualOverrides,
     staffingRequirements,
-    feasibility
+    feasibility,
+    optimizationConfig
   });
   const savedAssignments: ScheduleAssignment[] = [];
 
@@ -355,6 +384,21 @@ export async function assignEmployeesToRun({
     assignments: finalAssignments,
     employees,
     data,
+    manualOverrides
+  });
+  const finalEvaluation = evaluateSchedule({
+    run,
+    slots: runSlots,
+    assignments: finalAssignments,
+    employees,
+    roles,
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    timeOff,
+    staffingRequirements,
+    shiftTemplates,
     manualOverrides
   });
 
@@ -412,7 +456,10 @@ export async function assignEmployeesToRun({
     ).length,
     diagnostics,
     selectedSchedule,
-    feasibility
+    feasibility,
+    qualityMode,
+    optimizationConfig,
+    finalEvaluation
   );
 
   if (finalHardConstraintViolations.length > 0) {
@@ -429,7 +476,8 @@ export async function assignEmployeesToRun({
     assignedSlots: savedAssignments.length,
     unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
     warningsCreated,
-    explanations: selectedSchedule.explanations
+    explanations: selectedSchedule.explanations,
+    evaluation: finalEvaluation
   };
 }
 
@@ -480,7 +528,8 @@ function optimizeCandidateSchedules({
   rotationHistory,
   manualOverrides,
   staffingRequirements,
-  feasibility
+  feasibility,
+  optimizationConfig
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -495,10 +544,11 @@ function optimizeCandidateSchedules({
   manualOverrides: ManualOverrideMap;
   staffingRequirements: StaffingRequirement[];
   feasibility: FeasibilityResult;
+  optimizationConfig: OptimizationConfig;
 }): CandidateSchedule {
   const startedAt = Date.now();
-  const deadlineMs = startedAt + schedulerOptimization.timeBudgetMs;
-  const profiles = buildAttemptProfiles(schedulerOptimization.attempts);
+  const deadlineMs = startedAt + optimizationConfig.timeBudgetMs;
+  const profiles = buildAttemptProfiles(optimizationConfig.attempts);
   let bestSchedule: CandidateSchedule | null = null;
 
   for (const profile of profiles) {
@@ -524,7 +574,8 @@ function optimizeCandidateSchedules({
       staffingRequirements,
       profile,
       deadlineMs,
-      feasibility
+      feasibility,
+      optimizationConfig
     });
 
     if (!bestSchedule || candidateSchedule.score > bestSchedule.score) {
@@ -571,7 +622,8 @@ function buildCandidateSchedule({
   staffingRequirements,
   profile,
   deadlineMs,
-  feasibility
+  feasibility,
+  optimizationConfig
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -588,6 +640,7 @@ function buildCandidateSchedule({
   profile: AttemptProfile;
   deadlineMs: number;
   feasibility: FeasibilityResult;
+  optimizationConfig: OptimizationConfig;
 }): CandidateSchedule {
   const state: SimulationState = {
     plannedAssignments: new Map(),
@@ -692,7 +745,8 @@ function buildCandidateSchedule({
     staffingRequirements,
     profile,
     deadlineMs,
-    feasibility
+    feasibility,
+    optimizationConfig
   });
 
   state.explanations.push(...repairResult.explanations);
@@ -1039,7 +1093,8 @@ function repairCandidateSchedule({
   staffingRequirements,
   profile,
   deadlineMs,
-  feasibility
+  feasibility,
+  optimizationConfig
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -1056,12 +1111,13 @@ function repairCandidateSchedule({
   profile: AttemptProfile;
   deadlineMs: number;
   feasibility: FeasibilityResult;
+  optimizationConfig: OptimizationConfig;
 }): RepairResult {
   const explanations: string[] = [];
   let iterations = 0;
 
   while (
-    iterations < schedulerOptimization.maxRepairIterations &&
+    iterations < optimizationConfig.maxRepairIterations &&
     Date.now() < deadlineMs
   ) {
     const currentScore = scoreCandidateSchedule({
@@ -1918,9 +1974,33 @@ function scoreCandidateSchedule({
     fixedAssignments,
     manualOverrides
   });
+  const evaluation = evaluateSchedule({
+    run,
+    slots: runSlots,
+    assignments: syntheticAssignments,
+    employees,
+    roles,
+    employeeRoles: data.employeeRoles,
+    employeeWorkRules: data.employeeWorkRules,
+    employeeDayConstraints: data.employeeDayConstraints,
+    employeeShiftAvailability: data.employeeShiftAvailability ?? [],
+    timeOff: data.timeOff,
+    staffingRequirements,
+    shiftTemplates: [],
+    manualOverrides
+  });
+  const evaluationHardConstraintViolations = evaluation.hardViolations.map(
+    (violation) => violation.message
+  );
+  const combinedHardConstraintViolations = [
+    ...new Set([...hardConstraintViolations, ...evaluationHardConstraintViolations])
+  ];
 
-  if (hardConstraintViolations.length > 0) {
-    add("Hard constraint validation failed", -1_000_000 * hardConstraintViolations.length);
+  if (combinedHardConstraintViolations.length > 0) {
+    add(
+      "Hard constraint validation failed",
+      -1_000_000 * combinedHardConstraintViolations.length
+    );
   }
 
   return {
@@ -1928,11 +2008,15 @@ function scoreCandidateSchedule({
     plannedAssignments,
     assignedShifts: state.assignedShifts,
     unfilledSlots,
-    score,
-    scoreDetails: details,
+    score: evaluation.reward,
+    scoreDetails: [
+      ...formatEvaluationScoreDetails(evaluation),
+      ...details.slice(0, 20)
+    ],
     explanations: state.explanations,
-    hardConstraintViolations,
-    repairIterations
+    hardConstraintViolations: combinedHardConstraintViolations,
+    repairIterations,
+    evaluation
   };
 }
 
@@ -2443,6 +2527,14 @@ function countSlotsBy(
 function formatSignedScore(value: number): string {
   const formatted = Number.isInteger(value) ? String(value) : value.toFixed(1);
   return value > 0 ? `+${formatted}` : formatted;
+}
+
+function formatEvaluationScoreDetails(
+  evaluation: ScheduleEvaluationResult
+): string[] {
+  return Object.entries(evaluation.breakdown)
+    .filter(([key, value]) => key !== "total" && value !== 0)
+    .map(([key, value]) => `${key}: ${formatSignedScore(value)}`);
 }
 
 
@@ -3977,7 +4069,10 @@ async function updateRunStatus(
   assignedSlots: number,
   diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
   selectedSchedule?: CandidateSchedule,
-  feasibility?: FeasibilityResult
+  feasibility?: FeasibilityResult,
+  qualityMode: SchedulerQualityMode = "balanced",
+  optimizationConfig: OptimizationConfig = getSchedulerOptimizationConfig("balanced"),
+  evaluation?: ScheduleEvaluationResult
 ): Promise<void> {
   const status =
     totalSlots === 0
@@ -3994,7 +4089,10 @@ async function updateRunStatus(
       run.parameters_json,
       diagnostics,
       selectedSchedule,
-      feasibility
+      feasibility,
+      qualityMode,
+      optimizationConfig,
+      evaluation
     ),
     completed_at: new Date().toISOString()
   });
@@ -4004,7 +4102,10 @@ function mergeRunParameters(
   parametersJson: string | null,
   diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
   selectedSchedule?: CandidateSchedule,
-  feasibility?: FeasibilityResult
+  feasibility?: FeasibilityResult,
+  qualityMode: SchedulerQualityMode = "balanced",
+  optimizationConfig: OptimizationConfig = getSchedulerOptimizationConfig("balanced"),
+  evaluation?: ScheduleEvaluationResult
 ): string {
   const assignedAt = new Date().toISOString();
   const assignmentParameters = {
@@ -4013,16 +4114,49 @@ function mergeRunParameters(
     assignedAt,
     optimization: selectedSchedule
       ? {
-          attempts: schedulerOptimization.attempts,
-          maxRepairIterations: schedulerOptimization.maxRepairIterations,
-          timeBudgetMs: schedulerOptimization.timeBudgetMs,
+          qualityMode,
+          attempts: optimizationConfig.attempts,
+          maxRepairIterations: optimizationConfig.maxRepairIterations,
+          timeBudgetMs: optimizationConfig.timeBudgetMs,
           selectedProfile: selectedSchedule.profile.id,
           selectedScore: selectedSchedule.score,
+          selectedGrade: evaluation?.grade ?? selectedSchedule.evaluation.grade,
+          selectedCoverageRate:
+            evaluation?.metrics.coverageRate ??
+            selectedSchedule.evaluation.metrics.coverageRate,
           repairIterations: selectedSchedule.repairIterations,
           unfilledSlots: selectedSchedule.unfilledSlots.length,
           hardConstraintViolations:
             selectedSchedule.hardConstraintViolations.length,
-          scoreDetails: selectedSchedule.scoreDetails.slice(0, 30)
+          scoreDetails: selectedSchedule.scoreDetails.slice(0, 30),
+          scoreBreakdown: evaluation?.breakdown ?? selectedSchedule.evaluation.breakdown
+        }
+      : evaluation
+        ? {
+            qualityMode,
+            attempts: optimizationConfig.attempts,
+            maxRepairIterations: optimizationConfig.maxRepairIterations,
+            timeBudgetMs: optimizationConfig.timeBudgetMs,
+            selectedProfile: null,
+            selectedScore: evaluation.reward,
+            selectedGrade: evaluation.grade,
+            selectedCoverageRate: evaluation.metrics.coverageRate,
+            repairIterations: 0,
+            unfilledSlots: evaluation.metrics.unfilledSlots,
+            hardConstraintViolations: evaluation.metrics.hardViolationCount,
+            scoreDetails: formatEvaluationScoreDetails(evaluation).slice(0, 30),
+            scoreBreakdown: evaluation.breakdown
+          }
+        : null,
+    evaluation: evaluation
+      ? {
+          grade: evaluation.grade,
+          reward: evaluation.reward,
+          metrics: evaluation.metrics,
+          breakdown: evaluation.breakdown,
+          explanations: evaluation.explanations.slice(0, 8),
+          hardViolations: evaluation.hardViolations.slice(0, 8),
+          softWarnings: evaluation.softWarnings.slice(0, 8)
         }
       : null,
     feasibility,

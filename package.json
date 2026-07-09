@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
+    "test:scheduler": "tsc -p scripts/tsconfig.scheduler.json && node .tmp/scheduler-tests/scripts/scheduler-tests.js",
+    "benchmark:scheduler": "tsc -p scripts/tsconfig.scheduler.json && node .tmp/scheduler-tests/scripts/scheduler-benchmark.js",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "postinstall": "electron-builder install-app-deps",
     "dist": "npm run build && electron-builder",

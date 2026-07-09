@@ -5,7 +5,9 @@ import {
   assignEmployeesToRun,
   buildScheduleGenerationPlan,
   getWeekRangeForDate,
-  isDateInputValue
+  isDateInputValue,
+  type ScheduleEvaluationGrade,
+  type SchedulerQualityMode
 } from "../../services/scheduler";
 import type {
   BusinessSettings,
@@ -87,6 +89,8 @@ export function GenerateSchedulePage({
   onViewProgram: (runId: string) => void;
 }) {
   const [weekStartDate, setWeekStartDate] = useState(() => todayInputValue());
+  const [qualityMode, setQualityMode] =
+    useState<SchedulerQualityMode>("balanced");
   const [errors, setErrors] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
@@ -133,7 +137,8 @@ export function GenerateSchedulePage({
           selectedDate: weekRange.selectedDate,
           weekStartsOn: weekRange.weekStartsOn,
           weekStartDate: plan.weekStartDate,
-          weekEndDate: plan.weekEndDate
+          weekEndDate: plan.weekEndDate,
+          schedulerQualityMode: qualityMode
         }),
         completed_at: new Date().toISOString()
       });
@@ -167,7 +172,7 @@ export function GenerateSchedulePage({
         });
       }
 
-      await assignEmployeesToRun({
+      const assignmentResult = await assignEmployeesToRun({
         run,
         slots: [...scheduleSlots, ...createdSlots],
         employees,
@@ -179,12 +184,22 @@ export function GenerateSchedulePage({
         roles,
         shiftTemplates,
         staffingRequirements,
-        assignments: scheduleAssignments
+        assignments: scheduleAssignments,
+        qualityMode
       });
 
       await onProgramGenerated(
         run.id,
-        "Proposed program generated. Review it in Schedule View."
+        language === "en"
+          ? `Proposed program generated. Quality: ${assignmentResult.evaluation.grade}, ${Math.round(
+              assignmentResult.evaluation.metrics.coverageRate * 100
+            )}% covered.`
+          : `Το πρόγραμμα δημιουργήθηκε. Ποιότητα: ${qualityGradeLabel(
+              assignmentResult.evaluation.grade,
+              language
+            )}, ${Math.round(
+              assignmentResult.evaluation.metrics.coverageRate * 100
+            )}% κάλυψη.`
       );
     } catch (error) {
       setErrors([getErrorMessage(error)]);
@@ -279,6 +294,25 @@ export function GenerateSchedulePage({
                     : `Η εβδομάδα ξεκινά ${localizedDayName(weekStartsOn, language)}.`}
               </p>
             </div>
+            <Field label={language === "en" ? "Scheduler quality" : "Ποιότητα βελτιστοποίησης"}>
+              <select
+                value={qualityMode}
+                onChange={(event) =>
+                  setQualityMode(event.target.value as SchedulerQualityMode)
+                }
+                className={inputClassName}
+              >
+                <option value="fast">
+                  {language === "en" ? "Fast draft" : "Γρήγορο draft"}
+                </option>
+                <option value="balanced">
+                  {language === "en" ? "Balanced" : "Ισορροπημένο"}
+                </option>
+                <option value="best">
+                  {language === "en" ? "Best quality" : "Καλύτερη ποιότητα"}
+                </option>
+              </select>
+            </Field>
           </div>
 
           <div className="rounded-lg bg-emerald-50 p-4 ring-1 ring-emerald-100">
@@ -465,4 +499,23 @@ export function GenerateSchedulePage({
       ) : null}
     </div>
   );
+}
+
+function qualityGradeLabel(
+  grade: ScheduleEvaluationGrade,
+  language: "el" | "en"
+): string {
+  if (language === "en") {
+    return grade.replace("_", " ");
+  }
+
+  const labels: Record<ScheduleEvaluationGrade, string> = {
+    excellent: "Άριστη",
+    good: "Καλή",
+    needs_review: "Θέλει έλεγχο",
+    bad: "Προβληματική",
+    invalid: "Μη έγκυρη"
+  };
+
+  return labels[grade];
 }

@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "../.tmp/scheduler-tests",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "declaration": false,
+    "sourceMap": false,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "../scripts/scheduler-*.ts",
+    "../src/shared/**/*.ts",
+    "../src/renderer/types/**/*.ts",
+    "../src/renderer/services/scheduler/evaluator.ts",
+    "../src/renderer/services/scheduler/constraints.ts",
+    "../src/renderer/services/scheduler/generateSlots.ts",
+    "../src/renderer/services/scheduler/teamQuality.ts"
+  ]
+}

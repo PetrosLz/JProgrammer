@@ -1,8 +1,8 @@
-import type { Employee, Role } from "../../../types";
+import type { Employee } from "../../../types";
 import type { UiLanguage } from "../../utils/localization";
-import type { EmployeeForm, TimeOffForm } from "./employeeTypes";
 import { parseOptionalNumber } from "./employeeForms";
 import { timeOffTypeOptions } from "./employeeFormatters";
+import type { EmployeeForm, TimeOffForm } from "./employeeTypes";
 
 export function validateEmployeeFormForLanguage(
   form: EmployeeForm,
@@ -11,15 +11,21 @@ export function validateEmployeeFormForLanguage(
   const errors: string[] = [];
 
   if (!form.firstName.trim()) {
-    errors.push(language === "en" ? "First name is required." : "Ξ¤ΞΏ ΟΞ½ΞΏΞΌΞ± ΞµΞ―Ξ½Ξ±ΞΉ Ο…Ο€ΞΏΟ‡ΟΞµΟ‰Ο„ΞΉΞΊΟ.");
+    errors.push(
+      language === "en" ? "First name is required." : "Το όνομα είναι υποχρεωτικό."
+    );
   }
 
   if (!form.lastName.trim()) {
-    errors.push(language === "en" ? "Last name is required." : "Ξ¤ΞΏ ΞµΟ€ΟΞ½Ο…ΞΌΞΏ ΞµΞ―Ξ½Ξ±ΞΉ Ο…Ο€ΞΏΟ‡ΟΞµΟ‰Ο„ΞΉΞΊΟ.");
+    errors.push(
+      language === "en" ? "Last name is required." : "Το επώνυμο είναι υποχρεωτικό."
+    );
   }
 
   if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-    errors.push(language === "en" ? "Enter a valid email." : "Ξ£Ο…ΞΌΟ€Ξ»Ξ·ΟΟΟƒΟ„Ξµ Ξ­Ξ³ΞΊΟ…ΟΞΏ email.");
+    errors.push(
+      language === "en" ? "Enter a valid email." : "Συμπληρώστε έγκυρο email."
+    );
   }
 
   const contractDays = parseOptionalNumber(form.workRules.contractDaysPerWeek);
@@ -35,7 +41,7 @@ export function validateEmployeeFormForLanguage(
     errors.push(
       language === "en"
         ? "Days / week must be from 1 to 7."
-        : "ΞΞΉ Ξ·ΞΌΞ­ΟΞµΟ‚ / ΞµΞ²Ξ΄ΞΏΞΌΞ¬Ξ΄Ξ± Ο€ΟΞ­Ο€ΞµΞΉ Ξ½Ξ± ΞµΞ―Ξ½Ξ±ΞΉ Ξ±Ο€Ο 1 Ξ­Ο‰Ο‚ 7."
+        : "Οι ημέρες / εβδομάδα πρέπει να είναι από 1 έως 7."
     );
   }
 
@@ -43,7 +49,7 @@ export function validateEmployeeFormForLanguage(
     errors.push(
       language === "en"
         ? "Hours / day must be a positive number."
-        : "ΞΞΉ ΟΟΞµΟ‚ / Ξ·ΞΌΞ­ΟΞ± Ο€ΟΞ­Ο€ΞµΞΉ Ξ½Ξ± ΞµΞ―Ξ½Ξ±ΞΉ ΞΈΞµΟ„ΞΉΞΊΟΟ‚ Ξ±ΟΞΉΞΈΞΌΟΟ‚."
+        : "Οι ώρες / ημέρα πρέπει να είναι θετικός αριθμός."
     );
   }
 
@@ -51,7 +57,7 @@ export function validateEmployeeFormForLanguage(
     errors.push(
       language === "en"
         ? "Hours / week must be a positive number."
-        : "ΞΞΉ ΟΟΞµΟ‚ / ΞµΞ²Ξ΄ΞΏΞΌΞ¬Ξ΄Ξ± Ο€ΟΞ­Ο€ΞµΞΉ Ξ½Ξ± ΞµΞ―Ξ½Ξ±ΞΉ ΞΈΞµΟ„ΞΉΞΊΟΟ‚ Ξ±ΟΞΉΞΈΞΌΟΟ‚."
+        : "Οι ώρες / εβδομάδα πρέπει να είναι θετικός αριθμός."
     );
   }
 
@@ -63,7 +69,7 @@ export function validateEmployeeFormForLanguage(
     errors.push(
       language === "en"
         ? "Max consecutive days must be from 1 to 7."
-        : "ΞΞΉ ΞΌΞ­Ξ³ΞΉΟƒΟ„ΞµΟ‚ ΟƒΟ…Ξ½ΞµΟ‡ΟΞΌΞµΞ½ΞµΟ‚ Ξ·ΞΌΞ­ΟΞµΟ‚ Ο€ΟΞ­Ο€ΞµΞΉ Ξ½Ξ± ΞµΞ―Ξ½Ξ±ΞΉ Ξ±Ο€Ο 1 Ξ­Ο‰Ο‚ 7."
+        : "Οι μέγιστες συνεχόμενες ημέρες πρέπει να είναι από 1 έως 7."
     );
   }
 
@@ -77,15 +83,20 @@ export function validateTimeOffFormForLanguage(
 ): string[] {
   const errors: string[] = [];
 
-  if (!form.employeeId || !employees.some((employee) => employee.id === form.employeeId)) {
-    errors.push(language === "en" ? "Choose an employee." : "Ξ•Ο€ΞΉΞ»Ξ­ΞΎΟ„Ξµ ΞµΟΞ³Ξ±Ξ¶ΟΞΌΞµΞ½ΞΏ.");
+  if (
+    !form.employeeId ||
+    !employees.some((employee) => employee.id === form.employeeId)
+  ) {
+    errors.push(
+      language === "en" ? "Choose an employee." : "Επιλέξτε εργαζόμενο."
+    );
   }
 
   if (!form.dateFrom) {
     errors.push(
       language === "en"
         ? "Date from is required."
-        : "Ξ— Ξ·ΞΌΞµΟΞΏΞΌΞ·Ξ½Ξ―Ξ± Ξ­Ξ½Ξ±ΟΞΎΞ·Ο‚ ΞµΞ―Ξ½Ξ±ΞΉ Ο…Ο€ΞΏΟ‡ΟΞµΟ‰Ο„ΞΉΞΊΞ®."
+        : "Η ημερομηνία έναρξης είναι υποχρεωτική."
     );
   }
 
@@ -93,7 +104,7 @@ export function validateTimeOffFormForLanguage(
     errors.push(
       language === "en"
         ? "Date to is required."
-        : "Ξ— Ξ·ΞΌΞµΟΞΏΞΌΞ·Ξ½Ξ―Ξ± Ξ»Ξ®ΞΎΞ·Ο‚ ΞµΞ―Ξ½Ξ±ΞΉ Ο…Ο€ΞΏΟ‡ΟΞµΟ‰Ο„ΞΉΞΊΞ®."
+        : "Η ημερομηνία λήξης είναι υποχρεωτική."
     );
   }
 
@@ -101,12 +112,16 @@ export function validateTimeOffFormForLanguage(
     errors.push(
       language === "en"
         ? "Date to cannot be before date from."
-        : "Ξ— Ξ·ΞΌΞµΟΞΏΞΌΞ·Ξ½Ξ―Ξ± Ξ»Ξ®ΞΎΞ·Ο‚ Ξ΄ΞµΞ½ ΞΌΟ€ΞΏΟΞµΞ― Ξ½Ξ± ΞµΞ―Ξ½Ξ±ΞΉ Ο€ΟΞΉΞ½ Ο„Ξ·Ξ½ Ξ·ΞΌΞµΟΞΏΞΌΞ·Ξ½Ξ―Ξ± Ξ­Ξ½Ξ±ΟΞΎΞ·Ο‚."
+        : "Η ημερομηνία λήξης δεν μπορεί να είναι πριν την ημερομηνία έναρξης."
     );
   }
 
   if (!timeOffTypeOptions(language).some((type) => type.value === form.type)) {
-    errors.push(language === "en" ? "Choose a valid time off type." : "Ξ•Ο€ΞΉΞ»Ξ­ΞΎΟ„Ξµ Ξ­Ξ³ΞΊΟ…ΟΞΏ Ο„ΟΟ€ΞΏ Ξ¬Ξ΄ΞµΞΉΞ±Ο‚.");
+    errors.push(
+      language === "en"
+        ? "Choose a valid time off type."
+        : "Επιλέξτε έγκυρο τύπο άδειας."
+    );
   }
 
   return errors;

@@ -14,6 +14,22 @@ export {
   type AssignmentResult
 } from "./assignEmployees";
 export {
+  evaluateSchedule,
+  type ScheduleEvaluationBreakdown,
+  type ScheduleEvaluationGrade,
+  type ScheduleEvaluationHardViolation,
+  type ScheduleEvaluationMetrics,
+  type ScheduleEvaluationResult,
+  type ScheduleEvaluationSoftWarning
+} from "./evaluator";
+export {
+  getSchedulerOptimizationConfig,
+  normalizeSchedulerQualityMode,
+  schedulerQualityConfigs,
+  type OptimizationConfig,
+  type SchedulerQualityMode
+} from "./qualityModes";
+export {
   scoreCandidate,
   scoreWeights,
   type CandidateScore,

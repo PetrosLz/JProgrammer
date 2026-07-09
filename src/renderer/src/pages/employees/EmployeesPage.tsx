@@ -504,14 +504,14 @@ export function UnifiedEmployeesPage({
       {timeOffPendingDelete ? (
         <ConfirmActionModal
           language={language}
-          title={language === "en" ? "Delete time off" : "Ξ”ΞΉΞ±Ξ³ΟΞ±Ο†Ξ® Ξ¬Ξ΄ΞµΞΉΞ±Ο‚"}
+          title={language === "en" ? "Delete time off" : "Διαγραφή άδειας"}
           body={
             language === "en"
               ? "This time off entry will be deleted. This action cannot be undone."
-              : "Ξ‘Ο…Ο„Ξ® Ξ· Ξ¬Ξ΄ΞµΞΉΞ± ΞΈΞ± Ξ΄ΞΉΞ±Ξ³ΟΞ±Ο†ΞµΞ―. Ξ— ΞµΞ½Ξ­ΟΞ³ΞµΞΉΞ± Ξ΄ΞµΞ½ ΞΌΟ€ΞΏΟΞµΞ― Ξ½Ξ± Ξ±Ξ½Ξ±ΞΉΟΞµΞΈΞµΞ―."
+              : "Αυτή η άδεια θα διαγραφεί. Η ενέργεια δεν μπορεί να αναιρεθεί."
           }
-          confirmLabel={language === "en" ? "Delete" : "Ξ”ΞΉΞ±Ξ³ΟΞ±Ο†Ξ®"}
-          cancelLabel={language === "en" ? "Cancel" : "Ξ‘ΞΊΟΟΟ‰ΟƒΞ·"}
+          confirmLabel={language === "en" ? "Delete" : "Διαγραφή"}
+          cancelLabel={language === "en" ? "Cancel" : "Ακύρωση"}
           variant="danger"
           isWorking={isSaving}
           onCancel={() => setTimeOffPendingDelete(null)}
