@@ -769,9 +769,12 @@ function buildEvaluationExplanations({
 
   if (grade === "excellent") {
     explanations.push(
-      "Excellent: all slots are covered, no hard violations were found, and the schedule is clean."
+      "Excellent: all slots are covered with no hard-rule issues."
     );
-  } else if (grade === "invalid") {
+    return explanations;
+  }
+
+  if (grade === "invalid") {
     explanations.push(
       `Invalid: ${hardViolations.length} hard constraint issue${
         hardViolations.length === 1 ? "" : "s"
@@ -791,19 +794,15 @@ function buildEvaluationExplanations({
     );
   }
 
-  explanations.push(
-    `Reward ${Math.round(breakdown.total)} combines coverage, hard constraints, role coverage, contracts, preferences and fairness.`
-  );
-
   if (metrics.weekendDistributionRange > 1) {
     explanations.push(
-      `Weekend balance can improve: distribution range is ${metrics.weekendDistributionRange}.`
+      `Suggestion: weekend shifts are unevenly distributed across employees.`
     );
   }
 
   if (metrics.difficultShiftDistributionRange > 1) {
     explanations.push(
-      `Difficult shift balance can improve: distribution range is ${metrics.difficultShiftDistributionRange}.`
+      `Suggestion: difficult shifts are unevenly distributed across employees.`
     );
   }
 

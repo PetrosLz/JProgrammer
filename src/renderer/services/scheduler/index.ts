@@ -25,8 +25,22 @@ export {
   type ScheduleEvaluationSoftWarning
 } from "./evaluator";
 export {
+  buildCoverageCeilingAnalysis,
+  diagnoseCoverageCeiling,
+  type CoverageCeilingAnalysis,
+  type CoverageCeilingClassification,
+  type CoverageCeilingDiagnosis,
+  type CoverageDiagnosis
+} from "./coverageCeiling";
+export {
+  buildManagerScheduleDiagnostics,
+  type ManagerScheduleDiagnostics,
+  type ManagerScheduleStatus
+} from "./managerDiagnostics";
+export {
   defaultSchedulerOptimizationConfig,
-  type OptimizationConfig
+  type OptimizationConfig,
+  type SchedulerStopReason
 } from "./optimizationConfig";
 export {
   scoreCandidate,

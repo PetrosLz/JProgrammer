@@ -82,7 +82,8 @@ import {
 } from "./evaluator";
 import {
   defaultSchedulerOptimizationConfig,
-  type OptimizationConfig
+  type OptimizationConfig,
+  type SchedulerStopReason
 } from "./optimizationConfig";
 
 export type AssignmentResult = {
@@ -112,6 +113,12 @@ export type InMemoryScheduleOptimizationResult = {
   selectedProfile: string | null;
   selectedScore: number;
   repairIterations: number;
+  stopReason: SchedulerStopReason;
+  attemptsCompleted: number;
+  noImprovementAttempts: number;
+  repairInitialScore: number;
+  repairFinalScore: number;
+  repairNoImprovementAttempts: number;
 };
 
 type AssignmentCandidate = {
@@ -158,6 +165,12 @@ type CandidateSchedule = {
   explanations: string[];
   hardConstraintViolations: string[];
   repairIterations: number;
+  repairInitialScore: number;
+  repairFinalScore: number;
+  repairNoImprovementAttempts: number;
+  stopReason: SchedulerStopReason;
+  attemptsCompleted: number;
+  noImprovementAttempts: number;
   evaluation: ScheduleEvaluationResult;
 };
 
@@ -176,6 +189,9 @@ type SimulationState = {
 type RepairResult = {
   iterations: number;
   explanations: string[];
+  initialScore: number;
+  finalScore: number;
+  noImprovementAttempts: number;
 };
 
 type RoleGroupCoverage = {
@@ -595,7 +611,13 @@ export function optimizeScheduleInMemory({
       evaluation,
       selectedProfile: null,
       selectedScore: evaluation.reward,
-      repairIterations: 0
+      repairIterations: 0,
+      stopReason: "attempt_limit",
+      attemptsCompleted: 0,
+      noImprovementAttempts: 0,
+      repairInitialScore: evaluation.reward,
+      repairFinalScore: evaluation.reward,
+      repairNoImprovementAttempts: 0
     };
   }
 
@@ -749,7 +771,13 @@ export function optimizeScheduleInMemory({
     evaluation,
     selectedProfile: selectedSchedule.profile.id,
     selectedScore: selectedSchedule.score,
-    repairIterations: selectedSchedule.repairIterations
+    repairIterations: selectedSchedule.repairIterations,
+    stopReason: selectedSchedule.stopReason,
+    attemptsCompleted: selectedSchedule.attemptsCompleted,
+    noImprovementAttempts: selectedSchedule.noImprovementAttempts,
+    repairInitialScore: selectedSchedule.repairInitialScore,
+    repairFinalScore: selectedSchedule.repairFinalScore,
+    repairNoImprovementAttempts: selectedSchedule.repairNoImprovementAttempts
   };
 }
 
@@ -824,12 +852,17 @@ function optimizeCandidateSchedules({
   const deadlineMs = startedAt + optimizationConfig.timeBudgetMs;
   const profiles = buildAttemptProfiles(optimizationConfig.attempts);
   let bestSchedule: CandidateSchedule | null = null;
+  let stopReason: SchedulerStopReason = "attempt_limit";
+  let attemptsCompleted = 0;
+  let noImprovementAttempts = 0;
+  let bestReward = Number.NEGATIVE_INFINITY;
 
   for (const profile of profiles) {
     if (
       bestSchedule &&
       Date.now() >= deadlineMs
     ) {
+      stopReason = "time_budget";
       break;
     }
 
@@ -852,13 +885,36 @@ function optimizeCandidateSchedules({
       optimizationConfig,
       shiftTemplates
     });
+    attemptsCompleted += 1;
 
     if (!bestSchedule || candidateSchedule.score > bestSchedule.score) {
       bestSchedule = candidateSchedule;
     }
+
+    if (
+      candidateSchedule.score >
+      bestReward + optimizationConfig.rewardImprovementTolerance
+    ) {
+      bestReward = candidateSchedule.score;
+      noImprovementAttempts = 0;
+    } else {
+      noImprovementAttempts += 1;
+    }
+
+    const earlyStopReason = getOptimizationEarlyStopReason({
+      bestSchedule,
+      attemptsCompleted,
+      noImprovementAttempts,
+      optimizationConfig
+    });
+
+    if (earlyStopReason) {
+      stopReason = earlyStopReason;
+      break;
+    }
   }
 
-  return (
+  const fallbackSchedule =
     bestSchedule ??
     scoreCandidateSchedule({
       run,
@@ -879,8 +935,53 @@ function optimizeCandidateSchedules({
       rotationHistory,
       feasibility,
       shiftTemplates
-    })
-  );
+    });
+
+  return {
+    ...fallbackSchedule,
+    stopReason,
+    attemptsCompleted,
+    noImprovementAttempts
+  };
+}
+
+function getOptimizationEarlyStopReason({
+  bestSchedule,
+  attemptsCompleted,
+  noImprovementAttempts,
+  optimizationConfig
+}: {
+  bestSchedule: CandidateSchedule | null;
+  attemptsCompleted: number;
+  noImprovementAttempts: number;
+  optimizationConfig: OptimizationConfig;
+}): SchedulerStopReason | null {
+  if (
+    !bestSchedule ||
+    attemptsCompleted < optimizationConfig.minimumAttemptsBeforeEarlyStop ||
+    bestSchedule.hardConstraintViolations.length > 0 ||
+    bestSchedule.evaluation.metrics.hardViolationCount > 0
+  ) {
+    return null;
+  }
+
+  const hasFullLegalCoverage =
+    bestSchedule.evaluation.metrics.coverageRate === 1 &&
+    bestSchedule.evaluation.metrics.unfilledSlots === 0;
+
+  if (!hasFullLegalCoverage) {
+    return null;
+  }
+
+  if (bestSchedule.evaluation.grade === "excellent") {
+    return "perfect_schedule";
+  }
+
+  if (noImprovementAttempts >= optimizationConfig.noImprovementAttemptLimit) {
+    return "no_improvement";
+  }
+
+  return null;
 }
 
 function buildCandidateSchedule({
@@ -1042,6 +1143,9 @@ function buildCandidateSchedule({
     manualOverrides,
     profile,
     repairIterations: repairResult.iterations,
+    repairInitialScore: repairResult.initialScore,
+    repairFinalScore: repairResult.finalScore,
+    repairNoImprovementAttempts: repairResult.noImprovementAttempts,
     rotationHistory,
     feasibility,
     shiftTemplates
@@ -1397,27 +1501,31 @@ function repairCandidateSchedule({
 }): RepairResult {
   const explanations: string[] = [];
   let iterations = 0;
+  let noImprovementAttempts = 0;
+  let currentScore = scoreCandidateSchedule({
+    run,
+    runSlots,
+    employees,
+    roles,
+    data,
+    fixedAssignments,
+    state,
+    rotationHistory,
+    staffingRequirements,
+    manualOverrides,
+    profile,
+    repairIterations: iterations,
+    feasibility,
+    shiftTemplates
+  }).score;
+  const initialScore = currentScore;
 
   while (
     iterations < optimizationConfig.maxRepairIterations &&
     Date.now() < deadlineMs
   ) {
-    const currentScore = scoreCandidateSchedule({
-      run,
-      runSlots,
-      employees,
-      roles,
-      data,
-      fixedAssignments,
-      state,
-      rotationHistory,
-      staffingRequirements,
-      manualOverrides,
-      profile,
-      repairIterations: iterations,
-      feasibility,
-      shiftTemplates
-    }).score;
+    let appliedRepair = false;
+    let foundRepairCandidate = false;
     const moveRepair = findBestMoveRepair({
       run,
       runSlots,
@@ -1436,11 +1544,24 @@ function repairCandidateSchedule({
       feasibility,
       shiftTemplates
     });
+    foundRepairCandidate = foundRepairCandidate || moveRepair !== null;
 
-    if (moveRepair) {
+    if (
+      moveRepair &&
+      moveRepair.score >
+        currentScore + optimizationConfig.rewardImprovementTolerance
+    ) {
       applyRepairState(state, moveRepair.plannedAssignments, fixedAssignments, runSlots);
       explanations.push(moveRepair.explanation);
+      currentScore = moveRepair.score;
       iterations += 1;
+      noImprovementAttempts = 0;
+      appliedRepair = true;
+    } else if (moveRepair) {
+      noImprovementAttempts += 1;
+    }
+
+    if (appliedRepair) {
       continue;
     }
 
@@ -1461,8 +1582,14 @@ function repairCandidateSchedule({
       feasibility,
       shiftTemplates
     });
+    foundRepairCandidate =
+      foundRepairCandidate || replacementRepair !== null;
 
-    if (replacementRepair) {
+    if (
+      replacementRepair &&
+      replacementRepair.score >
+        currentScore + optimizationConfig.rewardImprovementTolerance
+    ) {
       applyRepairState(
         state,
         replacementRepair.plannedAssignments,
@@ -1470,7 +1597,15 @@ function repairCandidateSchedule({
         runSlots
       );
       explanations.push(replacementRepair.explanation);
+      currentScore = replacementRepair.score;
       iterations += 1;
+      noImprovementAttempts = 0;
+      appliedRepair = true;
+    } else if (replacementRepair) {
+      noImprovementAttempts += 1;
+    }
+
+    if (appliedRepair) {
       continue;
     }
 
@@ -1490,18 +1625,45 @@ function repairCandidateSchedule({
       feasibility,
       shiftTemplates
     });
+    foundRepairCandidate = foundRepairCandidate || swapRepair !== null;
 
-    if (swapRepair) {
+    if (
+      swapRepair &&
+      swapRepair.score >
+        currentScore + optimizationConfig.rewardImprovementTolerance
+    ) {
       applyRepairState(state, swapRepair.plannedAssignments, fixedAssignments, runSlots);
       explanations.push(swapRepair.explanation);
+      currentScore = swapRepair.score;
       iterations += 1;
+      noImprovementAttempts = 0;
+      appliedRepair = true;
+    } else if (swapRepair) {
+      noImprovementAttempts += 1;
+    }
+
+    if (appliedRepair) {
       continue;
     }
 
-    break;
+    if (!foundRepairCandidate) {
+      break;
+    }
+
+    noImprovementAttempts += 1;
+
+    if (noImprovementAttempts >= optimizationConfig.repairNoImprovementLimit) {
+      break;
+    }
   }
 
-  return { iterations, explanations };
+  return {
+    iterations,
+    explanations,
+    initialScore,
+    finalScore: currentScore,
+    noImprovementAttempts
+  };
 }
 
 function findBestMoveRepair({
@@ -2083,6 +2245,12 @@ function scoreCandidateSchedule({
   manualOverrides,
   profile,
   repairIterations,
+  repairInitialScore = 0,
+  repairFinalScore = 0,
+  repairNoImprovementAttempts = 0,
+  stopReason = "attempt_limit",
+  attemptsCompleted = 0,
+  noImprovementAttempts = 0,
   shiftTemplates
 }: {
   run: ScheduleRun;
@@ -2098,6 +2266,12 @@ function scoreCandidateSchedule({
   manualOverrides: ManualOverrideMap;
   profile: AttemptProfile;
   repairIterations: number;
+  repairInitialScore?: number;
+  repairFinalScore?: number;
+  repairNoImprovementAttempts?: number;
+  stopReason?: SchedulerStopReason;
+  attemptsCompleted?: number;
+  noImprovementAttempts?: number;
   shiftTemplates: ShiftTemplate[];
 }): CandidateSchedule {
   const plannedAssignments = [...state.plannedAssignments.values()];
@@ -2158,6 +2332,12 @@ function scoreCandidateSchedule({
     explanations: state.explanations,
     hardConstraintViolations: combinedHardConstraintViolations,
     repairIterations,
+    repairInitialScore,
+    repairFinalScore,
+    repairNoImprovementAttempts,
+    stopReason,
+    attemptsCompleted,
+    noImprovementAttempts,
     evaluation
   };
 }
@@ -4023,6 +4203,12 @@ function mergeRunParameters(
           attempts: optimizationConfig.attempts,
           maxRepairIterations: optimizationConfig.maxRepairIterations,
           timeBudgetMs: optimizationConfig.timeBudgetMs,
+          minimumAttemptsBeforeEarlyStop:
+            optimizationConfig.minimumAttemptsBeforeEarlyStop,
+          noImprovementAttemptLimit: optimizationConfig.noImprovementAttemptLimit,
+          rewardImprovementTolerance:
+            optimizationConfig.rewardImprovementTolerance,
+          repairNoImprovementLimit: optimizationConfig.repairNoImprovementLimit,
           selectedProfile: selectedSchedule.profile.id,
           selectedScore: selectedSchedule.score,
           selectedGrade: evaluation?.grade ?? selectedSchedule.evaluation.grade,
@@ -4030,6 +4216,13 @@ function mergeRunParameters(
             evaluation?.metrics.coverageRate ??
             selectedSchedule.evaluation.metrics.coverageRate,
           repairIterations: selectedSchedule.repairIterations,
+          stopReason: selectedSchedule.stopReason,
+          attemptsCompleted: selectedSchedule.attemptsCompleted,
+          noImprovementAttempts: selectedSchedule.noImprovementAttempts,
+          repairInitialScore: selectedSchedule.repairInitialScore,
+          repairFinalScore: selectedSchedule.repairFinalScore,
+          repairNoImprovementAttempts:
+            selectedSchedule.repairNoImprovementAttempts,
           unfilledSlots: selectedSchedule.unfilledSlots.length,
           hardConstraintViolations:
             selectedSchedule.hardConstraintViolations.length,
@@ -4041,11 +4234,24 @@ function mergeRunParameters(
             attempts: optimizationConfig.attempts,
             maxRepairIterations: optimizationConfig.maxRepairIterations,
             timeBudgetMs: optimizationConfig.timeBudgetMs,
+            minimumAttemptsBeforeEarlyStop:
+              optimizationConfig.minimumAttemptsBeforeEarlyStop,
+            noImprovementAttemptLimit:
+              optimizationConfig.noImprovementAttemptLimit,
+            rewardImprovementTolerance:
+              optimizationConfig.rewardImprovementTolerance,
+            repairNoImprovementLimit: optimizationConfig.repairNoImprovementLimit,
             selectedProfile: null,
             selectedScore: evaluation.reward,
             selectedGrade: evaluation.grade,
             selectedCoverageRate: evaluation.metrics.coverageRate,
             repairIterations: 0,
+            stopReason: "attempt_limit",
+            attemptsCompleted: 0,
+            noImprovementAttempts: 0,
+            repairInitialScore: evaluation.reward,
+            repairFinalScore: evaluation.reward,
+            repairNoImprovementAttempts: 0,
             unfilledSlots: evaluation.metrics.unfilledSlots,
             hardConstraintViolations: evaluation.metrics.hardViolationCount,
             scoreDetails: formatEvaluationScoreDetails(evaluation).slice(0, 30),
