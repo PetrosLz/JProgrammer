@@ -17,8 +17,7 @@ import {
   type SchedulerData,
   buildExistingAssignedShifts,
   checkHardConstraints,
-  getEffectiveMaxDaysPerWeek,
-  getEffectiveMaxHoursPerWeek,
+  getEffectiveMaxShiftsPerWeek,
   getEmployeeWorkRules,
   getSlotDurationHours
 } from "./constraints";
@@ -81,6 +80,7 @@ export type CoverageCeilingDiagnosis = {
 type EmployeeState = {
   dateMask: number;
   hoursUnits: number;
+  shiftCount: number;
 };
 
 type SlotCandidateSet = {
@@ -468,17 +468,10 @@ function canAssignEmployeeToSlot({
   }
 
   const workRules = getEmployeeWorkRules(employee.id, employeeWorkRules);
-  const maxHours = getEffectiveMaxHoursPerWeek(workRules);
-  const maxDays = getEffectiveMaxDaysPerWeek(workRules);
-  const projectedHours = state.hoursUnits + toHourUnits(getSlotDurationHours(slot));
-  const projectedDays =
-    countBits(state.dateMask) + (dateBit !== 0 && (state.dateMask & dateBit) === 0 ? 1 : 0);
+  const maxShifts = getEffectiveMaxShiftsPerWeek(workRules);
+  const projectedShifts = state.shiftCount + 1;
 
-  if (maxHours !== null && projectedHours > toHourUnits(maxHours)) {
-    return false;
-  }
-
-  if (maxDays !== null && projectedDays > maxDays) {
+  if (maxShifts !== null && projectedShifts > maxShifts) {
     return false;
   }
 
@@ -501,6 +494,7 @@ function applySlotToEmployeeState({
   }
 
   state.hoursUnits += toHourUnits(getSlotDurationHours(slot));
+  state.shiftCount += 1;
 }
 
 function buildInitialEmployeeStates({
@@ -514,7 +508,11 @@ function buildInitialEmployeeStates({
   existingAssignedShifts: AssignedShift[];
   dateIndexByDate: Map<string, number>;
 }): EmployeeState[] {
-  const states = activeEmployees.map(() => ({ dateMask: 0, hoursUnits: 0 }));
+  const states = activeEmployees.map(() => ({
+    dateMask: 0,
+    hoursUnits: 0,
+    shiftCount: 0
+  }));
 
   for (const assignedShift of existingAssignedShifts) {
     const employeeIndex = activeEmployeeIndexById.get(assignedShift.employeeId);
@@ -528,6 +526,7 @@ function buildInitialEmployeeStates({
       states[employeeIndex].dateMask |= 1 << dateIndex;
     }
     states[employeeIndex].hoursUnits += toHourUnits(assignedShift.durationHours);
+    states[employeeIndex].shiftCount += 1;
   }
 
   return states;
@@ -664,7 +663,7 @@ function employeeLabel(employee: Employee): string {
 
 function stateSignature(states: EmployeeState[]): string {
   return states
-    .map((state) => `${state.dateMask}:${state.hoursUnits}`)
+    .map((state) => `${state.dateMask}:${state.hoursUnits}:${state.shiftCount}`)
     .join(",");
 }
 

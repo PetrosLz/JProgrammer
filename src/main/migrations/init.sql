@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS shift_templates (
   start_time TEXT NOT NULL,
   end_time TEXT NOT NULL,
   is_overnight INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1)),
-  break_minutes INTEGER NOT NULL DEFAULT 0 CHECK (break_minutes >= 0),
   color TEXT,
   notes TEXT,
   is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
@@ -64,7 +63,7 @@ CREATE TABLE IF NOT EXISTS staffing_requirements (
   required_count INTEGER NOT NULL CHECK (required_count >= 0),
   minimum_experience_level TEXT NOT NULL DEFAULT 'no_experience' CHECK (minimum_experience_level IN ('no_experience', 'some_experience', 'experienced')),
   experienced_required_count INTEGER NOT NULL DEFAULT 0 CHECK (experienced_required_count >= 0),
-  priority TEXT NOT NULL DEFAULT 'normal',
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'high', 'critical')),
   is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -129,26 +128,22 @@ CREATE TABLE IF NOT EXISTS employee_roles (
 CREATE TABLE IF NOT EXISTS employee_work_rules (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL,
-  employment_type TEXT NOT NULL DEFAULT 'custom' CHECK (employment_type IN ('full_time', 'part_time', 'weekly_hours', 'custom')),
-  contract_days_per_week INTEGER,
-  contract_hours_per_week REAL,
-  preferred_hours_per_day REAL,
-  min_days_per_week INTEGER,
-  max_days_per_week INTEGER,
-  target_days_per_week INTEGER,
-  min_hours_per_week REAL,
-  max_hours_per_week REAL,
-  target_hours_per_week REAL,
-  max_consecutive_days INTEGER,
+  max_shifts_per_week INTEGER NOT NULL CHECK (max_shifts_per_week >= 1),
+  max_hours_per_day REAL NOT NULL CHECK (max_hours_per_day > 0),
+  target_hours_per_day REAL,
   can_work_weekends INTEGER NOT NULL DEFAULT 1 CHECK (can_work_weekends IN (0, 1)),
-  max_shifts_per_week INTEGER,
-  min_hours_between_shifts REAL,
-  preferred_hours_per_week REAL,
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
-  UNIQUE (employee_id)
+  UNIQUE (employee_id),
+  CHECK (
+    target_hours_per_day IS NULL
+    OR (
+      target_hours_per_day > 0
+      AND target_hours_per_day <= max_hours_per_day
+    )
+  )
 );
 
 CREATE TABLE IF NOT EXISTS employee_day_constraints (

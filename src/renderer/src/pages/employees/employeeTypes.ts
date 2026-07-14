@@ -1,11 +1,9 @@
-import type { EmploymentType, ExperienceLevel } from "../../../types";
+import type { ExperienceLevel } from "../../../types";
 
 export type EmployeeWorkRulesForm = {
-  employmentType: EmploymentType;
-  contractDaysPerWeek: string;
-  preferredHoursPerDay: string;
-  contractHoursPerWeek: string;
-  maxConsecutiveDays: string;
+  maxShiftsPerWeek: string;
+  maxHoursPerDay: string;
+  targetHoursPerDay: string;
   canWorkWeekends: boolean;
 };
 

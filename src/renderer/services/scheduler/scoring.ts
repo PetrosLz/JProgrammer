@@ -5,16 +5,15 @@ import {
   type SchedulerData,
   getAssignedDayCount,
   getAssignedHours,
-  getContractDaysPerWeek,
-  getContractHoursPerWeek,
+  getApproximateTargetHoursPerWeek,
   getConsecutiveDayCountIfAssigned,
   getDayConstraint,
-  getEffectiveMaxDaysPerWeek,
-  getEffectiveMaxHoursPerWeek,
+  getEffectiveMaxShiftsPerWeek,
   getEmployeeWorkRules,
   getEmployeeShiftAvailability,
   getNightShiftCount,
   getSlotDurationHours,
+  getTargetShiftCountPerWeek,
   getWeekendShiftCount,
   isNightOrDifficultShift,
   isWeekendDate
@@ -139,15 +138,17 @@ export function scoreCandidate({
   const details: ScoreDetail[] = [{ label: "Base score", points: baseScore }];
   const warnings: CandidateScoreWarning[] = [];
   const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
-  const contractHoursPerWeek = getContractHoursPerWeek(workRules);
-  const contractDaysPerWeek = getContractDaysPerWeek(workRules);
-  const maxHoursPerWeek = getEffectiveMaxHoursPerWeek(workRules);
-  const maxDaysPerWeek = getEffectiveMaxDaysPerWeek(workRules);
+  const targetHoursPerWeek = getApproximateTargetHoursPerWeek(workRules);
+  const targetShiftsPerWeek = getTargetShiftCountPerWeek(workRules);
+  const maxShiftsPerWeek = getEffectiveMaxShiftsPerWeek(workRules);
   const currentHours = getAssignedHours(employee.id, assignedShifts);
   const slotHours = getSlotDurationHours(slot);
   const projectedHours = currentHours + slotHours;
   const currentDays = getAssignedDayCount(employee.id, assignedShifts);
-  const projectedDays = getAssignedDayCount(employee.id, assignedShifts, slot.date);
+  const currentShifts = assignedShifts.filter(
+    (shift) => shift.employeeId === employee.id
+  ).length;
+  const projectedShifts = currentShifts + 1;
   const weekendAssignments = getWeekendShiftCount(employee.id, assignedShifts);
   const difficultAssignments = getNightShiftCount(employee.id, assignedShifts);
   const dayConstraint = getDayConstraint(
@@ -195,17 +196,17 @@ export function scoreCandidate({
   }
 
   if (
-    contractHoursPerWeek !== null &&
-    currentHours < contractHoursPerWeek
+    targetHoursPerWeek !== null &&
+    currentHours < targetHoursPerWeek
   ) {
-    add("Below contract hours", scoreWeights.belowTargetHours);
+    add("Below target hours", scoreWeights.belowTargetHours);
   }
 
   if (
-    contractDaysPerWeek !== null &&
-    currentDays < contractDaysPerWeek
+    targetShiftsPerWeek !== null &&
+    currentShifts < targetShiftsPerWeek
   ) {
-    add("Below contract days", scoreWeights.belowTargetDays);
+    add("Below target shifts", scoreWeights.belowTargetDays);
   }
 
   if (context && currentHours < context.averageAssignedHours) {
@@ -238,17 +239,17 @@ export function scoreCandidate({
   add("Good role fit", scoreWeights.goodRoleFit);
 
   if (
-    maxHoursPerWeek !== null &&
-    projectedHours >= maxHoursPerWeek * 0.85
+    targetHoursPerWeek !== null &&
+    projectedHours >= targetHoursPerWeek
   ) {
-    add("Close to max weekly hours", scoreWeights.closeToMaxHours);
+    add("At or above target hours", scoreWeights.closeToMaxHours);
   }
 
   if (
-    maxDaysPerWeek !== null &&
-    projectedDays >= maxDaysPerWeek
+    maxShiftsPerWeek !== null &&
+    projectedShifts >= maxShiftsPerWeek
   ) {
-    add("Close to max weekly days", scoreWeights.closeToMaxDays);
+    add("Close to max weekly shifts", scoreWeights.closeToMaxDays);
   }
 
   const consecutiveDays = getConsecutiveDayCountIfAssigned(
@@ -258,9 +259,6 @@ export function scoreCandidate({
   );
 
   if (
-    (workRules?.max_consecutive_days !== null &&
-      workRules?.max_consecutive_days !== undefined &&
-      consecutiveDays > workRules.max_consecutive_days) ||
     consecutiveDays > 4
   ) {
     add("Too many consecutive days", scoreWeights.tooManyConsecutiveDays);

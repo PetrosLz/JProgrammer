@@ -44,6 +44,7 @@ import {
 import { AppShell } from "./layout/AppShell";
 
 type AppConfirmAction = "load-demo" | "reset-local-data";
+const schedulerV2WorkRulesReviewKey = "scheduler_v2_work_rules_need_review";
 
 export function App() {
   const [activePageId, setActivePageId] = useState<PageId | LegacyPageId>(
@@ -60,6 +61,7 @@ export function App() {
   const [isResettingApp, setIsResettingApp] = useState(false);
   const [pendingAppConfirmAction, setPendingAppConfirmAction] =
     useState<AppConfirmAction | null>(null);
+  const [needsWorkRulesReview, setNeedsWorkRulesReview] = useState(false);
   const [selectedScheduleRunId, setSelectedScheduleRunId] = useState<
     string | null
   >(null);
@@ -91,6 +93,50 @@ export function App() {
       setActivePageId(normalizedActivePageId);
     }
   }, [activePageId, normalizedActivePageId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadWorkRulesReviewNotice() {
+      if (appState !== "ready") {
+        return;
+      }
+
+      try {
+        const setting = await databaseApi.getSetting(
+          schedulerV2WorkRulesReviewKey
+        );
+
+        if (isMounted) {
+          setNeedsWorkRulesReview(setting?.value === "true");
+        }
+      } catch {
+        if (isMounted) {
+          setNeedsWorkRulesReview(false);
+        }
+      }
+    }
+
+    void loadWorkRulesReviewNotice();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [appState]);
+
+  async function acknowledgeWorkRulesReview() {
+    try {
+      await databaseApi.setSetting(schedulerV2WorkRulesReviewKey, "false");
+      setNeedsWorkRulesReview(false);
+      setNotice(
+        language === "en"
+          ? "Employee scheduling review notice dismissed."
+          : "Η υπενθύμιση ελέγχου κανόνων εργασίας έκλεισε."
+      );
+    } catch (error) {
+      setErrors([getErrorMessage(error)]);
+    }
+  }
 
   async function handleWizardNext() {
     const stepErrors = validateSetupStep(activeStep, setupDraft);
@@ -130,6 +176,7 @@ export function App() {
     try {
       const result = await loadDemoData();
       await refreshSummary();
+      setNeedsWorkRulesReview(false);
       setSelectedScheduleRunId(null);
       setActiveStep(0);
       setActivePageId("profile");
@@ -153,6 +200,7 @@ export function App() {
     try {
       await databaseApi.resetLocalData();
       resetSummary();
+      setNeedsWorkRulesReview(false);
       setSetupDraft(createInitialSetupDraft());
       setSelectedScheduleRunId(null);
       setActiveStep(0);
@@ -256,6 +304,14 @@ export function App() {
           setActivePageId(pageId);
         }}
       >
+          {needsWorkRulesReview ? (
+            <WorkRulesReviewNotice
+              language={language}
+              onAcknowledge={() => {
+                void acknowledgeWorkRulesReview();
+              }}
+            />
+          ) : null}
           {renderPage(activeNavItem.id, summary, {
             selectedScheduleRunId,
             isLoadingDemoData,
@@ -287,6 +343,33 @@ export function App() {
       </AppShell>
       {pendingAppConfirmModal}
     </>
+  );
+}
+
+function WorkRulesReviewNotice({
+  language,
+  onAcknowledge
+}: {
+  language: UiLanguage;
+  onAcknowledge: () => void;
+}) {
+  return (
+    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-3xl">
+          {language === "en"
+            ? "Employee scheduling limits were migrated to the new scheduling model. Please review each employee's maximum weekly shifts and daily-hour limit before generating a new schedule."
+            : "Τα όρια προγραμματισμού εργαζομένων μεταφέρθηκαν στο νέο μοντέλο. Ελέγξτε τις μέγιστες εβδομαδιαίες βάρδιες και το ημερήσιο όριο ωρών κάθε εργαζομένου πριν δημιουργήσετε νέο πρόγραμμα."}
+        </p>
+        <button
+          type="button"
+          onClick={onAcknowledge}
+          className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+        >
+          {language === "en" ? "I reviewed it" : "Το έλεγξα"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -489,7 +572,6 @@ async function saveSetupDraft(draft: SetupDraft): Promise<void> {
       start_time: template.startTime,
       end_time: template.endTime,
       is_overnight: template.isOvernight,
-      break_minutes: 0,
       color: template.color,
       notes: optionalText(template.notes),
       is_active: true

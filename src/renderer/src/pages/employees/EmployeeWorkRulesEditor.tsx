@@ -1,12 +1,6 @@
-import type { EmploymentType } from "../../../types";
-import { Field, NumberField } from "../../components/Field";
-import { inputClassName } from "../../components/styles";
+import { NumberField } from "../../components/Field";
 import type { UiLanguage } from "../../utils/localization";
-import { employmentTypeSelectOptions } from "./employeeFormatters";
-import {
-  applyEmploymentPatternPreset,
-  applyEmploymentTypeDefaults
-} from "./employeeForms";
+import { applyEmploymentPatternPreset } from "./employeeForms";
 import {
   employmentPatternPresets,
   type EmployeeWorkRulesForm
@@ -46,63 +40,33 @@ export function EmployeeWorkRulesEditor({
         </div>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <Field label={text.employmentType}>
-          <select
-            value={value.employmentType}
-            onChange={(event) =>
-              onChange(
-                applyEmploymentTypeDefaults(
-                  value,
-                  event.target.value as EmploymentType
-                )
-              )
-            }
-            className={inputClassName}
-          >
-            {employmentTypeSelectOptions(language).map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </Field>
         <NumberField
-          label={text.daysPerWeek}
-          value={value.contractDaysPerWeek}
+          label={text.maxShiftsPerWeek}
+          value={value.maxShiftsPerWeek}
           onChange={(nextValue) =>
             onChange({
               ...value,
-              contractDaysPerWeek: nextValue
+              maxShiftsPerWeek: nextValue
             })
           }
         />
         <NumberField
-          label={text.hoursPerDay}
-          value={value.preferredHoursPerDay}
+          label={text.maxHoursPerDay}
+          value={value.maxHoursPerDay}
           onChange={(nextValue) =>
             onChange({
               ...value,
-              preferredHoursPerDay: nextValue
+              maxHoursPerDay: nextValue
             })
           }
         />
         <NumberField
-          label={text.hoursPerWeek}
-          value={value.contractHoursPerWeek}
+          label={text.targetHoursPerDay}
+          value={value.targetHoursPerDay}
           onChange={(nextValue) =>
             onChange({
               ...value,
-              contractHoursPerWeek: nextValue
-            })
-          }
-        />
-        <NumberField
-          label={text.maxConsecutiveDays}
-          value={value.maxConsecutiveDays}
-          onChange={(nextValue) =>
-            onChange({
-              ...value,
-              maxConsecutiveDays: nextValue
+              targetHoursPerDay: nextValue
             })
           }
         />
@@ -121,6 +85,7 @@ export function EmployeeWorkRulesEditor({
           {text.canWorkWeekends}
         </label>
       </div>
+      <p className="mt-2 text-xs text-slate-500">{text.workRulesHelp}</p>
     </section>
   );
 }

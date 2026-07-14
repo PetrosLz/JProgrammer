@@ -46,6 +46,8 @@ export function employeePageText(language: UiLanguage) {
       inactive: "Inactive",
       lastName: "Last name",
       maxConsecutiveDays: "Max consecutive days",
+      maxHoursPerDay: "Maximum hours per day",
+      maxShiftsPerWeek: "Maximum shifts per week",
       noEmail: "No email",
       noEmployeesFound: "No employees found.",
       noPhone: "No phone",
@@ -74,9 +76,11 @@ export function employeePageText(language: UiLanguage) {
       timeOff: "Time off",
       timeOffDeleted: "Time off deleted.",
       timeOffSaved: "Time off saved.",
+      targetHoursPerDay: "Target hours per working day",
       type: "Type",
       wholeDay: "Whole day",
-      workRules: "Work rules"
+      workRules: "Work rules",
+      workRulesHelp: "Each separate shift block counts toward the weekly shift limit. For example, 08:00-12:00 and 16:00-20:00 count as two shifts."
     };
   }
 
@@ -123,6 +127,8 @@ export function employeePageText(language: UiLanguage) {
     inactive: "Ανενεργός",
     lastName: "Επώνυμο",
     maxConsecutiveDays: "Μέγιστες συνεχόμενες ημέρες",
+    maxHoursPerDay: "Μέγιστες ώρες ανά ημέρα",
+    maxShiftsPerWeek: "Μέγιστες βάρδιες ανά εβδομάδα",
     noEmail: "Χωρίς email",
     noEmployeesFound: "Δεν βρέθηκαν εργαζόμενοι.",
     noPhone: "Χωρίς τηλέφωνο",
@@ -151,8 +157,10 @@ export function employeePageText(language: UiLanguage) {
     timeOff: "Άδειες / Ρεπό",
     timeOffDeleted: "Η άδεια διαγράφηκε.",
     timeOffSaved: "Η άδεια αποθηκεύτηκε.",
+    targetHoursPerDay: "Στόχος ωρών ανά εργάσιμη ημέρα",
     type: "Τύπος",
     wholeDay: "Ολόκληρη ημέρα",
-    workRules: "Σύμβαση / Κανόνες εργασίας"
+    workRules: "Σύμβαση / Κανόνες εργασίας",
+    workRulesHelp: "Κάθε ξεχωριστό κομμάτι βάρδιας μετράει στο εβδομαδιαίο όριο βαρδιών. Για παράδειγμα, 08:00-12:00 και 16:00-20:00 μετράνε ως δύο βάρδιες."
   };
 }

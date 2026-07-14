@@ -63,31 +63,15 @@ export async function upsertEmployeeWorkRules(
   const existingWorkRules = allWorkRules.find(
     (workRules) => workRules.employee_id === employeeId
   );
-  const contractDays = parseOptionalNumber(form.contractDaysPerWeek) ?? 5;
-  const contractHours = parseOptionalNumber(form.contractHoursPerWeek) ?? 40;
-  const preferredHoursPerDay =
-    parseOptionalNumber(form.preferredHoursPerDay) ??
-    (contractDays > 0 ? contractHours / contractDays : 8);
-  const maxConsecutiveDays = parseOptionalNumber(form.maxConsecutiveDays) ?? 5;
-  const derivedMaxDays = Math.min(7, contractDays + 1);
-  const derivedMaxHours = contractHours + 4;
+  const maxShiftsPerWeek = parseOptionalNumber(form.maxShiftsPerWeek) ?? 5;
+  const maxHoursPerDay = parseOptionalNumber(form.maxHoursPerDay) ?? 8;
+  const targetHoursPerDay = parseOptionalNumber(form.targetHoursPerDay);
   const payload = {
     employee_id: employeeId,
-    employment_type: form.employmentType,
-    contract_days_per_week: contractDays,
-    contract_hours_per_week: contractHours,
-    preferred_hours_per_day: preferredHoursPerDay,
-    min_days_per_week: null,
-    max_days_per_week: derivedMaxDays,
-    target_days_per_week: contractDays,
-    min_hours_per_week: null,
-    max_hours_per_week: derivedMaxHours,
-    target_hours_per_week: contractHours,
-    max_consecutive_days: maxConsecutiveDays,
+    max_shifts_per_week: maxShiftsPerWeek,
+    max_hours_per_day: maxHoursPerDay,
+    target_hours_per_day: targetHoursPerDay,
     can_work_weekends: form.canWorkWeekends,
-    max_shifts_per_week: derivedMaxDays,
-    min_hours_between_shifts: null,
-    preferred_hours_per_week: contractHours,
     notes: null
   };
 

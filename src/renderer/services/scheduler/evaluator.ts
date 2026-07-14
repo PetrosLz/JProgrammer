@@ -21,12 +21,12 @@ import {
   checkHardConstraints,
   getAssignedDayCount,
   getAssignedHours,
-  getContractDaysPerWeek,
-  getContractHoursPerWeek,
+  getApproximateTargetHoursPerWeek,
   getDayConstraint,
   getEmployeeShiftAvailability,
   getEmployeeWorkRules,
   getSlotDurationHours,
+  getTargetShiftCountPerWeek,
   isNightOrDifficultShift,
   isWeekendDate
 } from "./constraints";
@@ -399,7 +399,9 @@ function applyRoleCoverageEvaluation({
   for (const group of groupMap.values()) {
     const roleName = roleNameForSlot(group.representativeSlot, roles);
     const missingCount = Math.max(0, group.requiredCount - group.assignedCount);
-    const critical = isCriticalRoleName(roleName);
+    const critical = group.slots.some((slot) =>
+      isCriticalSlot(slot, staffingRequirements)
+    );
 
     if (group.assignedCount === 0) {
       breakdown.roleCoverage += critical ? -5000 : -3000;
@@ -525,25 +527,25 @@ function applyContractAndFairnessEvaluation({
 
   for (const employee of activeEmployees) {
     const workRules = getEmployeeWorkRules(employee.id, employeeWorkRules);
-    const contractHours = getContractHoursPerWeek(workRules);
-    const contractDays = getContractDaysPerWeek(workRules);
+    const targetHours = getApproximateTargetHoursPerWeek(workRules);
+    const targetShifts = getTargetShiftCountPerWeek(workRules);
     const assignedHours = getAssignedHours(employee.id, assignedShifts);
     const assignedDays = getAssignedDayCount(employee.id, assignedShifts);
 
-    if (contractHours !== null) {
-      const hourDifference = Math.abs(contractHours - assignedHours);
+    if (targetHours !== null) {
+      const hourDifference = Math.abs(targetHours - assignedHours);
       breakdown.contractFit += Math.max(-500, 160 - hourDifference * 18);
 
-      if (assignedHours > contractHours + 4) {
+      if (assignedHours > targetHours + 4) {
         breakdown.penalties -= 500;
       }
     }
 
-    if (contractDays !== null) {
-      const dayDifference = Math.abs(contractDays - assignedDays);
+    if (targetShifts !== null) {
+      const dayDifference = Math.abs(targetShifts - assignedDays);
       breakdown.fairness += Math.max(-250, 100 - dayDifference * 45);
 
-      if (assignedDays > contractDays + 1) {
+      if (assignedDays > targetShifts) {
         breakdown.penalties -= 250;
       }
     }
@@ -632,7 +634,7 @@ function applyShortageDistributionEvaluation({
     (slot) => `${slot.date}|${slot.role_id}`
   );
   const unfilledCriticalByShift = countSlotsBy(
-    unfilledSlots.filter((slot) => isCriticalRoleName(roleNameForSlot(slot, roles))),
+    unfilledSlots.filter((slot) => isCriticalSlot(slot, staffingRequirements)),
     (slot) =>
       `${slot.date}|${
         getShiftTemplateIdForSlot(slot, staffingRequirements, shiftTemplates) ??
@@ -692,15 +694,15 @@ function buildEvaluationMetrics({
 }): ScheduleEvaluationMetrics {
   const activeEmployees = employees.filter((employee) => employee.is_active === 1);
   const hourDeviations = activeEmployees.flatMap((employee) => {
-    const contractHours = getContractHoursPerWeek(
+    const targetHours = getApproximateTargetHoursPerWeek(
       getEmployeeWorkRules(employee.id, employeeWorkRules)
     );
 
-    if (contractHours === null) {
+    if (targetHours === null) {
       return [];
     }
 
-    return [Math.abs(contractHours - getAssignedHours(employee.id, assignedShifts))];
+    return [Math.abs(targetHours - getAssignedHours(employee.id, assignedShifts))];
   });
   const weekendCounts = activeEmployees.map((employee) =>
     countAssignedShifts(employee.id, assignedShifts, isWeekendShift)
@@ -830,11 +832,13 @@ function roleNameForSlot(slot: ScheduleSlot, roles: Role[]): string {
   return roles.find((role) => role.id === slot.role_id)?.name ?? "required role";
 }
 
-function isCriticalRoleName(roleName: string): boolean {
-  const normalizedRoleName = roleName.trim().toLocaleLowerCase();
-
-  return ["kitchen", "cashier", "manager"].some((keyword) =>
-    normalizedRoleName.includes(keyword)
+function isCriticalSlot(
+  slot: ScheduleSlot,
+  staffingRequirements: StaffingRequirement[]
+): boolean {
+  return (
+    staffingRequirements.find((requirement) => requirement.id === slot.source_id)
+      ?.priority === "critical"
   );
 }
 
@@ -896,6 +900,10 @@ function hardConstraintReasonToType(reason: string): string {
 
   if (normalizedReason.includes("hours")) {
     return "max_hours";
+  }
+
+  if (normalizedReason.includes("shifts")) {
+    return "max_shifts";
   }
 
   if (normalizedReason.includes("days")) {

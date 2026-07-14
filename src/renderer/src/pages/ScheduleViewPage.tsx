@@ -1669,17 +1669,16 @@ function getManualCandidateHoursSummary({
   const workRules = employeeWorkRules.find(
     (rules) => rules.employee_id === employeeId
   );
-  const contractHours =
-    workRules?.contract_hours_per_week ??
-    workRules?.target_hours_per_week ??
-    workRules?.preferred_hours_per_week ??
-    workRules?.max_hours_per_week ??
-    null;
+  const targetHours =
+    workRules?.target_hours_per_day !== null &&
+    workRules?.target_hours_per_day !== undefined
+      ? workRules.target_hours_per_day * workRules.max_shifts_per_week
+      : null;
   const hoursLabel = language === "en" ? "h" : " ώρες";
 
-  if (contractHours === null || contractHours === undefined) {
+  if (targetHours === null || targetHours === undefined) {
     return `${formatHours(projectedHours)}${hoursLabel}`;
   }
 
-  return `${formatHours(projectedHours)}/${formatHours(contractHours)}${hoursLabel}`;
+  return `${formatHours(projectedHours)}/${formatHours(targetHours)}${hoursLabel}`;
 }

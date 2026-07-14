@@ -3,7 +3,6 @@ import type {
   EmployeeDayConstraint,
   EmployeeShiftAvailability,
   EmployeeWorkRules,
-  EmploymentType,
   ExperienceLevel,
   Role
 } from "../../../types";
@@ -13,7 +12,6 @@ import type {
   DayConstraintValue,
   ShiftAvailabilityValue
 } from "./employeeTypes";
-import { normalizeEmploymentType } from "./employeeForms";
 
 export function experienceOptions(language: UiLanguage): Array<{
   value: ExperienceLevel;
@@ -29,27 +27,6 @@ export function experienceOptions(language: UiLanguage): Array<{
   return [
     { value: "no_experience", label: "Χωρίς προϋπηρεσία" },
     { value: "some_experience", label: "Με προϋπηρεσία" }
-  ];
-}
-
-export function employmentTypeSelectOptions(language: UiLanguage): Array<{
-  value: EmploymentType;
-  label: string;
-}> {
-  if (language === "en") {
-    return [
-      { value: "full_time", label: "Full-time" },
-      { value: "part_time", label: "Part-time" },
-      { value: "weekly_hours", label: "Agreed weekly hours" },
-      { value: "custom", label: "Custom" }
-    ];
-  }
-
-  return [
-    { value: "full_time", label: "Πλήρης απασχόληση" },
-    { value: "part_time", label: "Μερική απασχόληση" },
-    { value: "weekly_hours", label: "Συμφωνημένες εβδομαδιαίες ώρες" },
-    { value: "custom", label: "Προσαρμοσμένο" }
   ];
 }
 
@@ -150,22 +127,9 @@ export function workRulesSummaryLocalized(
       : "Δεν έχουν οριστεί κανόνες εργασίας";
   }
 
-  const employmentType =
-    employmentTypeSelectOptions(language).find(
-      (option) =>
-        option.value === normalizeEmploymentType(workRules.employment_type)
-    )?.label ?? (language === "en" ? "Custom" : "Προσαρμοσμένο");
-  const days =
-    workRules.contract_days_per_week ??
-    workRules.target_days_per_week ??
-    workRules.max_days_per_week ??
-    "-";
-  const hours =
-    workRules.contract_hours_per_week ??
-    workRules.target_hours_per_week ??
-    workRules.preferred_hours_per_week ??
-    "-";
-  const hoursPerDay = workRules.preferred_hours_per_day ?? "-";
+  const maxShifts = workRules.max_shifts_per_week;
+  const maxHoursPerDay = workRules.max_hours_per_day;
+  const targetHoursPerDay = workRules.target_hours_per_day ?? "-";
   const weekends =
     workRules.can_work_weekends === 0
       ? language === "en"
@@ -176,10 +140,10 @@ export function workRulesSummaryLocalized(
         : "Σαββατοκύριακα ok";
 
   if (language === "en") {
-    return `${employmentType}: ${days} days, ${hoursPerDay} h/day, ${hours} h/week, ${weekends}`;
+    return `Max ${maxShifts} shifts/week, max ${maxHoursPerDay} h/day, target ${targetHoursPerDay} h/day, ${weekends}`;
   }
 
-  return `${employmentType}: ${days} ημέρες, ${hoursPerDay} ώρες/ημέρα, ${hours} ώρες/εβδομάδα, ${weekends}`;
+  return `Μέγιστο ${maxShifts} βάρδιες/εβδομάδα, έως ${maxHoursPerDay} ώρες/ημέρα, στόχος ${targetHoursPerDay} ώρες/ημέρα, ${weekends}`;
 }
 
 export function employeeAvailabilitySummary(

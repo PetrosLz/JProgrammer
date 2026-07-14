@@ -209,6 +209,7 @@ export function UnifiedEmployeesPage({
 
     setErrors([]);
     setIsSaving(true);
+    let createdEmployeeId: string | null = null;
 
     try {
       const payload = {
@@ -228,12 +229,23 @@ export function UnifiedEmployeesPage({
         throw new Error(text.saveFailed);
       }
 
+      if (detailMode !== "edit") {
+        createdEmployeeId = employee.id;
+      }
+
       await syncEmployeeRoleAssignments(employee.id, form, employeeRoles);
       await upsertEmployeeWorkRules(employee.id, form.workRules, employeeWorkRules);
       setDetailMode("edit");
       setEditingEmployeeId(employee.id);
       await onChanged(detailMode === "edit" ? text.employeeUpdated : text.employeeAdded);
     } catch (error) {
+      if (createdEmployeeId) {
+        try {
+          await databaseApi.deleteRecord("employees", createdEmployeeId);
+        } catch {
+          // Keep the original validation/database error visible to the manager.
+        }
+      }
       setErrors([getErrorMessage(error)]);
     } finally {
       setIsSaving(false);

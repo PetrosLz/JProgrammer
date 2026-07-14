@@ -3,7 +3,8 @@ import {
   experienceLevelToLegacySkillLevel,
   type CrudTableName,
   type DayOfWeek,
-  type ExperienceLevel
+  type ExperienceLevel,
+  type StaffingPriority
 } from "../types";
 
 type RoleKey = "bar" | "waiter" | "kitchen" | "cashier" | "manager";
@@ -207,7 +208,6 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
       start_time: row.startTime,
       end_time: row.endTime,
       is_overnight: row.isOvernight,
-      break_minutes: 0,
       color: row.color,
       notes: null,
       is_active: true
@@ -389,44 +389,28 @@ async function createEmployeeWorkRules(
 ): Promise<void> {
   const workRules: Array<{
     employee: EmployeeKey;
-    employmentType: "full_time" | "part_time" | "weekly_hours" | "custom";
-    contractDays: number;
-    preferredHoursPerDay: number;
-    contractHours: number;
-    maxConsecutiveDays: number;
+    maxShiftsPerWeek: number;
+    maxHoursPerDay: number;
+    targetHoursPerDay: number;
     canWorkWeekends: boolean;
   }> = [
-    { employee: "maria", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "giorgos", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "eleni", employmentType: "part_time", contractDays: 5, preferredHoursPerDay: 6, contractHours: 30, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "nikos", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "anna", employmentType: "part_time", contractDays: 5, preferredHoursPerDay: 6, contractHours: 30, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "kostas", employmentType: "full_time", contractDays: 5, preferredHoursPerDay: 8, contractHours: 40, maxConsecutiveDays: 5, canWorkWeekends: true },
-    { employee: "dimitris", employmentType: "weekly_hours", contractDays: 4, preferredHoursPerDay: 8, contractHours: 32, maxConsecutiveDays: 4, canWorkWeekends: true },
-    { employee: "sofia", employmentType: "part_time", contractDays: 4, preferredHoursPerDay: 6, contractHours: 24, maxConsecutiveDays: 4, canWorkWeekends: true }
+    { employee: "maria", maxShiftsPerWeek: 5, maxHoursPerDay: 8, targetHoursPerDay: 8, canWorkWeekends: true },
+    { employee: "giorgos", maxShiftsPerWeek: 5, maxHoursPerDay: 8, targetHoursPerDay: 8, canWorkWeekends: false },
+    { employee: "eleni", maxShiftsPerWeek: 5, maxHoursPerDay: 6, targetHoursPerDay: 6, canWorkWeekends: true },
+    { employee: "nikos", maxShiftsPerWeek: 5, maxHoursPerDay: 8, targetHoursPerDay: 8, canWorkWeekends: true },
+    { employee: "anna", maxShiftsPerWeek: 5, maxHoursPerDay: 6, targetHoursPerDay: 6, canWorkWeekends: true },
+    { employee: "kostas", maxShiftsPerWeek: 8, maxHoursPerDay: 8, targetHoursPerDay: 8, canWorkWeekends: true },
+    { employee: "dimitris", maxShiftsPerWeek: 4, maxHoursPerDay: 8, targetHoursPerDay: 8, canWorkWeekends: false },
+    { employee: "sofia", maxShiftsPerWeek: 4, maxHoursPerDay: 6, targetHoursPerDay: 6, canWorkWeekends: true }
   ];
 
   for (const rule of workRules) {
-    const maxDays = Math.min(7, rule.contractDays + 1);
-    const maxHours = rule.contractHours + 4;
-
     await databaseApi.createRecord("employee_work_rules", {
       employee_id: employees[rule.employee],
-      employment_type: rule.employmentType,
-      contract_days_per_week: rule.contractDays,
-      contract_hours_per_week: rule.contractHours,
-      preferred_hours_per_day: rule.preferredHoursPerDay,
-      min_days_per_week: null,
-      max_days_per_week: maxDays,
-      target_days_per_week: rule.contractDays,
-      min_hours_per_week: null,
-      max_hours_per_week: maxHours,
-      target_hours_per_week: rule.contractHours,
-      max_consecutive_days: rule.maxConsecutiveDays,
+      max_shifts_per_week: rule.maxShiftsPerWeek,
+      max_hours_per_day: rule.maxHoursPerDay,
+      target_hours_per_day: rule.targetHoursPerDay,
       can_work_weekends: rule.canWorkWeekends,
-      max_shifts_per_week: maxDays,
-      min_hours_between_shifts: null,
-      preferred_hours_per_week: rule.contractHours,
       notes: "Demo work rules"
     });
   }
@@ -557,7 +541,7 @@ async function createStaffingRequirements(
     requiredCount: number;
     minimumExperienceLevel?: ExperienceLevel;
     experiencedRequiredCount?: number;
-    priority?: string;
+    priority?: StaffingPriority;
   }) {
     const time = shiftTime(shift);
     await databaseApi.createRecord("staffing_requirements", {

@@ -981,8 +981,11 @@ function buildManagerReportPdfHtml({
         (rules) => rules.employee_id === employeeRow.employee.id
       );
       const targetHours =
-        workRules?.target_hours_per_week ?? workRules?.preferred_hours_per_week ?? null;
-      const maxHours = workRules?.max_hours_per_week ?? null;
+        workRules?.target_hours_per_day !== null &&
+        workRules?.target_hours_per_day !== undefined
+          ? workRules.target_hours_per_day * workRules.max_shifts_per_week
+          : null;
+      const maxShifts = workRules?.max_shifts_per_week ?? null;
 
       return `<tr>
         <td>${escapeHtml(
@@ -993,7 +996,7 @@ function buildManagerReportPdfHtml({
         <td>${weekendShifts}</td>
         <td>${difficultShifts}</td>
         <td>${escapeHtml(formatOptionalHours(targetHours))}</td>
-        <td>${escapeHtml(formatOptionalHours(maxHours))}</td>
+        <td>${escapeHtml(maxShifts === null ? "-" : String(maxShifts))}</td>
       </tr>`;
     })
     .join("");
@@ -1006,9 +1009,9 @@ function buildManagerReportPdfHtml({
       const rows: string[] = [];
 
       if (
-        workRules?.max_hours_per_week !== null &&
-        workRules?.max_hours_per_week !== undefined &&
-        totalHours > workRules.max_hours_per_week
+        workRules?.max_shifts_per_week !== null &&
+        workRules?.max_shifts_per_week !== undefined &&
+        employeeRow.assignmentCount > workRules.max_shifts_per_week
       ) {
         rows.push(
           language === "en"
@@ -1016,16 +1019,16 @@ function buildManagerReportPdfHtml({
                 employeeRow.employee.id,
                 [employeeRow.employee],
                 language
-              )}: above the configured weekly limit (${formatHours(
+              )}: above the configured weekly shift limit (${formatHours(
                 totalHours
-              )}/${formatHours(workRules.max_hours_per_week)} hours).`
+              )}/${workRules.max_shifts_per_week} shifts).`
             : `${employeeName(
                 employeeRow.employee.id,
                 [employeeRow.employee],
                 language
               )}: πάνω από το εβδομαδιαίο όριο (${formatHours(
                 totalHours
-              )}/${formatHours(workRules.max_hours_per_week)} ώρες).`
+              )}/${workRules.max_shifts_per_week} βάρδιες).`
         );
       }
 

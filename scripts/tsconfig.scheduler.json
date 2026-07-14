@@ -11,6 +11,8 @@
   },
   "include": [
     "../scripts/scheduler-*.ts",
+    "../scripts/migration-tests.ts",
+    "../src/main/migrations/**/*.ts",
     "../src/shared/**/*.ts",
     "../src/renderer/types/**/*.ts",
     "../src/renderer/src/vite-env.d.ts",

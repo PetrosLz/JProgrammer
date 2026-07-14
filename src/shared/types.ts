@@ -41,6 +41,12 @@ export const employmentTypeValues = [
   "custom"
 ] as const;
 export type EmploymentType = (typeof employmentTypeValues)[number];
+export const staffingPriorityValues = [
+  "normal",
+  "high",
+  "critical"
+] as const;
+export type StaffingPriority = (typeof staffingPriorityValues)[number];
 
 export const experienceLevelOptions: Array<{
   value: ExperienceLevel;
@@ -122,6 +128,12 @@ export function meetsMinimumExperience(
   return experienceLevelRank(employeeLevel) >= experienceLevelRank(requiredLevel);
 }
 
+export function normalizeStaffingPriority(value: unknown): StaffingPriority {
+  return staffingPriorityValues.includes(value as StaffingPriority)
+    ? (value as StaffingPriority)
+    : "normal";
+}
+
 export interface EntityBase {
   id: string;
   created_at: string;
@@ -161,7 +173,6 @@ export interface ShiftTemplate extends EntityBase {
   start_time: string;
   end_time: string;
   is_overnight: SqlBoolean;
-  break_minutes: number;
   color: string | null;
   notes: string | null;
   is_active: SqlBoolean;
@@ -176,7 +187,7 @@ export interface StaffingRequirement extends EntityBase {
   required_count: number;
   minimum_experience_level: ExperienceLevel;
   experienced_required_count: number;
-  priority: string | null;
+  priority: StaffingPriority;
   is_active: SqlBoolean;
   notes: string | null;
 }
@@ -219,21 +230,10 @@ export interface EmployeeRole extends EntityBase {
 
 export interface EmployeeWorkRules extends EntityBase {
   employee_id: string;
-  employment_type: EmploymentType | null;
-  contract_days_per_week: number | null;
-  contract_hours_per_week: number | null;
-  preferred_hours_per_day: number | null;
-  min_days_per_week: number | null;
-  max_hours_per_week: number | null;
-  min_hours_per_week: number | null;
-  max_shifts_per_week: number | null;
-  max_days_per_week: number | null;
-  target_days_per_week: number | null;
-  target_hours_per_week: number | null;
-  max_consecutive_days: number | null;
-  can_work_weekends: SqlBoolean | null;
-  min_hours_between_shifts: number | null;
-  preferred_hours_per_week: number | null;
+  max_shifts_per_week: number;
+  max_hours_per_day: number;
+  target_hours_per_day: number | null;
+  can_work_weekends: SqlBoolean;
   notes: string | null;
 }
 

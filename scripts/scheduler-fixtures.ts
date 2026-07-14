@@ -164,7 +164,6 @@ export function createShiftTemplate(
     start_time: startTime,
     end_time: endTime,
     is_overnight: endTime <= startTime ? 1 : 0,
-    break_minutes: 0,
     color: "#0f766e",
     notes: null,
     is_active: 1,
@@ -200,7 +199,7 @@ export function createStaffingRequirement({
     required_count: requiredCount,
     minimum_experience_level: "no_experience",
     experienced_required_count: 0,
-    priority: null,
+    priority: "normal",
     is_active: 1,
     notes: null,
     created_at: timestamp,
@@ -286,29 +285,18 @@ export function createEmployeeRole(
 export function createWorkRules(
   id: string,
   employeeId: string,
-  contractHours = 40,
-  maxHours = 44,
-  contractDays = 5,
-  maxDays = 6
+  maxShiftsPerWeek = 5,
+  maxHoursPerDay = 8,
+  targetHoursPerDay: number | null = 8,
+  canWorkWeekends: EmployeeWorkRules["can_work_weekends"] = 1
 ): EmployeeWorkRules {
   return {
     id,
     employee_id: employeeId,
-    employment_type: "full_time",
-    contract_days_per_week: contractDays,
-    contract_hours_per_week: contractHours,
-    preferred_hours_per_day: 8,
-    min_days_per_week: null,
-    max_hours_per_week: maxHours,
-    min_hours_per_week: null,
-    max_shifts_per_week: null,
-    max_days_per_week: maxDays,
-    target_days_per_week: contractDays,
-    target_hours_per_week: contractHours,
-    max_consecutive_days: null,
-    can_work_weekends: 1,
-    min_hours_between_shifts: null,
-    preferred_hours_per_week: null,
+    max_shifts_per_week: maxShiftsPerWeek,
+    max_hours_per_day: maxHoursPerDay,
+    target_hours_per_day: targetHoursPerDay,
+    can_work_weekends: canWorkWeekends,
     notes: null,
     created_at: timestamp,
     updated_at: timestamp
@@ -495,7 +483,7 @@ function createEasyCafeScenario(): SchedulerBenchmarkScenario {
     roleFor("er-ioanna-service", "emp-ioanna", service)
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 40, 44, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
 
   return scenario;
@@ -540,7 +528,7 @@ function createManyPartTimeEmployeesScenario(): SchedulerBenchmarkScenario {
     ...(index % 3 === 0 ? [roleFor(`er-${employee.id}-bar`, employee.id, bar)] : [])
   ]);
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 20, 24, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 6, 4)
   );
 
   return scenario;
@@ -590,7 +578,7 @@ function createOneExperiencedEmployeeScenario(): SchedulerBenchmarkScenario {
     createEmployeeRole("er-new-3-service", "emp-new-3", service.id, "no_experience")
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 24, 32, 4, 5)
+    createWorkRules(`wr-${employee.id}`, employee.id, 5, 8, 6)
   );
 
   return scenario;
@@ -611,7 +599,7 @@ function createImpossibleScheduleScenario(): SchedulerBenchmarkScenario {
     roleFor(`er-${employee.id}-service`, employee.id, scenario.roles[0])
   );
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 40, 44, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
 
   return scenario;
@@ -649,7 +637,7 @@ function createFlexibleEmployeesScenario(): SchedulerBenchmarkScenario {
     ])
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 32, 36, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
 
   return scenario;
@@ -696,7 +684,7 @@ function createHighDemandSaturdayScenario(): SchedulerBenchmarkScenario {
     roleFor("er-flex-cashier", "emp-flex-sat", cashier)
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 40, 44, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
 
   return scenario;
@@ -719,7 +707,7 @@ function createConflictingAvailabilityScenario(): SchedulerBenchmarkScenario {
     roleFor(`er-${employee.id}-service`, employee.id, service)
   );
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 30, 34, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 6, 6)
   );
   scenario.employeeShiftAvailability = ([1, 2, 3, 4, 5] as DayOfWeek[]).flatMap(
     (dayOfWeek) =>
@@ -763,7 +751,7 @@ function createExplicitRoleScarcityScenario(): SchedulerBenchmarkScenario {
     roleFor("er-flex-service", "emp-flex-cashier", service)
   ];
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
-    createWorkRules(`wr-${employee.id}`, employee.id, 32, 36, 5, 6)
+    createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
 
   return scenario;

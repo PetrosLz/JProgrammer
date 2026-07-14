@@ -197,10 +197,10 @@ const tests: Array<{ name: string; run: () => void }> = [
     }
   },
   {
-    name: "max weekly hours are detected unless manual override exists",
+    name: "max weekly shifts are detected unless manual override exists",
     run: () => {
       const fixture = createFixture({
-        employeeWorkRules: [createWorkRules("wr-alex", "emp-alex", 8, 8, 1, 2)]
+        employeeWorkRules: [createWorkRules("wr-alex", "emp-alex", 2, 8, 8)]
       });
       const extraSlots = Array.from({ length: 2 }, (_, index) =>
         createSlot({
@@ -223,7 +223,7 @@ const tests: Array<{ name: string; run: () => void }> = [
       const evaluation = evaluateFixture(fixture);
       assert.equal(evaluation.isValid, false);
       assert.ok(
-        evaluation.hardViolations.some((violation) => violation.type === "max_hours")
+        evaluation.hardViolations.some((violation) => violation.type === "max_shifts")
       );
 
       const overrideEvaluation = evaluateSchedule({
@@ -247,7 +247,7 @@ const tests: Array<{ name: string; run: () => void }> = [
       });
       assert.equal(
         overrideEvaluation.hardViolations.some(
-          (violation) => violation.type === "max_hours"
+          (violation) => violation.type === "max_shifts"
         ),
         false
       );

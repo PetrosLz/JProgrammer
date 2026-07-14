@@ -11,7 +11,7 @@ import {
   checkHardConstraints,
   employeeHasRole,
   formatHours,
-  getEffectiveMaxHoursPerWeek,
+  getApproximateTargetHoursPerWeek,
   getEmployeeWorkRules,
   getSlotDurationHours,
   getSlotShiftTemplateId,
@@ -235,7 +235,7 @@ export function buildScheduleFeasibilityAnalysis({
 
   const totalAvailableHours = activeEmployees.reduce((total, employee) => {
     const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
-    return total + (getEffectiveMaxHoursPerWeek(workRules) ?? 40);
+    return total + (getApproximateTargetHoursPerWeek(workRules) ?? 40);
   }, 0);
   const roleCapacity = buildRoleCapacity({
     roleIds: new Set(requiredSlotsByRole.keys()),
@@ -422,7 +422,7 @@ function buildRoleCapacity({
         (total, [employeeId, possibleHours]) => {
           const workRules = getEmployeeWorkRules(employeeId, data.employeeWorkRules);
           return (
-            total + Math.min(possibleHours, getEffectiveMaxHoursPerWeek(workRules) ?? 40)
+            total + Math.min(possibleHours, getApproximateTargetHoursPerWeek(workRules) ?? 40)
           );
         },
         0

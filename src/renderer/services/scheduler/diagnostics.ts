@@ -6,7 +6,7 @@ import {
   checkHardConstraints,
   employeeHasRole,
   formatHours,
-  getEffectiveMaxHoursPerWeek,
+  getApproximateTargetHoursPerWeek,
   getEmployeeWorkRules,
   getSlotDurationHours,
   isWeekendDate
@@ -106,7 +106,7 @@ export function buildSchedulerDiagnostics({
       roleId,
       employeesWithRole.reduce((total, employee) => {
         const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
-        return total + (getEffectiveMaxHoursPerWeek(workRules) ?? 40);
+        return total + (getApproximateTargetHoursPerWeek(workRules) ?? 40);
       }, 0)
     );
   }

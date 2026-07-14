@@ -23,8 +23,6 @@ import {
   employeeHasRole,
   getAssignedDayCount,
   getAssignedHours,
-  getContractDaysPerWeek,
-  getContractHoursPerWeek,
   getDayConstraint,
   getEmployeeRoleExperienceLevel,
   getEmployeeShiftAvailability,

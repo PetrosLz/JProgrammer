@@ -17,6 +17,7 @@ import {
   type DbStoredValue,
   type DbValue,
   type ListRecordsOptions,
+  normalizeStaffingPriority,
   type SettingRecord
 } from "../shared/types";
 
@@ -64,7 +65,6 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "start_time",
       "end_time",
       "is_overnight",
-      "break_minutes",
       "color",
       "notes",
       "is_active"
@@ -128,21 +128,10 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
   employee_work_rules: {
     writableColumns: [
       "employee_id",
-      "employment_type",
-      "contract_days_per_week",
-      "contract_hours_per_week",
-      "preferred_hours_per_day",
-      "min_days_per_week",
-      "target_days_per_week",
-      "min_hours_per_week",
-      "target_hours_per_week",
-      "max_consecutive_days",
-      "can_work_weekends",
-      "max_hours_per_week",
       "max_shifts_per_week",
-      "max_days_per_week",
-      "min_hours_between_shifts",
-      "preferred_hours_per_week",
+      "max_hours_per_day",
+      "target_hours_per_day",
+      "can_work_weekends",
       "notes"
     ],
     defaultOrderBy: "created_at DESC"
@@ -504,7 +493,7 @@ function sanitizeRecordInput(
     );
   }
 
-  return Object.fromEntries(
+  const sanitized = Object.fromEntries(
     Object.entries(data)
       .filter(([, value]) => value !== undefined)
       .map(([column, value]) => {
@@ -518,6 +507,16 @@ function sanitizeRecordInput(
         return [column, toSqlValue(value)];
       })
   );
+
+  if (tableName === "employee_work_rules") {
+    validateEmployeeWorkRulesInput(sanitized);
+  }
+
+  if (tableName === "staffing_requirements" && "priority" in sanitized) {
+    sanitized.priority = normalizeStaffingPriority(sanitized.priority);
+  }
+
+  return sanitized;
 }
 
 function toSqlValue(value: DbValue | undefined): DbStoredValue {
@@ -553,6 +552,71 @@ function validateSettingKey(key: string): void {
     throw new DatabaseOperationError(
       "DATABASE_INVALID_SETTING_KEY",
       "A non-empty string setting key is required."
+    );
+  }
+}
+
+function validateEmployeeWorkRulesInput(
+  data: Record<string, DbStoredValue>
+): void {
+  const maxShiftsPerWeek = data.max_shifts_per_week;
+  if (
+    maxShiftsPerWeek !== undefined &&
+    (!Number.isInteger(maxShiftsPerWeek) || Number(maxShiftsPerWeek) < 1)
+  ) {
+    throw new DatabaseOperationError(
+      "DATABASE_INVALID_WORK_RULES",
+      "max_shifts_per_week must be an integer greater than or equal to 1."
+    );
+  }
+
+  const maxHoursPerDay = data.max_hours_per_day;
+  if (
+    maxHoursPerDay !== undefined &&
+    (typeof maxHoursPerDay !== "number" ||
+      !Number.isFinite(maxHoursPerDay) ||
+      maxHoursPerDay <= 0)
+  ) {
+    throw new DatabaseOperationError(
+      "DATABASE_INVALID_WORK_RULES",
+      "max_hours_per_day must be a positive number."
+    );
+  }
+
+  const targetHoursPerDay = data.target_hours_per_day;
+  if (
+    targetHoursPerDay !== undefined &&
+    targetHoursPerDay !== null &&
+    (typeof targetHoursPerDay !== "number" ||
+      !Number.isFinite(targetHoursPerDay) ||
+      targetHoursPerDay <= 0)
+  ) {
+    throw new DatabaseOperationError(
+      "DATABASE_INVALID_WORK_RULES",
+      "target_hours_per_day must be empty or a positive number."
+    );
+  }
+
+  if (
+    typeof maxHoursPerDay === "number" &&
+    typeof targetHoursPerDay === "number" &&
+    targetHoursPerDay > maxHoursPerDay
+  ) {
+    throw new DatabaseOperationError(
+      "DATABASE_INVALID_WORK_RULES",
+      "target_hours_per_day must not exceed max_hours_per_day."
+    );
+  }
+
+  const canWorkWeekends = data.can_work_weekends;
+  if (
+    canWorkWeekends !== undefined &&
+    canWorkWeekends !== 0 &&
+    canWorkWeekends !== 1
+  ) {
+    throw new DatabaseOperationError(
+      "DATABASE_INVALID_WORK_RULES",
+      "can_work_weekends must be either 0 or 1."
     );
   }
 }

@@ -124,7 +124,6 @@ export function ShiftTemplatesCrudPage({
         start_time: form.startTime,
         end_time: form.endTime,
         is_overnight: form.isOvernight,
-        break_minutes: 0,
         color: form.color,
         notes: optionalText(form.notes),
         is_active: form.isActive

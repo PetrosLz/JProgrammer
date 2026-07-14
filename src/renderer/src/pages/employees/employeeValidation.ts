@@ -28,48 +28,59 @@ export function validateEmployeeFormForLanguage(
     );
   }
 
-  const contractDays = parseOptionalNumber(form.workRules.contractDaysPerWeek);
-  const preferredHoursPerDay = parseOptionalNumber(
-    form.workRules.preferredHoursPerDay
+  const maxShiftsPerWeek = parseOptionalNumber(
+    form.workRules.maxShiftsPerWeek
   );
-  const contractHours = parseOptionalNumber(form.workRules.contractHoursPerWeek);
-  const maxConsecutiveDays = parseOptionalNumber(
-    form.workRules.maxConsecutiveDays
+  const maxHoursPerDay = parseOptionalNumber(form.workRules.maxHoursPerDay);
+  const targetHoursPerDay = parseOptionalNumber(
+    form.workRules.targetHoursPerDay
   );
 
-  if (contractDays === null || contractDays < 1 || contractDays > 7) {
+  if (
+    maxShiftsPerWeek === null ||
+    !Number.isInteger(maxShiftsPerWeek) ||
+    maxShiftsPerWeek < 1
+  ) {
     errors.push(
       language === "en"
-        ? "Days / week must be from 1 to 7."
-        : "Οι ημέρες / εβδομάδα πρέπει να είναι από 1 έως 7."
+        ? "Maximum shifts per week must be an integer greater than or equal to 1."
+        : "Οι μέγιστες βάρδιες ανά εβδομάδα πρέπει να είναι ακέραιος αριθμός από 1 και πάνω."
     );
   }
 
-  if (preferredHoursPerDay === null || preferredHoursPerDay <= 0) {
+  if (maxHoursPerDay === null || maxHoursPerDay <= 0) {
     errors.push(
       language === "en"
-        ? "Hours / day must be a positive number."
-        : "Οι ώρες / ημέρα πρέπει να είναι θετικός αριθμός."
+        ? "Maximum hours per day must be a positive number."
+        : "Οι μέγιστες ώρες ανά ημέρα πρέπει να είναι θετικός αριθμός."
     );
   }
 
-  if (contractHours === null || contractHours <= 0) {
+  if (form.workRules.targetHoursPerDay.trim() && targetHoursPerDay === null) {
     errors.push(
       language === "en"
-        ? "Hours / week must be a positive number."
-        : "Οι ώρες / εβδομάδα πρέπει να είναι θετικός αριθμός."
+        ? "Target hours per working day must be a number."
+        : "Ο στόχος ωρών ανά εργάσιμη ημέρα πρέπει να είναι αριθμός."
+    );
+  }
+
+  if (targetHoursPerDay !== null && targetHoursPerDay <= 0) {
+    errors.push(
+      language === "en"
+        ? "Target hours per working day must be a positive number."
+        : "Ο στόχος ωρών ανά εργάσιμη ημέρα πρέπει να είναι θετικός αριθμός."
     );
   }
 
   if (
-    maxConsecutiveDays === null ||
-    maxConsecutiveDays < 1 ||
-    maxConsecutiveDays > 7
+    maxHoursPerDay !== null &&
+    targetHoursPerDay !== null &&
+    targetHoursPerDay > maxHoursPerDay
   ) {
     errors.push(
       language === "en"
-        ? "Max consecutive days must be from 1 to 7."
-        : "Οι μέγιστες συνεχόμενες ημέρες πρέπει να είναι από 1 έως 7."
+        ? "Target hours per working day cannot exceed maximum hours per day."
+        : "Ο στόχος ωρών ανά εργάσιμη ημέρα δεν μπορεί να ξεπερνά τις μέγιστες ώρες ανά ημέρα."
     );
   }
 

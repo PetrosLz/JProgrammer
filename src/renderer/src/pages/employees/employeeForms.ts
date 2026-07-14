@@ -1,5 +1,5 @@
 import { normalizeExperienceLevel, skillLevelToExperienceLevel } from "../../../types";
-import type { Employee, EmployeeRole, EmployeeWorkRules, EmploymentType } from "../../../types";
+import type { Employee, EmployeeRole, EmployeeWorkRules } from "../../../types";
 import type { EmployeeForm, EmployeeWorkRulesForm, EmploymentPatternPresetId, TimeOffForm } from "./employeeTypes";
 
 export function createTimeOffForm(employees: Employee[]): TimeOffForm {
@@ -30,55 +30,10 @@ export function createEmployeeForm(): EmployeeForm {
 
 export function createDefaultWorkRulesForm(): EmployeeWorkRulesForm {
   return {
-    employmentType: "full_time",
-    contractDaysPerWeek: "5",
-    preferredHoursPerDay: "8",
-    contractHoursPerWeek: "40",
-    maxConsecutiveDays: "5",
+    maxShiftsPerWeek: "5",
+    maxHoursPerDay: "8",
+    targetHoursPerDay: "8",
     canWorkWeekends: true
-  };
-}
-
-export function applyEmploymentTypeDefaults(
-  current: EmployeeWorkRulesForm,
-  employmentType: EmploymentType
-): EmployeeWorkRulesForm {
-  if (employmentType === "full_time") {
-    return {
-      ...current,
-      employmentType,
-      contractDaysPerWeek: "5",
-      preferredHoursPerDay: "8",
-      contractHoursPerWeek: "40",
-      maxConsecutiveDays: current.maxConsecutiveDays || "5"
-    };
-  }
-
-  if (employmentType === "part_time") {
-    return {
-      ...current,
-      employmentType,
-      contractDaysPerWeek: "5",
-      preferredHoursPerDay: "6",
-      contractHoursPerWeek: "30",
-      maxConsecutiveDays: current.maxConsecutiveDays || "5"
-    };
-  }
-
-  if (employmentType === "weekly_hours") {
-    return {
-      ...current,
-      employmentType,
-      contractDaysPerWeek: current.contractDaysPerWeek || "5",
-      preferredHoursPerDay: current.preferredHoursPerDay || "",
-      contractHoursPerWeek: current.contractHoursPerWeek || "32",
-      maxConsecutiveDays: current.maxConsecutiveDays || "5"
-    };
-  }
-
-  return {
-    ...current,
-    employmentType
   };
 }
 
@@ -87,21 +42,29 @@ export function applyEmploymentPatternPreset(
   presetId: EmploymentPatternPresetId
 ): EmployeeWorkRulesForm {
   if (presetId === "full_time_8h") {
-    return applyEmploymentTypeDefaults(current, "full_time");
+    return {
+      ...current,
+      maxShiftsPerWeek: "5",
+      maxHoursPerDay: "8",
+      targetHoursPerDay: "8"
+    };
   }
 
   if (presetId === "part_time_4h") {
     return {
       ...current,
-      employmentType: "part_time",
-      contractDaysPerWeek: "5",
-      preferredHoursPerDay: "4",
-      contractHoursPerWeek: "20",
-      maxConsecutiveDays: current.maxConsecutiveDays || "5"
+      maxShiftsPerWeek: "5",
+      maxHoursPerDay: "4",
+      targetHoursPerDay: "4"
     };
   }
 
-  return applyEmploymentTypeDefaults(current, "part_time");
+  return {
+    ...current,
+    maxShiftsPerWeek: "5",
+    maxHoursPerDay: "6",
+    targetHoursPerDay: "6"
+  };
 }
 
 export function employeeToForm(
@@ -145,40 +108,12 @@ export function workRulesToForm(
     return defaultForm;
   }
 
-  const contractDays =
-    workRules.contract_days_per_week ??
-    workRules.target_days_per_week ??
-    workRules.max_days_per_week ??
-    5;
-  const contractHours =
-    workRules.contract_hours_per_week ??
-    workRules.target_hours_per_week ??
-    workRules.preferred_hours_per_week ??
-    workRules.max_hours_per_week ??
-    40;
-  const preferredHoursPerDay =
-    workRules.preferred_hours_per_day ??
-    (contractDays > 0 ? contractHours / contractDays : null);
-
   return {
-    employmentType: normalizeEmploymentType(workRules.employment_type),
-    contractDaysPerWeek: optionalNumberToString(contractDays),
-    preferredHoursPerDay: optionalNumberToString(preferredHoursPerDay),
-    contractHoursPerWeek: optionalNumberToString(contractHours),
-    maxConsecutiveDays: optionalNumberToString(
-      workRules.max_consecutive_days ?? Math.min(5, contractDays)
-    ),
+    maxShiftsPerWeek: optionalNumberToString(workRules.max_shifts_per_week),
+    maxHoursPerDay: optionalNumberToString(workRules.max_hours_per_day),
+    targetHoursPerDay: optionalNumberToString(workRules.target_hours_per_day),
     canWorkWeekends: workRules.can_work_weekends !== 0
   };
-}
-
-export function normalizeEmploymentType(value: unknown): EmploymentType {
-  return value === "full_time" ||
-    value === "part_time" ||
-    value === "weekly_hours" ||
-    value === "custom"
-    ? value
-    : "custom";
 }
 
 export function parseOptionalNumber(value: string): number | null {

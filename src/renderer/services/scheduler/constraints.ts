@@ -158,34 +158,19 @@ export function checkHardConstraints({
   }
 
   const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
-  const hasMaxHoursOverride = manualOverrides[slot.id]?.includes(employee.id);
-  const hasMaxDaysOverride = manualOverrides[slot.id]?.includes(employee.id);
-  const maxHoursPerWeek = getEffectiveMaxHoursPerWeek(workRules);
-  const maxDaysPerWeek = getEffectiveMaxDaysPerWeek(workRules);
+  const hasMaxShiftsOverride = manualOverrides[slot.id]?.includes(employee.id);
+  const maxShiftsPerWeek = getEffectiveMaxShiftsPerWeek(workRules);
 
   if (isWeekendDate(slot.date) && workRules?.can_work_weekends === 0) {
     reasons.push("Employee cannot work weekends.");
   }
 
-  if (maxHoursPerWeek !== null && !hasMaxHoursOverride) {
-    const projectedHours =
-      getAssignedHours(employee.id, assignedShifts) + getSlotDurationHours(slot);
+  if (maxShiftsPerWeek !== null && !hasMaxShiftsOverride) {
+    const projectedShifts = getAssignedShiftCount(employee.id, assignedShifts) + 1;
 
-    if (projectedHours > maxHoursPerWeek) {
+    if (projectedShifts > maxShiftsPerWeek) {
       reasons.push(
-        `Employee would exceed max weekly hours (${formatHours(projectedHours)}/${formatHours(
-          maxHoursPerWeek
-        )}).`
-      );
-    }
-  }
-
-  if (maxDaysPerWeek !== null && !hasMaxDaysOverride) {
-    const projectedDays = getAssignedDayCount(employee.id, assignedShifts, slot.date);
-
-    if (projectedDays > maxDaysPerWeek) {
-      reasons.push(
-        `Employee would exceed max weekly days (${projectedDays}/${maxDaysPerWeek}).`
+        `Employee would exceed max weekly shifts (${projectedShifts}/${maxShiftsPerWeek}).`
       );
     }
   }
@@ -233,42 +218,26 @@ export function getEmployeeWorkRules(
   return workRules.find((item) => item.employee_id === employeeId) ?? null;
 }
 
-export function getContractHoursPerWeek(
+export function getApproximateTargetHoursPerWeek(
   workRules: EmployeeWorkRules | null
 ): number | null {
-  return (
-    workRules?.contract_hours_per_week ??
-    workRules?.target_hours_per_week ??
-    workRules?.preferred_hours_per_week ??
-    null
-  );
+  if (!workRules || workRules.target_hours_per_day === null) {
+    return null;
+  }
+
+  return workRules.target_hours_per_day * workRules.max_shifts_per_week;
 }
 
-export function getContractDaysPerWeek(
+export function getTargetShiftCountPerWeek(
   workRules: EmployeeWorkRules | null
 ): number | null {
-  return (
-    workRules?.contract_days_per_week ??
-    workRules?.target_days_per_week ??
-    workRules?.max_days_per_week ??
-    null
-  );
+  return workRules?.max_shifts_per_week ?? null;
 }
 
-export function getEffectiveMaxHoursPerWeek(
+export function getEffectiveMaxShiftsPerWeek(
   workRules: EmployeeWorkRules | null
 ): number | null {
-  const contractHours = getContractHoursPerWeek(workRules);
-
-  return workRules?.max_hours_per_week ?? (contractHours !== null ? contractHours + 4 : null);
-}
-
-export function getEffectiveMaxDaysPerWeek(
-  workRules: EmployeeWorkRules | null
-): number | null {
-  const contractDays = getContractDaysPerWeek(workRules);
-
-  return workRules?.max_days_per_week ?? (contractDays !== null ? Math.min(7, contractDays + 1) : null);
+  return workRules?.max_shifts_per_week ?? null;
 }
 
 export function getDayConstraint(

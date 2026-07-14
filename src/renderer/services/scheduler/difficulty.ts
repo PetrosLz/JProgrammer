@@ -48,7 +48,6 @@ export function buildSlotDifficultyMap({
   const activeEmployees = employees.filter((employee) => employee.is_active === 1);
   const coverageSlots = allSlots ?? slots;
   const dateDemand = countBy(coverageSlots, (slot) => slot.date);
-  const roleNameById = new Map(roles.map((role) => [role.id, role.name]));
   const requirementById = new Map(
     staffingRequirements.map((requirement) => [requirement.id, requirement])
   );
@@ -71,7 +70,9 @@ export function buildSlotDifficultyMap({
     const sourceRequirement = slot.source_id
       ? requirementById.get(slot.source_id)
       : null;
-    const isHighPriority = sourceRequirement?.priority === "high";
+    const isHighPriority =
+      sourceRequirement?.priority === "high" ||
+      sourceRequirement?.priority === "critical";
     const groupSlots = coverageSlots.filter(
       (candidateSlot) =>
         roleGroupKey(candidateSlot, staffingRequirements) ===
@@ -124,8 +125,8 @@ export function buildSlotDifficultyMap({
       }
     }
 
-    if (isCriticalRoleName(roleNameById.get(slot.role_id))) {
-      add("Critical operational role", 80);
+    if (sourceRequirement?.priority === "critical") {
+      add("Critical priority", 80);
     }
 
     const minimumExperienceRank = experienceLevelRank(
@@ -171,18 +172,6 @@ export function buildSlotDifficultyMap({
   }
 
   return result;
-}
-
-function isCriticalRoleName(roleName: string | undefined): boolean {
-  if (!roleName) {
-    return false;
-  }
-
-  const normalizedRoleName = roleName.trim().toLocaleLowerCase();
-
-  return ["kitchen", "cashier", "manager"].some((keyword) =>
-    normalizedRoleName.includes(keyword)
-  );
 }
 
 export function compareSlotsByDifficulty(
