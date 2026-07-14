@@ -9,12 +9,20 @@ import {
   optimizeScheduleInMemory
 } from "../src/renderer/services/scheduler";
 import {
+  buildShiftInterval,
+  getShiftDurationMinutes,
+  getWeekKey,
+  intervalsOverlap,
+  splitShiftMinutesByDate
+} from "../src/renderer/services/scheduler/model/workingTime";
+import {
   createAssignment,
   createBenchmarkScenarios,
   createEmployee,
   createEmployeeRole,
   createFixture,
   createSlot,
+  createTimeConstraint,
   createTimeOff,
   createWorkRules
 } from "./scheduler-fixtures";
@@ -30,6 +38,7 @@ function evaluateFixture(fixture: ReturnType<typeof createFixture>) {
     employeeWorkRules: fixture.employeeWorkRules,
     employeeDayConstraints: fixture.employeeDayConstraints,
     employeeShiftAvailability: fixture.employeeShiftAvailability,
+    employeeTimeConstraints: fixture.employeeTimeConstraints,
     timeOff: fixture.timeOff,
     staffingRequirements: fixture.staffingRequirements,
     shiftTemplates: fixture.shiftTemplates
@@ -74,6 +83,7 @@ function optimizeBenchmarkScenario(name: string) {
       employeeWorkRules: scenario.employeeWorkRules,
       employeeDayConstraints: scenario.employeeDayConstraints,
       employeeShiftAvailability: scenario.employeeShiftAvailability,
+      employeeTimeConstraints: scenario.employeeTimeConstraints,
       timeOff: scenario.timeOff,
       assignments: scenario.existingAssignments,
       roles: scenario.roles,
@@ -89,7 +99,134 @@ function assignmentSignature(assignments: Array<{ schedule_slot_id: string; empl
     .sort();
 }
 
+function createTwoSlotSameEmployeeFixture({
+  firstStart,
+  firstEnd,
+  secondStart,
+  secondEnd,
+  secondDate = "2026-05-18",
+  maxShiftsPerWeek = 5,
+  maxHoursPerDay = 8
+}: {
+  firstStart: string;
+  firstEnd: string;
+  secondStart: string;
+  secondEnd: string;
+  secondDate?: string;
+  maxShiftsPerWeek?: number;
+  maxHoursPerDay?: number;
+}) {
+  const fixture = createFixture({
+    assignments: []
+  });
+  const firstSlot = createSlot({
+    id: "slot-service-first",
+    runId: fixture.run.id,
+    date: "2026-05-18",
+    roleId: fixture.roles[0].id,
+    sourceId: fixture.staffingRequirements[0].id,
+    startTime: firstStart,
+    endTime: firstEnd
+  });
+  const secondSlot = createSlot({
+    id: "slot-service-second",
+    runId: fixture.run.id,
+    date: secondDate,
+    roleId: fixture.roles[0].id,
+    sourceId: fixture.staffingRequirements[0].id,
+    startTime: secondStart,
+    endTime: secondEnd
+  });
+  fixture.slots = [firstSlot, secondSlot];
+  fixture.assignments = [
+    createAssignment("as-first", fixture.run.id, firstSlot.id, "emp-alex"),
+    createAssignment("as-second", fixture.run.id, secondSlot.id, "emp-alex")
+  ];
+  fixture.employeeWorkRules = [
+    createWorkRules(
+      "wr-alex",
+      "emp-alex",
+      maxShiftsPerWeek,
+      maxHoursPerDay,
+      Math.min(maxHoursPerDay, 8)
+    ),
+    createWorkRules("wr-nina", "emp-nina")
+  ];
+
+  return fixture;
+}
+
 const tests: Array<{ name: string; run: () => void }> = [
+  {
+    name: "working-time engine handles duration overlap split and week keys",
+    run: () => {
+      assert.equal(
+        getShiftDurationMinutes({
+          date: "2026-05-18",
+          startTime: "08:00",
+          endTime: "12:00"
+        }),
+        240
+      );
+      assert.equal(
+        getShiftDurationMinutes({
+          date: "2026-05-18",
+          startTime: "22:00",
+          endTime: "02:00"
+        }),
+        240
+      );
+      assert.equal(
+        intervalsOverlap(
+          buildShiftInterval({
+            date: "2026-05-18",
+            startTime: "08:00",
+            endTime: "12:00"
+          }),
+          buildShiftInterval({
+            date: "2026-05-18",
+            startTime: "12:00",
+            endTime: "16:00"
+          })
+        ),
+        false
+      );
+      assert.equal(
+        intervalsOverlap(
+          buildShiftInterval({
+            date: "2026-05-18",
+            startTime: "08:00",
+            endTime: "12:00"
+          }),
+          buildShiftInterval({
+            date: "2026-05-18",
+            startTime: "11:00",
+            endTime: "15:00"
+          })
+        ),
+        true
+      );
+      assert.deepEqual(
+        splitShiftMinutesByDate({
+          date: "2026-05-18",
+          startTime: "22:00",
+          endTime: "02:00"
+        }),
+        [
+          { date: "2026-05-18", minutes: 120 },
+          { date: "2026-05-19", minutes: 120 }
+        ]
+      );
+      assert.equal(
+        getWeekKey({ date: "2026-05-24", weekStartsOn: 1 }),
+        "2026-05-18"
+      );
+      assert.equal(
+        getWeekKey({ date: "2026-05-24", weekStartsOn: 0 }),
+        "2026-05-24"
+      );
+    }
+  },
   {
     name: "valid generated schedule has zero hard violations",
     run: () => {
@@ -167,7 +304,7 @@ const tests: Array<{ name: string; run: () => void }> = [
     }
   },
   {
-    name: "overlapping shifts and same-day assignments are detected",
+    name: "overlapping same-day shifts are detected",
     run: () => {
       const fixture = createFixture();
       const secondSlot = createSlot({
@@ -189,11 +326,170 @@ const tests: Array<{ name: string; run: () => void }> = [
       assert.equal(evaluation.isValid, false);
       assert.ok(
         evaluation.hardViolations.some(
-          (violation) =>
-            violation.type === "same_day_assignment" ||
-            violation.type === "overlap"
+          (violation) => violation.type === "overlap"
         )
       );
+    }
+  },
+  {
+    name: "split same-day shifts are allowed when non-overlapping and within daily hours",
+    run: () => {
+      const fixture = createTwoSlotSameEmployeeFixture({
+        firstStart: "08:00",
+        firstEnd: "12:00",
+        secondStart: "16:00",
+        secondEnd: "20:00",
+        maxHoursPerDay: 8
+      });
+
+      const evaluation = evaluateFixture(fixture);
+      assert.equal(evaluation.isValid, true);
+      assert.equal(evaluation.metrics.hardViolationCount, 0);
+    }
+  },
+  {
+    name: "adjacent same-day shifts are allowed",
+    run: () => {
+      const fixture = createTwoSlotSameEmployeeFixture({
+        firstStart: "08:00",
+        firstEnd: "12:00",
+        secondStart: "12:00",
+        secondEnd: "16:00",
+        maxHoursPerDay: 8
+      });
+
+      const evaluation = evaluateFixture(fixture);
+      assert.equal(evaluation.isValid, true);
+    }
+  },
+  {
+    name: "daily-hour excess is detected across split shifts",
+    run: () => {
+      const fixture = createTwoSlotSameEmployeeFixture({
+        firstStart: "08:00",
+        firstEnd: "14:00",
+        secondStart: "16:00",
+        secondEnd: "20:00",
+        maxHoursPerDay: 8
+      });
+
+      const evaluation = evaluateFixture(fixture);
+      assert.equal(evaluation.isValid, false);
+      assert.ok(
+        evaluation.hardViolations.some(
+          (violation) => violation.type === "max_daily_hours"
+        )
+      );
+    }
+  },
+  {
+    name: "weekly shift-block excess is detected",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = Array.from({ length: 6 }, (_, index) =>
+        createSlot({
+          id: `slot-weekly-${index}`,
+          runId: fixture.run.id,
+          date: `2026-05-${18 + index}`,
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "08:00",
+          endTime: "10:00"
+        })
+      );
+      fixture.assignments = fixture.slots.map((slot, index) =>
+        createAssignment(`as-weekly-${index}`, fixture.run.id, slot.id, "emp-alex")
+      );
+      fixture.employeeWorkRules = [
+        createWorkRules("wr-alex", "emp-alex", 5, 8, 8),
+        createWorkRules("wr-nina", "emp-nina")
+      ];
+
+      const evaluation = evaluateFixture(fixture);
+      assert.equal(evaluation.isValid, false);
+      assert.ok(
+        evaluation.hardViolations.some(
+          (violation) => violation.type === "max_shifts"
+        )
+      );
+    }
+  },
+  {
+    name: "overnight shifts overlap next-day shifts by absolute interval",
+    run: () => {
+      const fixture = createTwoSlotSameEmployeeFixture({
+        firstStart: "22:00",
+        firstEnd: "02:00",
+        secondDate: "2026-05-19",
+        secondStart: "01:00",
+        secondEnd: "03:00",
+        maxHoursPerDay: 8
+      });
+
+      const evaluation = evaluateFixture(fixture);
+      assert.equal(evaluation.isValid, false);
+      assert.ok(
+        evaluation.hardViolations.some(
+          (violation) => violation.type === "overlap"
+        )
+      );
+    }
+  },
+  {
+    name: "time-window cannot_work blocks only overlapping intervals",
+    run: () => {
+      const blocked = createFixture({ assignments: [] });
+      blocked.slots = [
+        createSlot({
+          id: "slot-time-window",
+          runId: blocked.run.id,
+          date: "2026-05-18",
+          roleId: blocked.roles[0].id,
+          sourceId: blocked.staffingRequirements[0].id,
+          startTime: "11:00",
+          endTime: "13:00"
+        })
+      ];
+      blocked.assignments = [
+        createAssignment("as-time-window", blocked.run.id, blocked.slots[0].id, "emp-alex")
+      ];
+      blocked.employeeTimeConstraints = [
+        createTimeConstraint({
+          id: "tc-alex-midday",
+          employeeId: "emp-alex",
+          dayOfWeek: 1,
+          startTime: "12:00",
+          endTime: "16:00"
+        })
+      ];
+
+      const blockedEvaluation = evaluateFixture(blocked);
+      assert.equal(blockedEvaluation.isValid, false);
+      assert.ok(
+        blockedEvaluation.hardViolations.some(
+          (violation) => violation.type === "time_window_unavailable"
+        )
+      );
+
+      const adjacent = createFixture({ assignments: [] });
+      adjacent.slots = [
+        createSlot({
+          id: "slot-time-window-adjacent",
+          runId: adjacent.run.id,
+          date: "2026-05-18",
+          roleId: adjacent.roles[0].id,
+          sourceId: adjacent.staffingRequirements[0].id,
+          startTime: "08:00",
+          endTime: "12:00"
+        })
+      ];
+      adjacent.assignments = [
+        createAssignment("as-time-window-adjacent", adjacent.run.id, adjacent.slots[0].id, "emp-alex")
+      ];
+      adjacent.employeeTimeConstraints = blocked.employeeTimeConstraints;
+
+      const adjacentEvaluation = evaluateFixture(adjacent);
+      assert.equal(adjacentEvaluation.isValid, true);
     }
   },
   {
@@ -309,6 +605,7 @@ const tests: Array<{ name: string; run: () => void }> = [
         employeeWorkRules: easy.scenario.employeeWorkRules,
         employeeDayConstraints: easy.scenario.employeeDayConstraints,
         employeeShiftAvailability: easy.scenario.employeeShiftAvailability,
+        employeeTimeConstraints: easy.scenario.employeeTimeConstraints,
         timeOff: easy.scenario.timeOff,
         staffingRequirements: easy.scenario.staffingRequirements,
         shiftTemplates: easy.scenario.shiftTemplates,
@@ -333,6 +630,7 @@ const tests: Array<{ name: string; run: () => void }> = [
         employeeWorkRules: impossible.scenario.employeeWorkRules,
         employeeDayConstraints: impossible.scenario.employeeDayConstraints,
         employeeShiftAvailability: impossible.scenario.employeeShiftAvailability,
+        employeeTimeConstraints: impossible.scenario.employeeTimeConstraints,
         timeOff: impossible.scenario.timeOff,
         staffingRequirements: impossible.scenario.staffingRequirements,
         shiftTemplates: impossible.scenario.shiftTemplates,
@@ -357,6 +655,7 @@ const tests: Array<{ name: string; run: () => void }> = [
         employeeWorkRules: scarce.scenario.employeeWorkRules,
         employeeDayConstraints: scarce.scenario.employeeDayConstraints,
         employeeShiftAvailability: scarce.scenario.employeeShiftAvailability,
+        employeeTimeConstraints: scarce.scenario.employeeTimeConstraints,
         timeOff: scarce.scenario.timeOff,
         staffingRequirements: scarce.scenario.staffingRequirements,
         shiftTemplates: scarce.scenario.shiftTemplates,

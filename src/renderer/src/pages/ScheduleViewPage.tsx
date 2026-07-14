@@ -17,10 +17,12 @@ import {
 } from "../../services/scheduler";
 import type {
   BusinessSettings,
+  DayOfWeek,
   Employee,
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
@@ -83,6 +85,7 @@ export function ScheduleViewPage({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability,
+  employeeTimeConstraints,
   timeOff,
   roles,
   shiftTemplates,
@@ -102,6 +105,7 @@ export function ScheduleViewPage({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
@@ -209,9 +213,11 @@ export function ScheduleViewPage({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     timeOff,
     staffingRequirements,
-    shiftTemplates
+    shiftTemplates,
+    weekStartsOn: businessSettings?.week_starts_on ?? 1
   });
   const businessName = businessSettings?.business_name?.trim() || "JProgrammer";
   const modalValidation = editor
@@ -224,11 +230,13 @@ export function ScheduleViewPage({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         staffingRequirements,
         roles,
         timeOff,
         scheduleSlots,
-        scheduleAssignments
+        scheduleAssignments,
+        weekStartsOn: businessSettings?.week_starts_on ?? 1
       })
     : null;
 
@@ -246,11 +254,13 @@ export function ScheduleViewPage({
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       staffingRequirements,
       roles,
       timeOff,
       scheduleSlots,
-      scheduleAssignments
+      scheduleAssignments,
+      weekStartsOn: businessSettings?.week_starts_on ?? 1
     });
 
     const splitViolations = splitManualAssignmentViolations(
@@ -280,11 +290,13 @@ export function ScheduleViewPage({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         staffingRequirements,
         roles,
         timeOff,
         scheduleSlots,
-        scheduleAssignments
+        scheduleAssignments,
+        weekStartsOn: businessSettings?.week_starts_on ?? 1
       });
       setEditor(null);
       await onChanged(
@@ -314,11 +326,13 @@ export function ScheduleViewPage({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         staffingRequirements,
         roles,
         timeOff,
         scheduleSlots,
-        scheduleAssignments
+        scheduleAssignments,
+        weekStartsOn: businessSettings?.week_starts_on ?? 1
       });
       setEditor(null);
       await onChanged(
@@ -913,12 +927,14 @@ export function ScheduleViewPage({
           employeeWorkRules={employeeWorkRules}
           employeeDayConstraints={employeeDayConstraints}
           employeeShiftAvailability={employeeShiftAvailability}
+          employeeTimeConstraints={employeeTimeConstraints}
           timeOff={timeOff}
           roles={roles}
           shiftTemplates={shiftTemplates}
           staffingRequirements={staffingRequirements}
           scheduleSlots={scheduleSlots}
           scheduleAssignments={scheduleAssignments}
+          weekStartsOn={businessSettings?.week_starts_on ?? 1}
           language={language}
           validation={modalValidation}
           isSaving={isSaving}
@@ -1067,12 +1083,14 @@ function AssignmentEditorModal({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability,
+  employeeTimeConstraints,
   timeOff,
   roles,
   shiftTemplates,
   staffingRequirements,
   scheduleSlots,
   scheduleAssignments,
+  weekStartsOn,
   language,
   validation,
   isSaving,
@@ -1087,12 +1105,14 @@ function AssignmentEditorModal({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
   staffingRequirements: StaffingRequirement[];
   scheduleSlots: ScheduleSlot[];
   scheduleAssignments: ScheduleAssignment[];
+  weekStartsOn: DayOfWeek;
   language: UiLanguage;
   validation: ManualAssignmentValidation | null;
   isSaving: boolean;
@@ -1137,11 +1157,13 @@ function AssignmentEditorModal({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         timeOff,
         roles,
         staffingRequirements,
         scheduleSlots,
         scheduleAssignments,
+        weekStartsOn,
         language
       }),
     [
@@ -1151,11 +1173,13 @@ function AssignmentEditorModal({
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       timeOff,
       roles,
       staffingRequirements,
       scheduleSlots,
       scheduleAssignments,
+      weekStartsOn,
       language
     ]
   );
@@ -1444,11 +1468,13 @@ function buildManualCandidateRows({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability,
+  employeeTimeConstraints,
   timeOff,
   roles,
   staffingRequirements,
   scheduleSlots,
   scheduleAssignments,
+  weekStartsOn,
   language
 }: {
   editor: AssignmentEditorState;
@@ -1457,11 +1483,13 @@ function buildManualCandidateRows({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   roles: Role[];
   staffingRequirements: StaffingRequirement[];
   scheduleSlots: ScheduleSlot[];
   scheduleAssignments: ScheduleAssignment[];
+  weekStartsOn: DayOfWeek;
   language: UiLanguage;
 }): ManualCandidateRow[] {
   const roleName =
@@ -1479,11 +1507,13 @@ function buildManualCandidateRows({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         staffingRequirements,
         roles,
         timeOff,
         scheduleSlots,
-        scheduleAssignments
+        scheduleAssignments,
+        weekStartsOn
       });
       const split = splitManualAssignmentViolations(validation.violations);
       const status: ManualCandidateRow["status"] =
@@ -1567,7 +1597,7 @@ function translateManualAssignmentViolation(
     return "Δεν είναι διαθέσιμος για αυτή τη βάρδια.";
   }
 
-  if (/already has a shift on this date/i.test(violation)) {
+  if (/legacy one shift per day/i.test(violation)) {
     return "Έχει ήδη βάρδια την ίδια ημέρα.";
   }
 
@@ -1579,12 +1609,12 @@ function translateManualAssignmentViolation(
     return "Δεν μπορεί να δουλεύει Σαββατοκύριακο.";
   }
 
-  const maxHoursMatch = violation.match(/max weekly hours \(([^)]+)\)/i);
+  const maxHoursMatch = violation.match(/max daily hours \(([^)]+)\)/i);
   if (maxHoursMatch) {
     return `Θα ξεπεράσει το εβδομαδιαίο όριο ωρών (${maxHoursMatch[1]}).`;
   }
 
-  const maxDaysMatch = violation.match(/max weekly days \(([^)]+)\)/i);
+  const maxDaysMatch = violation.match(/max weekly shifts \(([^)]+)\)/i);
   if (maxDaysMatch) {
     return `Θα ξεπεράσει το εβδομαδιαίο όριο ημερών (${maxDaysMatch[1]}).`;
   }

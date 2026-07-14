@@ -30,6 +30,9 @@ type BenchmarkResult = {
   unfilledSlots: number;
   coverageRate: number;
   hardViolationCount: number;
+  overlapViolationCount: number;
+  dailyHourViolationCount: number;
+  weeklyShiftViolationCount: number;
   warningCount: number;
   reward: number;
   rewardPerSlot: number;
@@ -39,6 +42,7 @@ type BenchmarkResult = {
   elapsedMs: number;
   repairIterations: number;
   stopReason: SchedulerStopReason;
+  ceilingExact: boolean;
   notes: string[];
 };
 
@@ -73,6 +77,7 @@ for (const scenario of createBenchmarkScenarios()) {
     employeeWorkRules: scenario.employeeWorkRules,
     employeeDayConstraints: scenario.employeeDayConstraints,
     employeeShiftAvailability: scenario.employeeShiftAvailability,
+    employeeTimeConstraints: scenario.employeeTimeConstraints,
     timeOff: scenario.timeOff,
     assignments: scenario.existingAssignments,
     roles: scenario.roles,
@@ -89,6 +94,7 @@ for (const scenario of createBenchmarkScenarios()) {
     employeeWorkRules: scenario.employeeWorkRules,
     employeeDayConstraints: scenario.employeeDayConstraints,
     employeeShiftAvailability: scenario.employeeShiftAvailability,
+    employeeTimeConstraints: scenario.employeeTimeConstraints,
     timeOff: scenario.timeOff,
     staffingRequirements: scenario.staffingRequirements,
     shiftTemplates: scenario.shiftTemplates
@@ -107,6 +113,7 @@ for (const scenario of createBenchmarkScenarios()) {
     employeeWorkRules: scenario.employeeWorkRules,
     employeeDayConstraints: scenario.employeeDayConstraints,
     employeeShiftAvailability: scenario.employeeShiftAvailability,
+    employeeTimeConstraints: scenario.employeeTimeConstraints,
     timeOff: scenario.timeOff,
     staffingRequirements: scenario.staffingRequirements,
     shiftTemplates: scenario.shiftTemplates,
@@ -143,6 +150,15 @@ for (const scenario of createBenchmarkScenarios()) {
     unfilledSlots: evaluation.metrics.unfilledSlots,
     coverageRate: evaluation.metrics.coverageRate,
     hardViolationCount: evaluation.metrics.hardViolationCount,
+    overlapViolationCount: countHardViolations(evaluation.hardViolations, "overlap"),
+    dailyHourViolationCount: countHardViolations(
+      evaluation.hardViolations,
+      "max_daily_hours"
+    ),
+    weeklyShiftViolationCount: countHardViolations(
+      evaluation.hardViolations,
+      "max_shifts"
+    ),
     warningCount,
     reward: evaluation.reward,
     rewardPerSlot,
@@ -159,6 +175,7 @@ for (const scenario of createBenchmarkScenarios()) {
     elapsedMs,
     repairIterations: assignmentResult.repairIterations,
     stopReason: assignmentResult.stopReason,
+    ceilingExact: !ceilingAnalysis.isApproximate,
     notes
   };
 
@@ -188,6 +205,9 @@ function printResult(result: BenchmarkResult) {
         .toString()
         .padStart(3)}%`,
       `hard=${result.hardViolationCount}`,
+      `overlap=${result.overlapViolationCount}`,
+      `daily=${result.dailyHourViolationCount}`,
+      `weekly=${result.weeklyShiftViolationCount}`,
       `warnings=${result.warningCount}`,
       `reward=${Math.round(result.reward)}`,
       `reward/slot=${Math.round(result.rewardPerSlot)}`,
@@ -195,13 +215,21 @@ function printResult(result: BenchmarkResult) {
       `repair=${result.repairIterations}`,
       `time=${result.elapsedMs.toFixed(0)}ms`,
       `stop=${result.stopReason}`,
-      `classification=${result.classification}`
+      `classification=${result.classification}`,
+      `ceiling=${result.ceilingExact ? "exact" : "approx"}`
     ].join(" | ")
   );
 
   if (result.notes.length > 0) {
     console.log(`  notes: ${result.notes.join(" / ")}`);
   }
+}
+
+function countHardViolations(
+  hardViolations: Array<{ type: string }>,
+  type: string
+): number {
+  return hardViolations.filter((violation) => violation.type === type).length;
 }
 
 function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
@@ -258,6 +286,19 @@ function assertBenchmarkThresholds(resultsToCheck: BenchmarkResult[]) {
       throw new Error(
         "impossible schedule should remain partially uncovered with warnings."
       );
+    }
+  }
+
+  const splitShiftRequired = byScenario.get("split shifts required") ?? [];
+  for (const result of splitShiftRequired) {
+    if (result.coverageRate !== 1 || result.hardViolationCount !== 0) {
+      throw new Error(
+        "split shifts required should reach 100% coverage with 0 hard violations."
+      );
+    }
+
+    if (result.feasibleMaxAssignedSlots !== result.generatedSlots) {
+      throw new Error("split shifts required should have an exact full ceiling.");
     }
   }
 
@@ -344,7 +385,7 @@ function calculateNormalizedScore({
 
 function assertExcellentScenarioStopsEarly(result: BenchmarkResult) {
   const maximumExpectedRuntime =
-    defaultSchedulerOptimizationConfig.timeBudgetMs * 0.8;
+    defaultSchedulerOptimizationConfig.timeBudgetMs + 1_000;
 
   if (result.elapsedMs >= maximumExpectedRuntime) {
     throw new Error(

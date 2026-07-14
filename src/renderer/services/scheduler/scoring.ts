@@ -3,8 +3,8 @@ import { experienceLevelRank, experienceLevelToLabel } from "../../types";
 import {
   type AssignedShift,
   type SchedulerData,
-  getAssignedDayCount,
   getAssignedHours,
+  getAssignedShiftCount,
   getApproximateTargetHoursPerWeek,
   getConsecutiveDayCountIfAssigned,
   getDayConstraint,
@@ -144,10 +144,7 @@ export function scoreCandidate({
   const currentHours = getAssignedHours(employee.id, assignedShifts);
   const slotHours = getSlotDurationHours(slot);
   const projectedHours = currentHours + slotHours;
-  const currentDays = getAssignedDayCount(employee.id, assignedShifts);
-  const currentShifts = assignedShifts.filter(
-    (shift) => shift.employeeId === employee.id
-  ).length;
+  const currentShifts = getAssignedShiftCount(employee.id, assignedShifts);
   const projectedShifts = currentShifts + 1;
   const weekendAssignments = getWeekendShiftCount(employee.id, assignedShifts);
   const difficultAssignments = getNightShiftCount(employee.id, assignedShifts);
@@ -213,8 +210,8 @@ export function scoreCandidate({
     add("Fewer assigned hours than average", scoreWeights.fewerHoursThanAverage);
   }
 
-  if (context && currentDays < context.averageAssignedDays) {
-    add("Fewer assigned days than average", scoreWeights.fewerDaysThanAverage);
+  if (context && currentShifts < context.averageAssignedDays) {
+    add("Fewer assigned shifts than average", scoreWeights.fewerDaysThanAverage);
   }
 
   if (

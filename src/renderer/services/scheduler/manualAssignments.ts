@@ -1,9 +1,11 @@
 import { databaseApi } from "../databaseApi";
 import type {
   Employee,
+  DayOfWeek,
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
@@ -34,11 +36,13 @@ export type ManualAssignmentInput = {
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   staffingRequirements: StaffingRequirement[];
   roles: Role[];
   timeOff: TimeOff[];
   scheduleSlots: ScheduleSlot[];
   scheduleAssignments: ScheduleAssignment[];
+  weekStartsOn?: DayOfWeek;
 };
 
 export type ManualAssignmentSaveOptions = {
@@ -192,7 +196,7 @@ export function splitManualAssignmentViolations(violations: string[]): {
 }
 
 function isHardManualAssignmentViolation(violation: string): boolean {
-  return /inactive|does not have the required role|Employee does not meet the required experience level for this role|time off|cannot work|not available|already has a shift|overlapping shift|cannot work weekends|exceed max weekly hours|exceed max weekly days|could not be found/i.test(
+  return /inactive|does not have the required role|Employee does not meet the required experience level for this role|time off|cannot work|not available|overlapping shift|cannot work weekends|exceed max daily hours|exceed max weekly shifts|during this time window|could not be found/i.test(
     violation
   );
 }
@@ -206,11 +210,13 @@ export function validateManualAssignmentChange({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability,
+  employeeTimeConstraints = [],
   staffingRequirements,
   roles,
   timeOff,
   scheduleSlots,
-  scheduleAssignments
+  scheduleAssignments,
+  weekStartsOn = 1
 }: ManualAssignmentInput): ManualAssignmentValidation {
   if (!employeeId) {
     return {
@@ -246,8 +252,10 @@ export function validateManualAssignmentChange({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     staffingRequirements,
-    timeOff
+    timeOff,
+    weekStartsOn
   };
   const hardConstraintResult = checkHardConstraints({
     employee,

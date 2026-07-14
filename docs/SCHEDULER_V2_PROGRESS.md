@@ -261,7 +261,7 @@ Status: completed data-model migration and TypeScript/UI compatibility.
 
 ### Temporary Compatibility Notes For Phase 3
 
-- The heuristic scheduler still blocks same-day assignments via `hasAssignmentOnDate`.
+- Phase 2 historical note: before Phase 3, the heuristic scheduler still blocked same-day assignments.
 - `max_hours_per_day` is stored, edited, validated, migrated, and displayed, but full daily-hour accounting is intentionally deferred to Phase 3.
 - `max_shifts_per_week` is now the active weekly hard-limit field.
 - Approximate weekly target hours in reports/evaluator are derived from `target_hours_per_day * max_shifts_per_week` only when `target_hours_per_day` is set.
@@ -307,3 +307,68 @@ The migration test script verifies:
 - Use `max_shifts_per_week` with split-shift counting everywhere.
 - Update coverage ceiling away from date-only occupancy.
 - Add split-shift scheduler/evaluator/benchmark scenarios.
+
+## Phase 3 - Split Shifts And Hard-Constraint Engine
+
+### Baseline Before Phase 3 Changes
+
+- `git status` showed an already-dirty worktree from the Phase 2 implementation.
+- `npm.cmd run build`
+  - TypeScript passed.
+  - Sandboxed `electron-vite` failed with an esbuild parent-directory access error; the same command needs escalation in this Codex environment.
+- `npm.cmd run test:scheduler`
+  - Passed, 10 scheduler regression tests.
+- `npm.cmd run benchmark:scheduler`
+  - Passed, 10 benchmark scenarios.
+- `npm.cmd run test:migrations`
+  - Passed, 5 migration tests.
+
+### Phase 3 Changes Implemented
+
+- Added `src/renderer/services/scheduler/model/workingTime.ts`.
+  - Central deterministic duration, overlap, overnight split, date arithmetic, day-of-week, and week-key logic.
+  - Adjacent shifts are not overlaps.
+  - Overnight shifts split minutes across every touched business date.
+- Refactored `src/renderer/services/scheduler/constraints.ts`.
+  - Hard constraints now return structured violation codes plus legacy `reasons` for compatibility.
+  - Removed active same-date rejection from the hard-rule engine.
+  - Added daily-hour validation using `max_hours_per_day`.
+  - Added weekly shift-block validation using `max_shifts_per_week`.
+  - Added employee time-window `cannot_work` enforcement.
+  - Weekend restrictions inspect every date touched by a shift.
+- Added `src/renderer/services/scheduler/model/assignmentState.ts`.
+  - Tracks slot IDs, absolute intervals, daily assigned minutes, weekly shift counts, total minutes, and assigned shifts together.
+- Added `src/renderer/services/scheduler/evaluation/scheduleValidator.ts`.
+  - Validates full schedules for missing references, duplicate slot assignments, duplicate employee-slot pairs, and hard-rule violations.
+- Refactored coverage ceiling away from date-only occupancy state.
+  - Ceiling state now distinguishes intervals and daily minute totals, so split shifts can increase exact feasible coverage.
+- Added `employee_time_constraints` loading to the renderer summary and passed it through generation, manual assignment validation, evaluation, and benchmarks.
+- Updated evaluator/scoring fairness inputs to use shift blocks/minutes instead of unique assigned days for weekly work-rule comparison.
+- Updated scheduler tests with focused coverage for:
+  - working-time duration/overlap/week keys,
+  - valid split shifts,
+  - adjacent shifts,
+  - overlap rejection,
+  - daily-hour limits,
+  - weekly shift-block limits,
+  - overnight overlap,
+  - time-window `cannot_work`.
+- Updated benchmark scenarios and output.
+  - Added `split shifts required`.
+  - Added `time-window restriction`.
+  - Output now includes overlap, daily-hour, weekly-shift violation counts and exact/approximate coverage ceiling label.
+
+### Phase 3 Validation Results
+
+- `npm.cmd run test:scheduler`
+  - Passed, 17 scheduler regression tests.
+- `npm.cmd run benchmark:scheduler`
+  - Passed, 12 benchmark scenarios.
+  - `split shifts required`: 2/2 assigned, 100% coverage, 0 hard violations, exact ceiling.
+  - `time-window restriction`: 1/2 assigned, 0 hard violations, exact ceiling, manager status `Infeasible`.
+
+### Remaining Phase 3/CP-SAT Preparation Risks
+
+- The heuristic scheduler still uses its existing repair/move/swap architecture. Hard-rule checks now support split shifts, but a future CP-SAT phase should replace heuristic repair with a proper optimizer.
+- Large benchmark scenarios can still consume the current 15s optimizer budget; coverage ceiling correctly labels approximate results.
+- Some existing manager-facing strings remain mojibake from previous UI encoding work and should be cleaned separately from scheduler semantics.

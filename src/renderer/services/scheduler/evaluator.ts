@@ -1,8 +1,10 @@
 import type {
   Employee,
+  DayOfWeek,
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
@@ -18,9 +20,8 @@ import {
   type ManualOverrideMap,
   type SchedulerData,
   buildExistingAssignedShifts,
-  checkHardConstraints,
-  getAssignedDayCount,
   getAssignedHours,
+  getAssignedShiftCount,
   getApproximateTargetHoursPerWeek,
   getDayConstraint,
   getEmployeeShiftAvailability,
@@ -30,6 +31,7 @@ import {
   isNightOrDifficultShift,
   isWeekendDate
 } from "./constraints";
+import { validateScheduleHardConstraints } from "./evaluation/scheduleValidator";
 import { getDayOfWeek } from "./generateSlots";
 import { assessRoleGroupQuality, getRoleGroupKey } from "./teamQuality";
 
@@ -104,9 +106,11 @@ export function evaluateSchedule({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability = [],
+  employeeTimeConstraints = [],
   timeOff,
   staffingRequirements,
   shiftTemplates,
+  weekStartsOn = 1,
   manualOverrides = {}
 }: {
   run: ScheduleRun;
@@ -118,9 +122,11 @@ export function evaluateSchedule({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   staffingRequirements: StaffingRequirement[];
   shiftTemplates: ShiftTemplate[];
+  weekStartsOn?: DayOfWeek;
   manualOverrides?: ManualOverrideMap;
 }): ScheduleEvaluationResult {
   const runSlots = slots.filter((slot) => slot.schedule_run_id === run.id);
@@ -138,8 +144,10 @@ export function evaluateSchedule({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     staffingRequirements,
-    timeOff
+    timeOff,
+    weekStartsOn
   };
   const hardViolations = validateEvaluationHardConstraints({
     runSlots,
@@ -269,85 +277,19 @@ function validateEvaluationHardConstraints({
   data: SchedulerData;
   manualOverrides: ManualOverrideMap;
 }): ScheduleEvaluationHardViolation[] {
-  const hardViolations: ScheduleEvaluationHardViolation[] = [];
-  const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
-  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
-  const assignmentsBySlotId = new Map<string, ScheduleAssignment[]>();
-
-  for (const assignment of activeAssignments) {
-    const slotAssignments = assignmentsBySlotId.get(assignment.schedule_slot_id) ?? [];
-    assignmentsBySlotId.set(assignment.schedule_slot_id, [
-      ...slotAssignments,
-      assignment
-    ]);
-  }
-
-  for (const [slotId, slotAssignments] of assignmentsBySlotId.entries()) {
-    if (slotAssignments.length > 1) {
-      hardViolations.push({
-        severity: "critical",
-        type: "duplicate_slot_assignment",
-        slotId,
-        message: `Slot ${slotId} has ${slotAssignments.length} active assignments.`
-      });
-    }
-  }
-
-  for (const assignment of activeAssignments) {
-    const slot = slotById.get(assignment.schedule_slot_id);
-    const employee = employeeById.get(assignment.employee_id);
-
-    if (!slot) {
-      hardViolations.push({
-        severity: "critical",
-        type: "missing_slot",
-        slotId: assignment.schedule_slot_id,
-        employeeId: assignment.employee_id,
-        message: `Assignment ${assignment.id} references a missing schedule slot.`
-      });
-      continue;
-    }
-
-    if (!employee) {
-      hardViolations.push({
-        severity: "critical",
-        type: "missing_employee",
-        slotId: slot.id,
-        employeeId: assignment.employee_id,
-        message: `Assignment ${assignment.id} references a missing employee.`
-      });
-      continue;
-    }
-
-    const otherAssignments = activeAssignments.filter(
-      (candidate) => candidate.id !== assignment.id
-    );
-    const assignedShiftsWithoutCurrent = buildExistingAssignedShifts({
-      slots: runSlots,
-      assignments: otherAssignments
-    });
-    const hardConstraintResult = checkHardConstraints({
-      employee,
-      slot,
-      data,
-      assignedShifts: assignedShiftsWithoutCurrent,
-      manualOverrides
-    });
-
-    if (!hardConstraintResult.allowed) {
-      for (const reason of hardConstraintResult.reasons) {
-        hardViolations.push({
-          severity: "critical",
-          type: hardConstraintReasonToType(reason),
-          slotId: slot.id,
-          employeeId: employee.id,
-          message: `${employee.first_name} ${employee.last_name} cannot work ${slot.date} ${slot.start_time}-${slot.end_time}: ${reason}`
-        });
-      }
-    }
-  }
-
-  return hardViolations;
+  return validateScheduleHardConstraints({
+    runSlots,
+    assignments: activeAssignments,
+    employees,
+    data,
+    manualOverrides
+  }).violations.map((violation) => ({
+    severity: "critical",
+    type: hardConstraintCodeToType(violation.code, violation.metadata),
+    slotId: violation.slotId,
+    employeeId: violation.employeeId,
+    message: violation.message
+  }));
 }
 
 function applyRoleCoverageEvaluation({
@@ -530,7 +472,7 @@ function applyContractAndFairnessEvaluation({
     const targetHours = getApproximateTargetHoursPerWeek(workRules);
     const targetShifts = getTargetShiftCountPerWeek(workRules);
     const assignedHours = getAssignedHours(employee.id, assignedShifts);
-    const assignedDays = getAssignedDayCount(employee.id, assignedShifts);
+    const assignedShiftCount = getAssignedShiftCount(employee.id, assignedShifts);
 
     if (targetHours !== null) {
       const hourDifference = Math.abs(targetHours - assignedHours);
@@ -542,10 +484,10 @@ function applyContractAndFairnessEvaluation({
     }
 
     if (targetShifts !== null) {
-      const dayDifference = Math.abs(targetShifts - assignedDays);
-      breakdown.fairness += Math.max(-250, 100 - dayDifference * 45);
+      const shiftDifference = Math.abs(targetShifts - assignedShiftCount);
+      breakdown.fairness += Math.max(-250, 100 - shiftDifference * 45);
 
-      if (assignedDays > targetShifts) {
+      if (assignedShiftCount > targetShifts) {
         breakdown.penalties -= 250;
       }
     }
@@ -867,50 +809,40 @@ function getShiftTemplateIdForSlot(
   );
 }
 
-function hardConstraintReasonToType(reason: string): string {
-  const normalizedReason = reason.toLocaleLowerCase();
-
-  if (normalizedReason.includes("inactive")) {
-    return "inactive_employee";
+function hardConstraintCodeToType(
+  code: string,
+  metadata?: Record<string, string | number | boolean | null>
+): string {
+  if (metadata?.issue) {
+    return String(metadata.issue);
   }
 
-  if (normalizedReason.includes("role")) {
-    return "missing_role_or_experience";
+  switch (code) {
+    case "INACTIVE_EMPLOYEE":
+      return "inactive_employee";
+    case "MISSING_ROLE":
+    case "INSUFFICIENT_EXPERIENCE":
+      return "missing_role_or_experience";
+    case "TIME_OFF":
+      return "time_off";
+    case "DAY_UNAVAILABLE":
+    case "SHIFT_UNAVAILABLE":
+      return "cannot_work";
+    case "TIME_WINDOW_UNAVAILABLE":
+      return "time_window_unavailable";
+    case "SHIFT_OVERLAP":
+      return "overlap";
+    case "MAX_DAILY_HOURS":
+      return "max_daily_hours";
+    case "MAX_WEEKLY_SHIFTS":
+      return "max_shifts";
+    case "WEEKEND_NOT_ALLOWED":
+      return "weekend_not_allowed";
+    case "INVALID_SHIFT_INTERVAL":
+      return "invalid_shift_interval";
+    default:
+      return "hard_constraint";
   }
-
-  if (normalizedReason.includes("time off")) {
-    return "time_off";
-  }
-
-  if (normalizedReason.includes("cannot work")) {
-    return "cannot_work";
-  }
-
-  if (normalizedReason.includes("same date")) {
-    return "same_day_assignment";
-  }
-
-  if (normalizedReason.includes("overlapping")) {
-    return "overlap";
-  }
-
-  if (normalizedReason.includes("weekend")) {
-    return "weekend_not_allowed";
-  }
-
-  if (normalizedReason.includes("hours")) {
-    return "max_hours";
-  }
-
-  if (normalizedReason.includes("shifts")) {
-    return "max_shifts";
-  }
-
-  if (normalizedReason.includes("days")) {
-    return "max_days";
-  }
-
-  return "hard_constraint";
 }
 
 function countAssignedShifts(

@@ -15,6 +15,7 @@ import type {
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   OpeningHours,
   Role,
@@ -60,6 +61,7 @@ export function GenerateSchedulePage({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability,
+  employeeTimeConstraints,
   timeOff,
   roles,
   shiftTemplates,
@@ -80,6 +82,7 @@ export function GenerateSchedulePage({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
@@ -176,10 +179,12 @@ export function GenerateSchedulePage({
         employeeWorkRules,
         employeeDayConstraints,
         employeeShiftAvailability,
+        employeeTimeConstraints,
         timeOff,
         roles,
         shiftTemplates,
         staffingRequirements,
+        weekStartsOn,
         assignments: scheduleAssignments
       });
 

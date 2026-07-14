@@ -30,9 +30,9 @@ export type FeasibilityBlockedReasons = {
   weekendUnavailable: number;
   missingRole: number;
   insufficientExperience: number;
-  maxHours: number;
-  maxDays: number;
-  sameDayAssignment: number;
+  maxDailyHours: number;
+  maxWeeklyShifts: number;
+  timeWindowUnavailable: number;
   overlap: number;
 };
 
@@ -125,9 +125,9 @@ const emptyBlockedReasons = (): FeasibilityBlockedReasons => ({
   weekendUnavailable: 0,
   missingRole: 0,
   insufficientExperience: 0,
-  maxHours: 0,
-  maxDays: 0,
-  sameDayAssignment: 0,
+  maxDailyHours: 0,
+  maxWeeklyShifts: 0,
+  timeWindowUnavailable: 0,
   overlap: 0
 });
 
@@ -343,7 +343,10 @@ function analyzeSlotCandidates({
       continue;
     }
 
-    addBlockedReasons(blockedReasons, result.reasons);
+    addBlockedReasons(
+      blockedReasons,
+      result.violations.map((violation) => violation.code)
+    );
   }
 
   return { slot, candidateEmployeeIds, blockedReasons };
@@ -351,47 +354,45 @@ function analyzeSlotCandidates({
 
 function addBlockedReasons(
   blockedReasons: FeasibilityBlockedReasons,
-  reasons: string[]
+  reasonCodes: string[]
 ) {
-  const reasonText = reasons.join(" ").toLocaleLowerCase();
-
-  if (reasonText.includes("time off")) {
+  if (reasonCodes.includes("TIME_OFF")) {
     blockedReasons.timeOff += 1;
   }
 
-  if (reasonText.includes("cannot work on this day")) {
+  if (reasonCodes.includes("DAY_UNAVAILABLE")) {
     blockedReasons.cannotWork += 1;
   }
 
-  if (reasonText.includes("not available for this shift")) {
+  if (reasonCodes.includes("SHIFT_UNAVAILABLE")) {
     blockedReasons.shiftUnavailable += 1;
   }
 
-  if (reasonText.includes("cannot work weekends")) {
+  if (reasonCodes.includes("WEEKEND_NOT_ALLOWED")) {
     blockedReasons.weekendUnavailable += 1;
   }
 
-  if (reasonText.includes("required role")) {
+  if (reasonCodes.includes("MISSING_ROLE")) {
     blockedReasons.missingRole += 1;
   }
 
-  if (reasonText.includes("experience")) {
+  if (reasonCodes.includes("INSUFFICIENT_EXPERIENCE")) {
     blockedReasons.insufficientExperience += 1;
   }
 
-  if (reasonText.includes("max weekly hours")) {
-    blockedReasons.maxHours += 1;
+  if (reasonCodes.includes("MAX_DAILY_HOURS")) {
+    blockedReasons.maxDailyHours += 1;
   }
 
-  if (reasonText.includes("max weekly days")) {
-    blockedReasons.maxDays += 1;
+  if (reasonCodes.includes("MAX_WEEKLY_SHIFTS")) {
+    blockedReasons.maxWeeklyShifts += 1;
   }
 
-  if (reasonText.includes("shift on this date")) {
-    blockedReasons.sameDayAssignment += 1;
+  if (reasonCodes.includes("TIME_WINDOW_UNAVAILABLE")) {
+    blockedReasons.timeWindowUnavailable += 1;
   }
 
-  if (reasonText.includes("overlapping shift")) {
+  if (reasonCodes.includes("SHIFT_OVERLAP")) {
     blockedReasons.overlap += 1;
   }
 }
@@ -806,9 +807,9 @@ function mergeBlockedReasons(
   target.weekendUnavailable += source.weekendUnavailable;
   target.missingRole += source.missingRole;
   target.insufficientExperience += source.insufficientExperience;
-  target.maxHours += source.maxHours;
-  target.maxDays += source.maxDays;
-  target.sameDayAssignment += source.sameDayAssignment;
+  target.maxDailyHours += source.maxDailyHours;
+  target.maxWeeklyShifts += source.maxWeeklyShifts;
+  target.timeWindowUnavailable += source.timeWindowUnavailable;
   target.overlap += source.overlap;
   return target;
 }

@@ -4,6 +4,7 @@ import type {
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   OpeningHours,
   Role,
@@ -30,6 +31,7 @@ export type SchedulerFixture = {
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   staffingRequirements: StaffingRequirement[];
   shiftTemplates: ShiftTemplate[];
@@ -50,6 +52,7 @@ export type SchedulerBenchmarkScenario = {
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   existingAssignments: ScheduleAssignment[];
 };
@@ -119,6 +122,7 @@ export function createFixture(
     employeeWorkRules,
     employeeDayConstraints: overrides.employeeDayConstraints ?? [],
     employeeShiftAvailability: overrides.employeeShiftAvailability ?? [],
+    employeeTimeConstraints: overrides.employeeTimeConstraints ?? [],
     timeOff: overrides.timeOff ?? [],
     staffingRequirements,
     shiftTemplates
@@ -392,9 +396,41 @@ export function createShiftAvailability(
   };
 }
 
+export function createTimeConstraint({
+  id,
+  employeeId,
+  date = null,
+  dayOfWeek = null,
+  startTime,
+  endTime,
+  constraintType = "cannot_work"
+}: {
+  id: string;
+  employeeId: string;
+  date?: string | null;
+  dayOfWeek?: DayOfWeek | null;
+  startTime: string;
+  endTime: string;
+  constraintType?: string;
+}): EmployeeTimeConstraint {
+  return {
+    id,
+    employee_id: employeeId,
+    date,
+    day_of_week: dayOfWeek,
+    start_time: startTime,
+    end_time: endTime,
+    constraint_type: constraintType,
+    notes: null,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+}
+
 export function createBenchmarkScenarios(): SchedulerBenchmarkScenario[] {
   return [
     createEasyCafeScenario(),
+    createSplitShiftRequiredScenario(),
     createUnderstaffedCafeScenario(),
     createManyPartTimeEmployeesScenario(),
     createWeekendShortageScenario(),
@@ -403,6 +439,7 @@ export function createBenchmarkScenarios(): SchedulerBenchmarkScenario[] {
     createFlexibleEmployeesScenario(),
     createHighDemandSaturdayScenario(),
     createConflictingAvailabilityScenario(),
+    createTimeWindowRestrictionScenario(),
     createExplicitRoleScarcityScenario()
   ];
 }
@@ -440,6 +477,7 @@ function createScenarioBase(
     employeeWorkRules: [],
     employeeDayConstraints: [],
     employeeShiftAvailability: [],
+    employeeTimeConstraints: [],
     timeOff: [],
     existingAssignments: []
   };
@@ -485,6 +523,39 @@ function createEasyCafeScenario(): SchedulerBenchmarkScenario {
   scenario.employeeWorkRules = scenario.employees.map((employee) =>
     createWorkRules(`wr-${employee.id}`, employee.id, 6, 8, 8)
   );
+
+  return scenario;
+}
+
+function createSplitShiftRequiredScenario(): SchedulerBenchmarkScenario {
+  const scenario = createScenarioBase("split shifts required", "easy");
+  const service = scenario.roles[0];
+  const shortMorning = createShiftTemplate(
+    "shift-split-morning",
+    "Split Morning",
+    "08:00",
+    "12:00"
+  );
+  const shortEvening = createShiftTemplate(
+    "shift-split-evening",
+    "Split Evening",
+    "16:00",
+    "20:00"
+  );
+  scenario.shiftTemplates = [shortMorning, shortEvening];
+  scenario.staffingRequirements = [
+    createRequirementFor(scenario, 1, shortMorning, service, 1),
+    createRequirementFor(scenario, 1, shortEvening, service, 1)
+  ];
+  scenario.employees = [
+    createEmployee("emp-split-service", "Split", "Service")
+  ];
+  scenario.employeeRoles = [
+    roleFor("er-split-service", "emp-split-service", service)
+  ];
+  scenario.employeeWorkRules = [
+    createWorkRules("wr-split-service", "emp-split-service", 5, 8, 8)
+  ];
 
   return scenario;
 }
@@ -721,6 +792,48 @@ function createConflictingAvailabilityScenario(): SchedulerBenchmarkScenario {
         )
       )
   );
+
+  return scenario;
+}
+
+function createTimeWindowRestrictionScenario(): SchedulerBenchmarkScenario {
+  const scenario = createScenarioBase("time-window restriction", "hard");
+  const service = scenario.roles[0];
+  const morning = createShiftTemplate(
+    "shift-window-morning",
+    "Window Morning",
+    "08:00",
+    "12:00"
+  );
+  const midday = createShiftTemplate(
+    "shift-window-midday",
+    "Window Midday",
+    "11:00",
+    "15:00"
+  );
+  scenario.shiftTemplates = [morning, midday];
+  scenario.staffingRequirements = [
+    createRequirementFor(scenario, 1, morning, service, 1),
+    createRequirementFor(scenario, 1, midday, service, 1)
+  ];
+  scenario.employees = [
+    createEmployee("emp-window-service", "Window", "Service")
+  ];
+  scenario.employeeRoles = [
+    roleFor("er-window-service", "emp-window-service", service)
+  ];
+  scenario.employeeWorkRules = [
+    createWorkRules("wr-window-service", "emp-window-service", 5, 8, 8)
+  ];
+  scenario.employeeTimeConstraints = [
+    createTimeConstraint({
+      id: "tc-window-service",
+      employeeId: "emp-window-service",
+      dayOfWeek: 1,
+      startTime: "12:00",
+      endTime: "16:00"
+    })
+  ];
 
   return scenario;
 }

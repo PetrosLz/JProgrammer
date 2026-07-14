@@ -3,6 +3,7 @@ import type {
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
@@ -15,12 +16,14 @@ import {
   type AssignedShift,
   type ManualOverrideMap,
   type SchedulerData,
+  buildAssignedShift,
   buildExistingAssignedShifts,
   checkHardConstraints,
   getEffectiveMaxShiftsPerWeek,
   getEmployeeWorkRules,
   getSlotDurationHours
 } from "./constraints";
+import { intervalsOverlap } from "./model/workingTime";
 
 export type CoverageDiagnosis =
   | "fully_covered"
@@ -78,9 +81,11 @@ export type CoverageCeilingDiagnosis = {
 };
 
 type EmployeeState = {
-  dateMask: number;
   hoursUnits: number;
   shiftCount: number;
+  assignedIntervals: Array<{ startMs: number; endMs: number }>;
+  dailyMinutes: Map<string, number>;
+  weeklyShiftCount: Map<string, number>;
 };
 
 type SlotCandidateSet = {
@@ -98,6 +103,7 @@ export function buildCoverageCeilingAnalysis({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability = [],
+  employeeTimeConstraints = [],
   timeOff,
   staffingRequirements,
   roles = [],
@@ -110,6 +116,7 @@ export function buildCoverageCeilingAnalysis({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   staffingRequirements: StaffingRequirement[];
   shiftTemplates?: ShiftTemplate[];
@@ -133,6 +140,7 @@ export function buildCoverageCeilingAnalysis({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     staffingRequirements,
     timeOff
   };
@@ -143,19 +151,13 @@ export function buildCoverageCeilingAnalysis({
   const activeEmployeeIndexById = new Map(
     activeEmployees.map((employee, index) => [employee.id, index])
   );
-  const dateIndexByDate = new Map(
-    [...new Set(slots.map((slot) => slot.date))]
-      .sort()
-      .map((date, index) => [date, index])
-  );
   const lockedSlotIds = new Set(
     activeExistingAssignments.map((assignment) => assignment.schedule_slot_id)
   );
   const initialStates = buildInitialEmployeeStates({
     activeEmployees,
     activeEmployeeIndexById,
-    existingAssignedShifts,
-    dateIndexByDate
+    existingAssignedShifts
   });
   const remainingSlots = slots.filter((slot) => !lockedSlotIds.has(slot.id));
   const slotCandidateSets = remainingSlots.map((slot) =>
@@ -174,8 +176,7 @@ export function buildCoverageCeilingAnalysis({
     slotCandidateSets: orderedSlotCandidateSets,
     activeEmployees,
     employeeWorkRules,
-    initialStates,
-    dateIndexByDate
+    initialStates
   });
   const lockedAssignedSlots = activeExistingAssignments.length;
   const feasibleMaxAssignedSlots = Math.min(
@@ -313,17 +314,15 @@ function searchFeasibleAssignments({
   slotCandidateSets,
   activeEmployees,
   employeeWorkRules,
-  initialStates,
-  dateIndexByDate
+  initialStates
 }: {
   slotCandidateSets: SlotCandidateSet[];
   activeEmployees: Employee[];
   employeeWorkRules: EmployeeWorkRules[];
   initialStates: EmployeeState[];
-  dateIndexByDate: Map<string, number>;
 }): { assignedSlots: number; isApproximate: boolean } {
   const memo = new Map<string, number>();
-  const states = initialStates.map((state) => ({ ...state }));
+  const states = initialStates.map(cloneEmployeeState);
   let visitedStates = 0;
   let exceededStateBudget = false;
 
@@ -339,8 +338,7 @@ function searchFeasibleAssignments({
         slotCandidateSets: slotCandidateSets.slice(slotIndex),
         activeEmployees,
         employeeWorkRules,
-        states,
-        dateIndexByDate
+        states
       });
     }
 
@@ -361,18 +359,17 @@ function searchFeasibleAssignments({
           employee: activeEmployees[employeeIndex],
           employeeWorkRules,
           state: states[employeeIndex],
-          slot: slotCandidateSet.slot,
-          dateIndexByDate
+          slot: slotCandidateSet.slot
         })
       ) {
         continue;
       }
 
-      const previousState = { ...states[employeeIndex] };
+      const previousState = cloneEmployeeState(states[employeeIndex]);
       applySlotToEmployeeState({
         state: states[employeeIndex],
-        slot: slotCandidateSet.slot,
-        dateIndexByDate
+        employeeId: activeEmployees[employeeIndex].id,
+        slot: slotCandidateSet.slot
       });
       best = Math.max(best, 1 + search(slotIndex + 1));
       states[employeeIndex] = previousState;
@@ -396,16 +393,14 @@ function greedyFeasibleAssignments({
   slotCandidateSets,
   activeEmployees,
   employeeWorkRules,
-  states,
-  dateIndexByDate
+  states
 }: {
   slotCandidateSets: SlotCandidateSet[];
   activeEmployees: Employee[];
   employeeWorkRules: EmployeeWorkRules[];
   states: EmployeeState[];
-  dateIndexByDate: Map<string, number>;
 }): number {
-  const workingStates = states.map((state) => ({ ...state }));
+  const workingStates = states.map(cloneEmployeeState);
   let assignedSlots = 0;
 
   for (const slotCandidateSet of slotCandidateSets) {
@@ -415,16 +410,15 @@ function greedyFeasibleAssignments({
           employee: activeEmployees[candidateIndex],
           employeeWorkRules,
           state: workingStates[candidateIndex],
-          slot: slotCandidateSet.slot,
-          dateIndexByDate
+          slot: slotCandidateSet.slot
         })
       )
       .sort((left, right) => {
         const leftState = workingStates[left];
         const rightState = workingStates[right];
         return (
-          countBits(leftState.dateMask) - countBits(rightState.dateMask) ||
           leftState.hoursUnits - rightState.hoursUnits ||
+          leftState.shiftCount - rightState.shiftCount ||
           employeeLabel(activeEmployees[left]).localeCompare(
             employeeLabel(activeEmployees[right])
           ) ||
@@ -438,8 +432,8 @@ function greedyFeasibleAssignments({
 
     applySlotToEmployeeState({
       state: workingStates[employeeIndex],
-      slot: slotCandidateSet.slot,
-      dateIndexByDate
+      employeeId: activeEmployees[employeeIndex].id,
+      slot: slotCandidateSet.slot
     });
     assignedSlots += 1;
   }
@@ -451,28 +445,43 @@ function canAssignEmployeeToSlot({
   employee,
   employeeWorkRules,
   state,
-  slot,
-  dateIndexByDate
+  slot
 }: {
   employee: Employee;
   employeeWorkRules: EmployeeWorkRules[];
   state: EmployeeState;
   slot: ScheduleSlot;
-  dateIndexByDate: Map<string, number>;
 }): boolean {
-  const dateIndex = dateIndexByDate.get(slot.date);
-  const dateBit = dateIndex === undefined ? 0 : 1 << dateIndex;
+  const candidate = buildAssignedShift(slot, employee.id);
 
-  if (dateBit !== 0 && (state.dateMask & dateBit) !== 0) {
+  if (
+    state.assignedIntervals.some((interval) =>
+      intervalsOverlap(candidate.interval, interval)
+    )
+  ) {
     return false;
   }
 
   const workRules = getEmployeeWorkRules(employee.id, employeeWorkRules);
   const maxShifts = getEffectiveMaxShiftsPerWeek(workRules);
-  const projectedShifts = state.shiftCount + 1;
+  const projectedShifts =
+    (state.weeklyShiftCount.get(candidate.weekKey) ?? 0) + 1;
 
   if (maxShifts !== null && projectedShifts > maxShifts) {
     return false;
+  }
+
+  if (workRules && workRules.max_hours_per_day !== null) {
+    const maxDailyMinutes = Math.round(workRules.max_hours_per_day * 60);
+
+    for (const contribution of candidate.dailyContributions) {
+      const projectedMinutes =
+        (state.dailyMinutes.get(contribution.date) ?? 0) + contribution.minutes;
+
+      if (projectedMinutes > maxDailyMinutes) {
+        return false;
+      }
+    }
   }
 
   return true;
@@ -480,38 +489,50 @@ function canAssignEmployeeToSlot({
 
 function applySlotToEmployeeState({
   state,
-  slot,
-  dateIndexByDate
+  employeeId,
+  slot
 }: {
   state: EmployeeState;
+  employeeId: string;
   slot: ScheduleSlot;
-  dateIndexByDate: Map<string, number>;
 }) {
-  const dateIndex = dateIndexByDate.get(slot.date);
+  applyAssignedShiftToEmployeeState(state, buildAssignedShift(slot, employeeId));
+}
 
-  if (dateIndex !== undefined) {
-    state.dateMask |= 1 << dateIndex;
+function applyAssignedShiftToEmployeeState(
+  state: EmployeeState,
+  assignedShift: AssignedShift
+) {
+  state.assignedIntervals.push(assignedShift.interval);
+  state.weeklyShiftCount.set(
+    assignedShift.weekKey,
+    (state.weeklyShiftCount.get(assignedShift.weekKey) ?? 0) + 1
+  );
+  for (const contribution of assignedShift.dailyContributions) {
+    state.dailyMinutes.set(
+      contribution.date,
+      (state.dailyMinutes.get(contribution.date) ?? 0) + contribution.minutes
+    );
   }
-
-  state.hoursUnits += toHourUnits(getSlotDurationHours(slot));
+  state.hoursUnits += toHourUnits(assignedShift.durationMinutes / 60);
   state.shiftCount += 1;
 }
 
 function buildInitialEmployeeStates({
   activeEmployees,
   activeEmployeeIndexById,
-  existingAssignedShifts,
-  dateIndexByDate
+  existingAssignedShifts
 }: {
   activeEmployees: Employee[];
   activeEmployeeIndexById: Map<string, number>;
   existingAssignedShifts: AssignedShift[];
-  dateIndexByDate: Map<string, number>;
 }): EmployeeState[] {
   const states = activeEmployees.map(() => ({
-    dateMask: 0,
     hoursUnits: 0,
-    shiftCount: 0
+    shiftCount: 0,
+    assignedIntervals: [],
+    dailyMinutes: new Map<string, number>(),
+    weeklyShiftCount: new Map<string, number>()
   }));
 
   for (const assignedShift of existingAssignedShifts) {
@@ -521,12 +542,7 @@ function buildInitialEmployeeStates({
       continue;
     }
 
-    const dateIndex = dateIndexByDate.get(assignedShift.date);
-    if (dateIndex !== undefined) {
-      states[employeeIndex].dateMask |= 1 << dateIndex;
-    }
-    states[employeeIndex].hoursUnits += toHourUnits(assignedShift.durationHours);
-    states[employeeIndex].shiftCount += 1;
+    applyAssignedShiftToEmployeeState(states[employeeIndex], assignedShift);
   }
 
   return states;
@@ -663,7 +679,21 @@ function employeeLabel(employee: Employee): string {
 
 function stateSignature(states: EmployeeState[]): string {
   return states
-    .map((state) => `${state.dateMask}:${state.hoursUnits}:${state.shiftCount}`)
+    .map((state) => {
+      const intervals = state.assignedIntervals
+        .map((interval) => `${interval.startMs}-${interval.endMs}`)
+        .sort()
+        .join(".");
+      const daily = [...state.dailyMinutes.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([date, minutes]) => `${date}:${minutes}`)
+        .join(".");
+      const weekly = [...state.weeklyShiftCount.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([weekKey, count]) => `${weekKey}:${count}`)
+        .join(".");
+      return `${state.hoursUnits}:${state.shiftCount}:${intervals}:${daily}:${weekly}`;
+    })
     .join(",");
 }
 
@@ -671,14 +701,12 @@ function toHourUnits(hours: number): number {
   return Math.ceil(hours * hourUnit);
 }
 
-function countBits(value: number): number {
-  let count = 0;
-  let current = value;
-
-  while (current > 0) {
-    count += current & 1;
-    current >>= 1;
-  }
-
-  return count;
+function cloneEmployeeState(state: EmployeeState): EmployeeState {
+  return {
+    hoursUnits: state.hoursUnits,
+    shiftCount: state.shiftCount,
+    assignedIntervals: [...state.assignedIntervals],
+    dailyMinutes: new Map(state.dailyMinutes),
+    weeklyShiftCount: new Map(state.weeklyShiftCount)
+  };
 }

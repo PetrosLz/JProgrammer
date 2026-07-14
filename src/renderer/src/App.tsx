@@ -465,6 +465,7 @@ function renderPage(
         employeeWorkRules={summary.employeeWorkRules}
         employeeDayConstraints={summary.employeeDayConstraints}
         employeeShiftAvailability={summary.employeeShiftAvailability}
+        employeeTimeConstraints={summary.employeeTimeConstraints}
         timeOff={summary.timeOff}
         roles={summary.roles}
         shiftTemplates={summary.shiftTemplates}
@@ -489,6 +490,7 @@ function renderPage(
         employeeWorkRules={summary.employeeWorkRules}
         employeeDayConstraints={summary.employeeDayConstraints}
         employeeShiftAvailability={summary.employeeShiftAvailability}
+        employeeTimeConstraints={summary.employeeTimeConstraints}
         timeOff={summary.timeOff}
         roles={summary.roles}
         shiftTemplates={summary.shiftTemplates}

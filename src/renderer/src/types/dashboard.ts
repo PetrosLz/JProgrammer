@@ -4,6 +4,7 @@ import type {
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   OpeningHours,
   Role,
@@ -33,6 +34,7 @@ export type DashboardSummary = {
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability: EmployeeShiftAvailability[];
+  employeeTimeConstraints: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   setupCompletedAt: string | null;
 };
@@ -53,6 +55,7 @@ export const emptySummary: DashboardSummary = {
   employeeWorkRules: [],
   employeeDayConstraints: [],
   employeeShiftAvailability: [],
+  employeeTimeConstraints: [],
   timeOff: [],
   setupCompletedAt: null
 };

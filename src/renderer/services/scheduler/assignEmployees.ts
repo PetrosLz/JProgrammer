@@ -1,9 +1,11 @@
 import { databaseApi } from "../databaseApi";
 import type {
   Employee,
+  DayOfWeek,
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
@@ -21,8 +23,8 @@ import {
   buildExistingAssignedShifts,
   checkHardConstraints,
   employeeHasRole,
-  getAssignedDayCount,
   getAssignedHours,
+  getAssignedShiftCount,
   getDayConstraint,
   getEmployeeRoleExperienceLevel,
   getEmployeeShiftAvailability,
@@ -33,7 +35,6 @@ import {
   getSlotShiftTemplateId,
   getNightShiftCount,
   getWeekendShiftCount,
-  hasAssignmentOnDate,
   hasOverlappingShift,
   hasTimeOffOnDate,
   isNightOrDifficultShift,
@@ -217,11 +218,13 @@ export async function assignEmployeesToRun({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability = [],
+  employeeTimeConstraints = [],
   timeOff,
   assignments,
   roles = [],
   shiftTemplates = [],
   staffingRequirements = [],
+  weekStartsOn = 1,
   manualOverrides = {}
 }: {
   run: ScheduleRun;
@@ -231,11 +234,13 @@ export async function assignEmployeesToRun({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   assignments: ScheduleAssignment[];
   roles?: Role[];
   shiftTemplates?: ShiftTemplate[];
   staffingRequirements?: StaffingRequirement[];
+  weekStartsOn?: DayOfWeek;
   manualOverrides?: ManualOverrideMap;
 }): Promise<AssignmentResult> {
   const runSlots = slots
@@ -259,8 +264,10 @@ export async function assignEmployeesToRun({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     staffingRequirements,
-    timeOff
+    timeOff,
+    weekStartsOn
   };
   const optimizationConfig = defaultSchedulerOptimizationConfig;
   const initialAssignedShifts: AssignedShift[] = buildExistingAssignedShifts({
@@ -290,9 +297,11 @@ export async function assignEmployeesToRun({
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       timeOff,
       staffingRequirements,
       shiftTemplates,
+      weekStartsOn,
       manualOverrides
     });
     await updateRunStatus(
@@ -424,9 +433,11 @@ export async function assignEmployeesToRun({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     timeOff,
     staffingRequirements,
     shiftTemplates,
+    weekStartsOn,
     manualOverrides
   });
 
@@ -516,11 +527,13 @@ export function optimizeScheduleInMemory({
   employeeWorkRules,
   employeeDayConstraints,
   employeeShiftAvailability = [],
+  employeeTimeConstraints = [],
   timeOff,
   assignments,
   roles = [],
   shiftTemplates = [],
   staffingRequirements = [],
+  weekStartsOn = 1,
   manualOverrides = {}
 }: {
   run: ScheduleRun;
@@ -530,11 +543,13 @@ export function optimizeScheduleInMemory({
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   timeOff: TimeOff[];
   assignments: ScheduleAssignment[];
   roles?: Role[];
   shiftTemplates?: ShiftTemplate[];
   staffingRequirements?: StaffingRequirement[];
+  weekStartsOn?: DayOfWeek;
   manualOverrides?: ManualOverrideMap;
 }): InMemoryScheduleOptimizationResult {
   const runSlots = slots
@@ -558,8 +573,10 @@ export function optimizeScheduleInMemory({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     staffingRequirements,
-    timeOff
+    timeOff,
+    weekStartsOn
   };
   const initialAssignedShifts = buildExistingAssignedShifts({
     slots: runSlots,
@@ -589,9 +606,11 @@ export function optimizeScheduleInMemory({
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       timeOff,
       staffingRequirements,
       shiftTemplates,
+      weekStartsOn,
       manualOverrides
     });
 
@@ -749,9 +768,11 @@ export function optimizeScheduleInMemory({
     employeeWorkRules,
     employeeDayConstraints,
     employeeShiftAvailability,
+    employeeTimeConstraints,
     timeOff,
     staffingRequirements,
     shiftTemplates,
+    weekStartsOn,
     manualOverrides
   });
 
@@ -2308,9 +2329,11 @@ function scoreCandidateSchedule({
     employeeWorkRules: data.employeeWorkRules,
     employeeDayConstraints: data.employeeDayConstraints,
     employeeShiftAvailability: data.employeeShiftAvailability ?? [],
+    employeeTimeConstraints: data.employeeTimeConstraints ?? [],
     timeOff: data.timeOff,
     staffingRequirements,
     shiftTemplates,
+    weekStartsOn: data.weekStartsOn ?? 1,
     manualOverrides
   });
   const evaluationHardConstraintViolations = evaluation.hardViolations.map(
@@ -2847,8 +2870,8 @@ function buildScoringContext({
     (sum, item) => sum + getAssignedHours(item.id, assignedShifts),
     0
   );
-  const totalDays = activeEmployees.reduce(
-    (sum, item) => sum + getAssignedDayCount(item.id, assignedShifts),
+  const totalShiftBlocks = activeEmployees.reduce(
+    (sum, item) => sum + getAssignedShiftCount(item.id, assignedShifts),
     0
   );
   const totalWeekendAssignments = activeEmployees.reduce(
@@ -2918,7 +2941,7 @@ function buildScoringContext({
 
   return {
     averageAssignedHours: totalHours / divisor,
-    averageAssignedDays: totalDays / divisor,
+    averageAssignedDays: totalShiftBlocks / divisor,
     averageWeekendAssignments: totalWeekendAssignments / divisor,
     averageDifficultAssignments: totalDifficultAssignments / divisor,
     averageRecentWeekendAssignments: totalRecentWeekendAssignments / divisor,
@@ -3573,9 +3596,10 @@ function buildDiagnosticUnfilledSlotMessage({
     cannotWork: 0,
     shiftUnavailable: 0,
     insufficientExperience: 0,
-    maxHours: 0,
-    maxDays: 0,
-    sameDayAssignment: 0,
+    maxDailyHours: 0,
+    maxWeeklyShifts: 0,
+    timeWindowUnavailable: 0,
+    weekendUnavailable: 0,
     overlap: 0,
     missingRole: 0
   };
@@ -3622,14 +3646,6 @@ function buildDiagnosticUnfilledSlotMessage({
       blocked.shiftUnavailable += 1;
     }
 
-    if (hasAssignmentOnDate(employee.id, slot.date, assignedShifts)) {
-      blocked.sameDayAssignment += 1;
-    }
-
-    if (hasOverlappingShift(employee.id, slot, assignedShifts)) {
-      blocked.overlap += 1;
-    }
-
     const hardConstraintResult = checkHardConstraints({
       employee,
       slot,
@@ -3637,14 +3653,33 @@ function buildDiagnosticUnfilledSlotMessage({
       assignedShifts,
       manualOverrides
     });
-    const reasons = hardConstraintResult.reasons.join(" ");
 
-    if (reasons.includes("max weekly hours")) {
-      blocked.maxHours += 1;
+    if (hardConstraintResult.violations.some((item) => item.code === "SHIFT_OVERLAP")) {
+      blocked.overlap += 1;
     }
 
-    if (reasons.includes("max weekly days")) {
-      blocked.maxDays += 1;
+    if (hardConstraintResult.violations.some((item) => item.code === "MAX_DAILY_HOURS")) {
+      blocked.maxDailyHours += 1;
+    }
+
+    if (hardConstraintResult.violations.some((item) => item.code === "MAX_WEEKLY_SHIFTS")) {
+      blocked.maxWeeklyShifts += 1;
+    }
+
+    if (
+      hardConstraintResult.violations.some(
+        (item) => item.code === "TIME_WINDOW_UNAVAILABLE"
+      )
+    ) {
+      blocked.timeWindowUnavailable += 1;
+    }
+
+    if (
+      hardConstraintResult.violations.some(
+        (item) => item.code === "WEEKEND_NOT_ALLOWED"
+      )
+    ) {
+      blocked.weekendUnavailable += 1;
     }
   }
   const groupSlots = getRoleGroupSlots({ slot, slots: runSlots, staffingRequirements });
@@ -3685,9 +3720,10 @@ function buildDiagnosticUnfilledSlotMessage({
     `Blocked by time off: ${blocked.timeOff}.`,
     `Blocked by cannot_work: ${blocked.cannotWork}.`,
     `Blocked by shift availability: ${blocked.shiftUnavailable}.`,
-    `Blocked by same-day assignment: ${blocked.sameDayAssignment}.`,
-    `Blocked by max hours: ${blocked.maxHours}.`,
-    `Blocked by max days: ${blocked.maxDays}.`,
+    `Blocked by daily-hour limit: ${blocked.maxDailyHours}.`,
+    `Blocked by weekly-shift limit: ${blocked.maxWeeklyShifts}.`,
+    `Blocked by time-window restriction: ${blocked.timeWindowUnavailable}.`,
+    `Blocked by weekend restriction: ${blocked.weekendUnavailable}.`,
     `Blocked by overlap: ${blocked.overlap}.`,
     `Missing role: ${blocked.missingRole}.`
   ].join(" ");
@@ -3857,6 +3893,11 @@ function buildCoverageGroupShortageMessage({
     availableAfterHardConstraints: 0,
     blockedByTimeOff: 0,
     blockedByCannotWork: 0,
+    blockedByOverlap: 0,
+    blockedByDailyHours: 0,
+    blockedByWeeklyShifts: 0,
+    blockedByTimeWindow: 0,
+    blockedByWeekend: 0,
     blockedBySameDayAssignment: 0,
     blockedByMaxHours: 0,
     blockedByMaxDays: 0,
@@ -3892,10 +3933,6 @@ function buildCoverageGroupShortageMessage({
       diagnostics.blockedByCannotWork += 1;
     }
 
-    if (hasAssignmentOnDate(employee.id, slot.date, assignedShifts)) {
-      diagnostics.blockedBySameDayAssignment += 1;
-    }
-
     const hardConstraintResult = checkHardConstraints({
       employee,
       slot,
@@ -3908,16 +3945,38 @@ function buildCoverageGroupShortageMessage({
       diagnostics.availableAfterHardConstraints += 1;
     }
 
-    const reasons = hardConstraintResult.reasons.join(" ");
-
-    if (reasons.includes("max weekly hours")) {
-      diagnostics.blockedByMaxHours += 1;
+    if (hardConstraintResult.violations.some((item) => item.code === "SHIFT_OVERLAP")) {
+      diagnostics.blockedByOverlap += 1;
     }
 
-    if (reasons.includes("max weekly days")) {
-      diagnostics.blockedByMaxDays += 1;
+    if (hardConstraintResult.violations.some((item) => item.code === "MAX_DAILY_HOURS")) {
+      diagnostics.blockedByDailyHours += 1;
+    }
+
+    if (hardConstraintResult.violations.some((item) => item.code === "MAX_WEEKLY_SHIFTS")) {
+      diagnostics.blockedByWeeklyShifts += 1;
+    }
+
+    if (
+      hardConstraintResult.violations.some(
+        (item) => item.code === "TIME_WINDOW_UNAVAILABLE"
+      )
+    ) {
+      diagnostics.blockedByTimeWindow += 1;
+    }
+
+    if (
+      hardConstraintResult.violations.some(
+        (item) => item.code === "WEEKEND_NOT_ALLOWED"
+      )
+    ) {
+      diagnostics.blockedByWeekend += 1;
     }
   }
+
+  diagnostics.blockedBySameDayAssignment = diagnostics.blockedByOverlap;
+  diagnostics.blockedByMaxHours = diagnostics.blockedByDailyHours;
+  diagnostics.blockedByMaxDays = diagnostics.blockedByWeeklyShifts;
 
   const header =
     group.assignedCount === 0
@@ -4077,8 +4136,8 @@ function compareCandidates(
     right.score.totalScore - left.score.totalScore ||
     getAssignedHours(left.employee.id, assignedShifts) -
       getAssignedHours(right.employee.id, assignedShifts) ||
-    getAssignedDayCount(left.employee.id, assignedShifts) -
-      getAssignedDayCount(right.employee.id, assignedShifts) ||
+    getAssignedShiftCount(left.employee.id, assignedShifts) -
+      getAssignedShiftCount(right.employee.id, assignedShifts) ||
     getWeekendShiftCount(left.employee.id, assignedShifts) -
       getWeekendShiftCount(right.employee.id, assignedShifts) ||
     getNightShiftCount(left.employee.id, assignedShifts) -

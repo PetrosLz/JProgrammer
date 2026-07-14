@@ -54,10 +54,26 @@ export {
   checkHardConstraints,
   getSlotDurationHours,
   type AssignedShift,
+  type HardConstraintViolation,
+  type HardConstraintViolationCode,
   type HardConstraintResult,
+  type ManualOverride,
   type ManualOverrideMap,
   type SchedulerData
 } from "./constraints";
+export {
+  validateScheduleHardConstraints,
+  type ScheduleValidationResult
+} from "./evaluation/scheduleValidator";
+export {
+  buildShiftInterval,
+  getShiftDurationMinutes,
+  getWeekKey,
+  intervalsOverlap,
+  splitShiftMinutesByDate,
+  type AbsoluteShiftInterval,
+  type DailyMinuteContribution
+} from "./model/workingTime";
 export {
   buildAssignmentExplanation,
   buildUnfilledSlotMessage

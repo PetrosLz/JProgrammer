@@ -24,6 +24,7 @@ export function useDashboardSummary() {
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       timeOff,
       setupCompletedAt
     ] = await Promise.all([
@@ -42,6 +43,7 @@ export function useDashboardSummary() {
       databaseApi.listRecords("employee_work_rules", { limit: 500 }),
       databaseApi.listRecords("employee_day_constraints", { limit: 4000 }),
       databaseApi.listRecords("employee_shift_availability", { limit: 4000 }),
+      databaseApi.listRecords("employee_time_constraints", { limit: 4000 }),
       databaseApi.listRecords("time_off", { limit: 1000 }),
       databaseApi.getSetting(setupCompletedKey)
     ]);
@@ -62,6 +64,7 @@ export function useDashboardSummary() {
       employeeWorkRules,
       employeeDayConstraints,
       employeeShiftAvailability,
+      employeeTimeConstraints,
       timeOff,
       setupCompletedAt: setupCompletedAt?.value ?? null
     });

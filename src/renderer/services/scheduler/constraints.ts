@@ -4,6 +4,7 @@ import type {
   EmployeeDayConstraint,
   EmployeeRole,
   EmployeeShiftAvailability,
+  EmployeeTimeConstraint,
   EmployeeWorkRules,
   ExperienceLevel,
   ScheduleAssignment,
@@ -16,11 +17,53 @@ import {
   normalizeExperienceLevel,
   skillLevelToExperienceLevel
 } from "../../types";
-import { getDayOfWeek } from "./generateSlots";
+import {
+  type AbsoluteShiftInterval,
+  type DailyMinuteContribution,
+  buildShiftInterval,
+  dateToDayNumber,
+  getDayOfWeekFromDate,
+  getShiftDurationMinutes,
+  getWeekKey,
+  intervalsOverlap,
+  splitShiftMinutesByDate,
+  timeToMinutes
+} from "./model/workingTime";
 
-const dayInMs = 24 * 60 * 60 * 1000;
+export const hardConstraintViolationCodes = [
+  "INACTIVE_EMPLOYEE",
+  "MISSING_ROLE",
+  "INSUFFICIENT_EXPERIENCE",
+  "TIME_OFF",
+  "DAY_UNAVAILABLE",
+  "SHIFT_UNAVAILABLE",
+  "TIME_WINDOW_UNAVAILABLE",
+  "SHIFT_OVERLAP",
+  "MAX_DAILY_HOURS",
+  "MAX_WEEKLY_SHIFTS",
+  "WEEKEND_NOT_ALLOWED",
+  "INVALID_SHIFT_INTERVAL"
+] as const;
 
-export type ManualOverrideMap = Record<string, string[]>;
+export type HardConstraintViolationCode =
+  (typeof hardConstraintViolationCodes)[number];
+
+export type HardConstraintViolation = {
+  code: HardConstraintViolationCode;
+  message: string;
+  employeeId: string;
+  slotId: string;
+  metadata?: Record<string, string | number | boolean | null>;
+};
+
+export type ManualOverride = {
+  slotId: string;
+  employeeId: string;
+  allowedViolationCodes: HardConstraintViolationCode[];
+  reason: string;
+};
+
+export type ManualOverrideMap = Record<string, Array<string | ManualOverride>>;
 
 export type AssignedShift = {
   employeeId: string;
@@ -29,6 +72,10 @@ export type AssignedShift = {
   startTime: string;
   endTime: string;
   durationHours: number;
+  durationMinutes: number;
+  interval: AbsoluteShiftInterval;
+  dailyContributions: DailyMinuteContribution[];
+  weekKey: string;
 };
 
 export type SchedulerData = {
@@ -36,35 +83,67 @@ export type SchedulerData = {
   employeeWorkRules: EmployeeWorkRules[];
   employeeDayConstraints: EmployeeDayConstraint[];
   employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
   staffingRequirements?: StaffingRequirement[];
   timeOff: TimeOff[];
+  weekStartsOn?: DayOfWeek;
+  timezone?: string | null;
 };
 
 export type HardConstraintResult = {
   allowed: boolean;
+  violations: HardConstraintViolation[];
   reasons: string[];
 };
 
 export function buildAssignedShift(
   slot: ScheduleSlot,
-  employeeId: string
+  employeeId: string,
+  data?: Pick<SchedulerData, "weekStartsOn" | "timezone">
 ): AssignedShift {
+  const interval = buildShiftInterval({
+    date: slot.date,
+    startTime: slot.start_time,
+    endTime: slot.end_time,
+    timezone: data?.timezone
+  });
+  const durationMinutes = getShiftDurationMinutes({
+    date: slot.date,
+    startTime: slot.start_time,
+    endTime: slot.end_time,
+    timezone: data?.timezone
+  });
+
   return {
     employeeId,
     slotId: slot.id,
     date: slot.date,
     startTime: slot.start_time,
     endTime: slot.end_time,
-    durationHours: getSlotDurationHours(slot)
+    durationHours: durationMinutes / 60,
+    durationMinutes,
+    interval,
+    dailyContributions: splitShiftMinutesByDate({
+      date: slot.date,
+      startTime: slot.start_time,
+      endTime: slot.end_time,
+      timezone: data?.timezone
+    }),
+    weekKey: getWeekKey({
+      date: slot.date,
+      weekStartsOn: data?.weekStartsOn ?? 1
+    })
   };
 }
 
 export function buildExistingAssignedShifts({
   slots,
-  assignments
+  assignments,
+  data
 }: {
   slots: ScheduleSlot[];
   assignments: ScheduleAssignment[];
+  data?: Pick<SchedulerData, "weekStartsOn" | "timezone">;
 }): AssignedShift[] {
   const slotById = new Map(slots.map((slot) => [slot.id, slot]));
 
@@ -80,7 +159,7 @@ export function buildExistingAssignedShifts({
         return [];
       }
 
-      return [buildAssignedShift(slot, assignment.employee_id)];
+      return [buildAssignedShift(slot, assignment.employee_id, data)];
     });
 }
 
@@ -97,14 +176,44 @@ export function checkHardConstraints({
   assignedShifts: AssignedShift[];
   manualOverrides?: ManualOverrideMap;
 }): HardConstraintResult {
-  const reasons: string[] = [];
+  const violations: HardConstraintViolation[] = [];
+  const weekStartsOn = data.weekStartsOn ?? 1;
+  const timezone = data.timezone;
+  let candidateShift: AssignedShift | null = null;
+
+  function addViolation(
+    code: HardConstraintViolationCode,
+    message: string,
+    metadata?: Record<string, string | number | boolean | null>
+  ) {
+    if (isViolationOverridden({ manualOverrides, slot, employee, code })) {
+      return;
+    }
+
+    violations.push({
+      code,
+      message,
+      employeeId: employee.id,
+      slotId: slot.id,
+      metadata
+    });
+  }
+
+  try {
+    candidateShift = buildAssignedShift(slot, employee.id, {
+      weekStartsOn,
+      timezone
+    });
+  } catch (error) {
+    addViolation("INVALID_SHIFT_INTERVAL", getErrorMessage(error));
+  }
 
   if (employee.is_active !== 1) {
-    reasons.push("Employee is inactive.");
+    addViolation("INACTIVE_EMPLOYEE", "Employee is inactive.");
   }
 
   if (!employeeHasRole(employee.id, slot.role_id, data.employeeRoles)) {
-    reasons.push("Employee does not have the required role.");
+    addViolation("MISSING_ROLE", "Employee does not have the required role.");
   } else {
     const employeeExperienceLevel = getEmployeeRoleExperienceLevel(
       employee.id,
@@ -119,24 +228,36 @@ export function checkHardConstraints({
     if (
       !meetsMinimumExperience(employeeExperienceLevel, requiredExperienceLevel)
     ) {
-      reasons.push(
+      addViolation(
+        "INSUFFICIENT_EXPERIENCE",
         "Employee does not meet the required experience level for this role."
       );
     }
   }
 
-  if (hasTimeOffOnDate(employee.id, slot.date, data.timeOff)) {
-    reasons.push("Employee has time off on this date.");
-  }
+  const touchedDates = candidateShift?.dailyContributions.map((item) => item.date) ?? [
+    slot.date
+  ];
 
-  const dayConstraint = getDayConstraint(
-    employee.id,
-    getDayOfWeek(slot.date),
-    data.employeeDayConstraints
-  );
+  for (const touchedDate of touchedDates) {
+    if (hasTimeOffOnDate(employee.id, touchedDate, data.timeOff)) {
+      addViolation("TIME_OFF", "Employee has time off on this date.", {
+        date: touchedDate
+      });
+    }
 
-  if (dayConstraint?.constraint_type === "cannot_work") {
-    reasons.push("Employee cannot work on this day.");
+    const dayConstraint = getDayConstraint(
+      employee.id,
+      getDayOfWeek(touchedDate),
+      data.employeeDayConstraints
+    );
+
+    if (dayConstraint?.constraint_type === "cannot_work") {
+      addViolation("DAY_UNAVAILABLE", "Employee cannot work on this day.", {
+        date: touchedDate,
+        dayOfWeek: getDayOfWeek(touchedDate)
+      });
+    }
   }
 
   const shiftAvailability = getEmployeeShiftAvailability({
@@ -146,37 +267,110 @@ export function checkHardConstraints({
   });
 
   if (shiftAvailability?.availability_type === "cannot_work") {
-    reasons.push("Employee is not available for this shift.");
+    addViolation("SHIFT_UNAVAILABLE", "Employee is not available for this shift.");
   }
 
-  if (hasAssignmentOnDate(employee.id, slot.date, assignedShifts)) {
-    reasons.push("Employee already has a shift on this date.");
-  }
+  if (candidateShift) {
+    const overlappingShift = getOverlappingShift(
+      employee.id,
+      candidateShift.interval,
+      assignedShifts
+    );
 
-  if (hasOverlappingShift(employee.id, slot, assignedShifts)) {
-    reasons.push("Employee already has an overlapping shift.");
-  }
+    if (overlappingShift) {
+      addViolation("SHIFT_OVERLAP", "Employee already has an overlapping shift.", {
+        conflictingSlotId: overlappingShift.slotId,
+        conflictingStart: overlappingShift.startTime,
+        conflictingEnd: overlappingShift.endTime
+      });
+    }
 
-  const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
-  const hasMaxShiftsOverride = manualOverrides[slot.id]?.includes(employee.id);
-  const maxShiftsPerWeek = getEffectiveMaxShiftsPerWeek(workRules);
-
-  if (isWeekendDate(slot.date) && workRules?.can_work_weekends === 0) {
-    reasons.push("Employee cannot work weekends.");
-  }
-
-  if (maxShiftsPerWeek !== null && !hasMaxShiftsOverride) {
-    const projectedShifts = getAssignedShiftCount(employee.id, assignedShifts) + 1;
-
-    if (projectedShifts > maxShiftsPerWeek) {
-      reasons.push(
-        `Employee would exceed max weekly shifts (${projectedShifts}/${maxShiftsPerWeek}).`
+    for (const constraint of getOverlappingCannotWorkTimeConstraints({
+      employeeId: employee.id,
+      candidateShift,
+      constraints: data.employeeTimeConstraints ?? [],
+      timezone
+    })) {
+      addViolation(
+        "TIME_WINDOW_UNAVAILABLE",
+        "Employee cannot work during this time window.",
+        {
+          constraintId: constraint.id,
+          date: constraint.date,
+          dayOfWeek: constraint.day_of_week,
+          startTime: constraint.start_time,
+          endTime: constraint.end_time
+        }
       );
     }
   }
 
+  const workRules = getEmployeeWorkRules(employee.id, data.employeeWorkRules);
+  const maxShiftsPerWeek = getEffectiveMaxShiftsPerWeek(workRules);
+
+  if (
+    workRules?.can_work_weekends === 0 &&
+    touchedDates.some((date) => isWeekendDate(date))
+  ) {
+    addViolation("WEEKEND_NOT_ALLOWED", "Employee cannot work weekends.", {
+      dates: touchedDates.join(",")
+    });
+  }
+
+  if (candidateShift && workRules && workRules.max_hours_per_day !== null) {
+    const maximumMinutes = Math.round(workRules.max_hours_per_day * 60);
+
+    for (const contribution of candidateShift.dailyContributions) {
+      const existingMinutes = getAssignedMinutesOnDate(
+        employee.id,
+        contribution.date,
+        assignedShifts
+      );
+      const projectedMinutes = existingMinutes + contribution.minutes;
+
+      if (projectedMinutes > maximumMinutes) {
+        addViolation(
+          "MAX_DAILY_HOURS",
+          `Employee would exceed max daily hours (${formatMinutesAsHours(projectedMinutes)}/${formatMinutesAsHours(maximumMinutes)}).`,
+          {
+            date: contribution.date,
+            existingMinutes,
+            candidateMinutes: contribution.minutes,
+            projectedMinutes,
+            maximumMinutes
+          }
+        );
+      }
+    }
+  }
+
+  if (candidateShift && maxShiftsPerWeek !== null) {
+    const existingShiftCount = getAssignedShiftCountForWeek(
+      employee.id,
+      candidateShift.weekKey,
+      assignedShifts
+    );
+    const projectedShiftCount = existingShiftCount + 1;
+
+    if (projectedShiftCount > maxShiftsPerWeek) {
+      addViolation(
+        "MAX_WEEKLY_SHIFTS",
+        `Employee would exceed max weekly shifts (${projectedShiftCount}/${maxShiftsPerWeek}).`,
+        {
+          weekKey: candidateShift.weekKey,
+          existingShiftCount,
+          projectedShiftCount,
+          maximumShiftCount: maxShiftsPerWeek
+        }
+      );
+    }
+  }
+
+  const reasons = violations.map((violation) => violation.message);
+
   return {
-    allowed: reasons.length === 0,
+    allowed: violations.length === 0,
+    violations,
     reasons
   };
 }
@@ -341,47 +535,23 @@ export function hasOverlappingShift(
   slot: ScheduleSlot,
   assignedShifts: AssignedShift[]
 ): boolean {
-  const slotInterval = getShiftInterval(slot.date, slot.start_time, slot.end_time);
-
-  return assignedShifts.some((assignedShift) => {
-    if (assignedShift.employeeId !== employeeId) {
-      return false;
-    }
-
-    const assignedInterval = getShiftInterval(
-      assignedShift.date,
-      assignedShift.startTime,
-      assignedShift.endTime
-    );
-
-    return (
-      slotInterval.start < assignedInterval.end &&
-      slotInterval.end > assignedInterval.start
-    );
+  const slotInterval = buildShiftInterval({
+    date: slot.date,
+    startTime: slot.start_time,
+    endTime: slot.end_time
   });
-}
 
-export function hasAssignmentOnDate(
-  employeeId: string,
-  date: string,
-  assignedShifts: AssignedShift[]
-): boolean {
-  // TODO: Some businesses may allow split shifts later; maxShiftsPerDay is 1 for the MVP.
-  return assignedShifts.some(
-    (assignedShift) =>
-      assignedShift.employeeId === employeeId && assignedShift.date === date
-  );
+  return getOverlappingShift(employeeId, slotInterval, assignedShifts) !== null;
 }
 
 export function getSlotDurationHours(slot: ScheduleSlot): number {
-  const start = timeToMinutes(slot.start_time);
-  let end = timeToMinutes(slot.end_time);
-
-  if (end <= start) {
-    end += 24 * 60;
-  }
-
-  return (end - start) / 60;
+  return (
+    getShiftDurationMinutes({
+      date: slot.date,
+      startTime: slot.start_time,
+      endTime: slot.end_time
+    }) / 60
+  );
 }
 
 export function getAssignedHours(
@@ -390,7 +560,7 @@ export function getAssignedHours(
 ): number {
   return assignedShifts
     .filter((shift) => shift.employeeId === employeeId)
-    .reduce((total, shift) => total + shift.durationHours, 0);
+    .reduce((total, shift) => total + shift.durationMinutes / 60, 0);
 }
 
 export function getAssignedShiftCount(
@@ -400,22 +570,26 @@ export function getAssignedShiftCount(
   return assignedShifts.filter((shift) => shift.employeeId === employeeId).length;
 }
 
-export function getAssignedDayCount(
+export function getAssignedShiftCountForWeek(
   employeeId: string,
-  assignedShifts: AssignedShift[],
-  extraDate?: string
+  weekKey: string,
+  assignedShifts: AssignedShift[]
 ): number {
-  const dates = new Set(
-    assignedShifts
-      .filter((shift) => shift.employeeId === employeeId)
-      .map((shift) => shift.date)
-  );
+  return assignedShifts.filter(
+    (shift) => shift.employeeId === employeeId && shift.weekKey === weekKey
+  ).length;
+}
 
-  if (extraDate) {
-    dates.add(extraDate);
-  }
-
-  return dates.size;
+export function getAssignedMinutesOnDate(
+  employeeId: string,
+  date: string,
+  assignedShifts: AssignedShift[]
+): number {
+  return assignedShifts
+    .filter((shift) => shift.employeeId === employeeId)
+    .flatMap((shift) => shift.dailyContributions)
+    .filter((contribution) => contribution.date === date)
+    .reduce((total, contribution) => total + contribution.minutes, 0);
 }
 
 export function getWeekendShiftCount(
@@ -423,7 +597,9 @@ export function getWeekendShiftCount(
   assignedShifts: AssignedShift[]
 ): number {
   return assignedShifts.filter(
-    (shift) => shift.employeeId === employeeId && isWeekendDate(shift.date)
+    (shift) =>
+      shift.employeeId === employeeId &&
+      shift.dailyContributions.some((item) => isWeekendDate(item.date))
   ).length;
 }
 
@@ -471,6 +647,10 @@ export function isWeekendDate(date: string): boolean {
   return dayOfWeek === 0 || dayOfWeek === 6;
 }
 
+export function getDayOfWeek(date: string): DayOfWeek {
+  return getDayOfWeekFromDate(date);
+}
+
 export function isNightOrDifficultShift(
   startTime: string,
   endTime: string
@@ -481,35 +661,100 @@ export function isNightOrDifficultShift(
   return end <= start || start < 6 * 60 || end > 22 * 60;
 }
 
+export function getOverlappingShift(
+  employeeId: string,
+  interval: AbsoluteShiftInterval,
+  assignedShifts: AssignedShift[]
+): AssignedShift | null {
+  return (
+    assignedShifts.find(
+      (assignedShift) =>
+        assignedShift.employeeId === employeeId &&
+        intervalsOverlap(interval, assignedShift.interval)
+    ) ?? null
+  );
+}
+
 export function formatHours(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-function getShiftInterval(
-  date: string,
-  startTime: string,
-  endTime: string
-): { start: number; end: number } {
-  const start = new Date(`${date}T${normalizeTime(startTime)}:00`).getTime();
-  let end = new Date(`${date}T${normalizeTime(endTime)}:00`).getTime();
+function getOverlappingCannotWorkTimeConstraints({
+  employeeId,
+  candidateShift,
+  constraints,
+  timezone
+}: {
+  employeeId: string;
+  candidateShift: AssignedShift;
+  constraints: EmployeeTimeConstraint[];
+  timezone?: string | null;
+}): EmployeeTimeConstraint[] {
+  return constraints.filter((constraint) => {
+    if (
+      constraint.employee_id !== employeeId ||
+      constraint.constraint_type !== "cannot_work"
+    ) {
+      return false;
+    }
 
-  if (end <= start) {
-    end += dayInMs;
-  }
+    const applicableDates = candidateShift.dailyContributions
+      .map((item) => item.date)
+      .filter((date) => {
+        if (constraint.date !== null) {
+          return constraint.date === date;
+        }
 
-  return { start, end };
+        if (constraint.day_of_week !== null) {
+          return constraint.day_of_week === getDayOfWeek(date);
+        }
+
+        return false;
+      });
+
+    return applicableDates.some((date) => {
+      const constraintInterval = buildShiftInterval({
+        date,
+        startTime: constraint.start_time,
+        endTime: constraint.end_time,
+        timezone
+      });
+
+      return intervalsOverlap(candidateShift.interval, constraintInterval);
+    });
+  });
 }
 
-function timeToMinutes(value: string): number {
-  const [hour = "0", minute = "0"] = value.split(":");
-  return Number(hour) * 60 + Number(minute);
+function isViolationOverridden({
+  manualOverrides,
+  slot,
+  employee,
+  code
+}: {
+  manualOverrides: ManualOverrideMap;
+  slot: ScheduleSlot;
+  employee: Employee;
+  code: HardConstraintViolationCode;
+}): boolean {
+  const overrides = manualOverrides[slot.id] ?? [];
+
+  return overrides.some((override) => {
+    if (typeof override === "string") {
+      return override === employee.id && code === "MAX_WEEKLY_SHIFTS";
+    }
+
+    return (
+      override.slotId === slot.id &&
+      override.employeeId === employee.id &&
+      override.allowedViolationCodes.includes(code)
+    );
+  });
 }
 
-function normalizeTime(value: string): string {
-  const [hour = "00", minute = "00"] = value.split(":");
-  return `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+function formatMinutesAsHours(minutes: number): string {
+  return formatHours(minutes / 60);
 }
 
-function dateToDayNumber(date: string): number {
-  return Math.floor(new Date(`${date}T00:00:00`).getTime() / dayInMs);
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

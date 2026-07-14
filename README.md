@@ -2,7 +2,7 @@
 
 ## Scheduler Engine
 
-The scheduler uses hard constraints first: inactive employees, missing roles, time off, `cannot_work`, same-day assignments, overlapping shifts, weekend blocks, and configured max hours/days must never be violated automatically.
+The scheduler uses hard constraints first: inactive employees, missing roles, time off, `cannot_work`, time-window restrictions, overlapping shifts, weekend blocks, configured max daily hours, and configured max weekly shift blocks must never be violated automatically. Multiple shifts on the same date are allowed when they do not overlap and stay within daily-hour and weekly-shift limits.
 
 After hard filtering, schedules are compared with a full-schedule evaluator in `src/renderer/services/scheduler/evaluator.ts`. The evaluator produces a reward, grade, score breakdown, metrics, hard violations, soft warnings, and short explanations. Coverage and hard rules dominate the reward, while contract fit, role coverage, experience balance, preferences, weekend balance, and difficult-shift balance refine the result.
 
