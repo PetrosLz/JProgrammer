@@ -286,7 +286,3 @@ CREATE INDEX IF NOT EXISTS idx_schedule_slots_run_date ON schedule_slots (schedu
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_run_id ON schedule_assignments (schedule_run_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_assignments_slot_id ON schedule_assignments (schedule_slot_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_warnings_run_id ON schedule_warnings (schedule_run_id);
-
-INSERT INTO settings (key, value, updated_at)
-VALUES ('schema_version', '1', datetime('now'))
-ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = datetime('now');
