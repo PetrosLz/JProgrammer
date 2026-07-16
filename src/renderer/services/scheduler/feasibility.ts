@@ -21,7 +21,7 @@ import {
 import { getDayOfWeek } from "./generateSlots";
 import { getRoleGroupKey } from "./teamQuality";
 
-export type FeasibilityStatus = "feasible" | "risky" | "infeasible";
+export type FeasibilityStatus = "feasible" | "risky" | "understaffed";
 
 export type FeasibilityBlockedReasons = {
   timeOff: number;
@@ -276,7 +276,7 @@ export function buildScheduleFeasibilityAnalysis({
   );
   const hasRiskShortage = shortages.length > 0;
   const status: FeasibilityStatus = hasCriticalShortage
-    ? "infeasible"
+    ? "understaffed"
     : hasRiskShortage || totalAvailableHours < totalRequiredHours * 1.1
       ? "risky"
       : "feasible";

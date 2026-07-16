@@ -25,6 +25,7 @@ import type {
   ScheduleWarning,
   ShiftTemplate,
   SpecialDay,
+  SpecialDayStaffingRequirement,
   StaffingRequirement,
   TimeOff
 } from "../../types";
@@ -52,6 +53,7 @@ export function GenerateSchedulePage({
   openingHours,
   staffingRequirements,
   specialDays,
+  specialDayStaffingRequirements,
   scheduleRuns,
   scheduleSlots,
   scheduleAssignments,
@@ -73,6 +75,7 @@ export function GenerateSchedulePage({
   openingHours: OpeningHours[];
   staffingRequirements: StaffingRequirement[];
   specialDays: SpecialDay[];
+  specialDayStaffingRequirements: SpecialDayStaffingRequirement[];
   scheduleRuns: ScheduleRun[];
   scheduleSlots: ScheduleSlot[];
   scheduleAssignments: ScheduleAssignment[];
@@ -123,6 +126,7 @@ export function GenerateSchedulePage({
         weekStartDate: weekRange.weekStartDate,
         openingHours,
         staffingRequirements,
+        specialDayStaffingRequirements,
         shiftTemplates,
         specialDays
       });
@@ -152,9 +156,13 @@ export function GenerateSchedulePage({
           start_time: slot.startTime,
           end_time: slot.endTime,
           required_count: 1,
+          requirement_group_id: slot.requirementGroupId,
+          minimum_experience_level: slot.minimumExperienceLevel,
+          experienced_required_count: slot.experiencedRequiredCount,
           status: "unfilled",
-          source_type: "staffing_requirement",
+          source_type: slot.sourceType,
           source_id: slot.sourceId,
+          slot_number: slot.slotNumber,
           notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`
         });
         createdSlots.push(createdSlot);

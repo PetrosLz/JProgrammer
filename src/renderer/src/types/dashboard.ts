@@ -14,6 +14,7 @@ import type {
   ScheduleWarning,
   ShiftTemplate,
   SpecialDay,
+  SpecialDayStaffingRequirement,
   StaffingRequirement,
   TimeOff
 } from "../../types";
@@ -24,6 +25,7 @@ export type DashboardSummary = {
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
   specialDays: SpecialDay[];
+  specialDayStaffingRequirements: SpecialDayStaffingRequirement[];
   staffingRequirements: StaffingRequirement[];
   scheduleRuns: ScheduleRun[];
   scheduleSlots: ScheduleSlot[];
@@ -45,6 +47,7 @@ export const emptySummary: DashboardSummary = {
   roles: [],
   shiftTemplates: [],
   specialDays: [],
+  specialDayStaffingRequirements: [],
   staffingRequirements: [],
   scheduleRuns: [],
   scheduleSlots: [],

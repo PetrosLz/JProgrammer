@@ -17,7 +17,6 @@ import {
   type DbStoredValue,
   type DbValue,
   type ListRecordsOptions,
-  normalizeStaffingPriority,
   type SettingRecord
 } from "../shared/types";
 
@@ -81,7 +80,6 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "required_count",
       "minimum_experience_level",
       "experienced_required_count",
-      "priority",
       "is_active",
       "notes"
     ],
@@ -98,6 +96,8 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "start_time",
       "end_time",
       "required_count",
+      "minimum_experience_level",
+      "experienced_required_count",
       "notes"
     ],
     defaultOrderBy: "start_time ASC"
@@ -193,9 +193,13 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "start_time",
       "end_time",
       "required_count",
+      "requirement_group_id",
+      "minimum_experience_level",
+      "experienced_required_count",
       "status",
       "source_type",
       "source_id",
+      "slot_number",
       "notes"
     ],
     defaultOrderBy: "date ASC, start_time ASC"
@@ -510,10 +514,6 @@ function sanitizeRecordInput(
 
   if (tableName === "employee_work_rules") {
     validateEmployeeWorkRulesInput(sanitized);
-  }
-
-  if (tableName === "staffing_requirements" && "priority" in sanitized) {
-    sanitized.priority = normalizeStaffingPriority(sanitized.priority);
   }
 
   return sanitized;

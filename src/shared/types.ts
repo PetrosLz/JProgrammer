@@ -41,12 +41,6 @@ export const employmentTypeValues = [
   "custom"
 ] as const;
 export type EmploymentType = (typeof employmentTypeValues)[number];
-export const staffingPriorityValues = [
-  "normal",
-  "high",
-  "critical"
-] as const;
-export type StaffingPriority = (typeof staffingPriorityValues)[number];
 
 export const experienceLevelOptions: Array<{
   value: ExperienceLevel;
@@ -128,12 +122,6 @@ export function meetsMinimumExperience(
   return experienceLevelRank(employeeLevel) >= experienceLevelRank(requiredLevel);
 }
 
-export function normalizeStaffingPriority(value: unknown): StaffingPriority {
-  return staffingPriorityValues.includes(value as StaffingPriority)
-    ? (value as StaffingPriority)
-    : "normal";
-}
-
 export interface EntityBase {
   id: string;
   created_at: string;
@@ -187,7 +175,6 @@ export interface StaffingRequirement extends EntityBase {
   required_count: number;
   minimum_experience_level: ExperienceLevel;
   experienced_required_count: number;
-  priority: StaffingPriority;
   is_active: SqlBoolean;
   notes: string | null;
 }
@@ -205,6 +192,8 @@ export interface SpecialDayStaffingRequirement extends EntityBase {
   start_time: string;
   end_time: string;
   required_count: number;
+  minimum_experience_level: ExperienceLevel;
+  experienced_required_count: number;
   notes: string | null;
 }
 
@@ -288,9 +277,13 @@ export interface ScheduleSlot extends EntityBase {
   start_time: string;
   end_time: string;
   required_count: number;
+  requirement_group_id: string | null;
+  minimum_experience_level: ExperienceLevel;
+  experienced_required_count: number;
   status: string;
   source_type: string | null;
   source_id: string | null;
+  slot_number: number | null;
   notes: string | null;
 }
 

@@ -56,7 +56,7 @@ function testFreshDatabase(): void {
   assertEqual(readUserVersion(db), latestSchemaVersion, "fresh user_version");
   assert(!hasColumn(db, "shift_templates", "break_minutes"), "fresh schema removed break_minutes");
   assertV2WorkRuleSchema(db);
-  assertPriorityConstraint(db);
+  assertSchedulerRuleCleanupSchema(db);
   db.close();
 }
 
@@ -67,7 +67,7 @@ function testV1Migration(): void {
   assertEqual(readUserVersion(db), latestSchemaVersion, "migrated user_version");
   assert(!hasColumn(db, "shift_templates", "break_minutes"), "break_minutes no longer exists");
   assertV2WorkRuleSchema(db);
-  assertPriorityConstraint(db);
+  assertSchedulerRuleCleanupSchema(db);
 
   assertEqual(countRows(db, "employees"), 2, "employees preserved");
   assertEqual(countRows(db, "employee_roles"), 1, "employee roles preserved");
@@ -103,11 +103,21 @@ function testV1Migration(): void {
   assertEqual(fallbackRule.max_hours_per_day, 8, "fallback max daily hours applied");
   assertEqual(fallbackRule.can_work_weekends, 1, "invalid weekend flag normalized");
 
-  const normalizedPriority = getValue<string>(
-    db,
-    "SELECT priority FROM staffing_requirements WHERE id = 'req-invalid-priority'"
+  assert(!hasColumn(db, "staffing_requirements", "priority"), "priority column removed");
+  const slotSnapshot = getRow<{
+    requirement_group_id: string;
+    minimum_experience_level: string;
+    experienced_required_count: number;
+    slot_number: number;
+  }>(db, "SELECT requirement_group_id, minimum_experience_level, experienced_required_count, slot_number FROM schedule_slots WHERE id = 'slot-1'");
+  assertEqual(
+    slotSnapshot.requirement_group_id,
+    "2026-05-18|staffing_requirement|req-invalid-priority",
+    "legacy slot requirement group backfilled"
   );
-  assertEqual(normalizedPriority, "normal", "invalid priority normalized");
+  assertEqual(slotSnapshot.minimum_experience_level, "no_experience", "slot minimum experience backfilled");
+  assertEqual(slotSnapshot.experienced_required_count, 0, "slot experienced required backfilled");
+  assertEqual(slotSnapshot.slot_number, 1, "slot number backfilled");
   assertEqual(
     getValue<string>(
       db,
@@ -505,24 +515,27 @@ function assertV2WorkRuleSchema(db: SqliteDatabase): void {
   }
 }
 
-function assertPriorityConstraint(db: SqliteDatabase): void {
-  assertThrows(
-    () =>
-      db
-        .prepare(
-          `INSERT INTO staffing_requirements (
-            id,
-            day_of_week,
-            role_id,
-            start_time,
-            end_time,
-            required_count,
-            priority
-          ) VALUES ('bad-priority', 1, 'missing-role', '09:00', '17:00', 1, 'urgent')`
-        )
-        .run(),
-    "invalid priority should fail"
-  );
+function assertSchedulerRuleCleanupSchema(db: SqliteDatabase): void {
+  assert(!hasColumn(db, "staffing_requirements", "priority"), "priority column removed");
+
+  for (const column of [
+    "minimum_experience_level",
+    "experienced_required_count"
+  ]) {
+    assert(
+      hasColumn(db, "special_day_staffing_requirements", column),
+      `special-day requirement column exists: ${column}`
+    );
+  }
+
+  for (const column of [
+    "requirement_group_id",
+    "minimum_experience_level",
+    "experienced_required_count",
+    "slot_number"
+  ]) {
+    assert(hasColumn(db, "schedule_slots", column), `slot snapshot column exists: ${column}`);
+  }
 }
 
 function hasColumn(

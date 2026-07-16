@@ -28,14 +28,13 @@ import { intervalsOverlap } from "./model/workingTime";
 export type CoverageDiagnosis =
   | "fully_covered"
   | "understaffed"
-  | "infeasible"
   | "likely_scheduler_gap"
   | "invalid";
 
 export type CoverageCeilingClassification =
   | "optimal_or_near_optimal"
   | "likely_scheduler_gap"
-  | "infeasible_or_understaffed"
+  | "understaffed"
   | "invalid";
 
 export type CoverageCeilingBottleneck = {
@@ -265,9 +264,8 @@ export function diagnoseCoverageCeiling({
   if (analysis.feasibleMaxAssignedSlots < analysis.totalSlots) {
     return {
       coverageGap,
-      classification: "infeasible_or_understaffed",
-      diagnosis:
-        analysis.impossibleSlotCount > 0 ? "infeasible" : "understaffed"
+      classification: "understaffed",
+      diagnosis: "understaffed"
     };
   }
 

@@ -131,7 +131,6 @@ export function StaffingRequirementsPage({
               existingRequirement?.minimum_experience_level ?? "no_experience",
             experienced_required_count:
               existingRequirement?.experienced_required_count ?? 0,
-            priority: existingRequirement?.priority ?? "normal",
             is_active: true,
             notes: existingRequirement?.notes ?? null
           };
@@ -241,7 +240,6 @@ export function StaffingRequirementsPage({
             required_count: requirement.required_count,
             minimum_experience_level: requirement.minimum_experience_level,
             experienced_required_count: requirement.experienced_required_count,
-            priority: requirement.priority || "normal",
             is_active: true,
             notes: requirement.notes
           });

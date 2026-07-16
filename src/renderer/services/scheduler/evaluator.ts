@@ -341,15 +341,12 @@ function applyRoleCoverageEvaluation({
   for (const group of groupMap.values()) {
     const roleName = roleNameForSlot(group.representativeSlot, roles);
     const missingCount = Math.max(0, group.requiredCount - group.assignedCount);
-    const critical = group.slots.some((slot) =>
-      isCriticalSlot(slot, staffingRequirements)
-    );
 
     if (group.assignedCount === 0) {
-      breakdown.roleCoverage += critical ? -5000 : -3000;
+      breakdown.roleCoverage += -3000;
       softWarnings.push({
         severity: "warning",
-        type: critical ? "critical_zero_coverage" : "zero_coverage",
+        type: "zero_coverage",
         slotId: group.representativeSlot.id,
         message: `${group.representativeSlot.date} ${roleName} has zero coverage.`
       });
@@ -357,10 +354,6 @@ function applyRoleCoverageEvaluation({
     }
 
     breakdown.roleCoverage += 2500;
-
-    if (critical) {
-      breakdown.roleCoverage += 1500;
-    }
 
     if (missingCount > 0) {
       breakdown.roleCoverage -= missingCount * 500;
@@ -575,14 +568,6 @@ function applyShortageDistributionEvaluation({
     unfilledSlots,
     (slot) => `${slot.date}|${slot.role_id}`
   );
-  const unfilledCriticalByShift = countSlotsBy(
-    unfilledSlots.filter((slot) => isCriticalSlot(slot, staffingRequirements)),
-    (slot) =>
-      `${slot.date}|${
-        getShiftTemplateIdForSlot(slot, staffingRequirements, shiftTemplates) ??
-        `${slot.start_time}-${slot.end_time}`
-      }`
-  );
   const requiredByDate = countSlotsBy(runSlots, (slot) => slot.date);
 
   for (const [date, count] of unfilledByDate.entries()) {
@@ -608,11 +593,6 @@ function applyShortageDistributionEvaluation({
     }
   }
 
-  for (const count of unfilledCriticalByShift.values()) {
-    if (count > 1) {
-      breakdown.penalties -= 700 * (count - 1);
-    }
-  }
 }
 
 function buildEvaluationMetrics({
@@ -774,16 +754,6 @@ function roleNameForSlot(slot: ScheduleSlot, roles: Role[]): string {
   return roles.find((role) => role.id === slot.role_id)?.name ?? "required role";
 }
 
-function isCriticalSlot(
-  slot: ScheduleSlot,
-  staffingRequirements: StaffingRequirement[]
-): boolean {
-  return (
-    staffingRequirements.find((requirement) => requirement.id === slot.source_id)
-      ?.priority === "critical"
-  );
-}
-
 function getShiftTemplateIdForSlot(
   slot: ScheduleSlot,
   staffingRequirements: StaffingRequirement[],
@@ -838,6 +808,8 @@ function hardConstraintCodeToType(
       return "max_shifts";
     case "WEEKEND_NOT_ALLOWED":
       return "weekend_not_allowed";
+    case "INSUFFICIENT_GROUP_EXPERIENCE":
+      return "insufficient_group_experience";
     case "INVALID_SHIFT_INTERVAL":
       return "invalid_shift_interval";
     default:

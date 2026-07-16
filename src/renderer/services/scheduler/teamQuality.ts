@@ -79,6 +79,14 @@ export function getRoleGroupKey(
   slot: ScheduleSlot,
   staffingRequirements: StaffingRequirement[]
 ): string {
+  if (slot.requirement_group_id) {
+    return slot.requirement_group_id;
+  }
+
+  if (slot.source_id) {
+    return `${slot.date}|${slot.source_type ?? "requirement"}|${slot.source_id}`;
+  }
+
   const shiftTemplateId = getSlotShiftTemplateId(slot, staffingRequirements);
   const shiftKey = shiftTemplateId ?? `${slot.start_time}-${slot.end_time}`;
 
@@ -186,10 +194,14 @@ export function assessRoleGroupQuality({
   if (
     experiencedRequiredCount > 0 &&
     assignedEmployeeIds.length > 0 &&
-    experiencedAssignedCount < experiencedRequiredCount
+    experiencedAssignedCount < Math.min(experiencedRequiredCount, assignedEmployeeIds.length)
   ) {
+    const requiredExperienced = Math.min(
+      experiencedRequiredCount,
+      assignedEmployeeIds.length
+    );
     warnings.push(
-      `This shift needs ${experiencedRequiredCount} ${roleName} employee with prior experience, but assigned ${experiencedAssignedCount}.`
+      `This shift needs ${requiredExperienced} ${roleName} employee with prior experience, but assigned ${experiencedAssignedCount}.`
     );
   }
 

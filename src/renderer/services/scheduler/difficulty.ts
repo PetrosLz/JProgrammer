@@ -22,7 +22,6 @@ export type SlotDifficulty = {
   dateDemand: number;
   roleGroupAssignedCount: number;
   roleGroupRequiredCount: number;
-  isHighPriority: boolean;
   reasons: string[];
 };
 
@@ -48,9 +47,6 @@ export function buildSlotDifficultyMap({
   const activeEmployees = employees.filter((employee) => employee.is_active === 1);
   const coverageSlots = allSlots ?? slots;
   const dateDemand = countBy(coverageSlots, (slot) => slot.date);
-  const requirementById = new Map(
-    staffingRequirements.map((requirement) => [requirement.id, requirement])
-  );
   const result = new Map<string, SlotDifficulty>();
 
   for (const slot of slots) {
@@ -67,12 +63,6 @@ export function buildSlotDifficultyMap({
     const activeRoleEmployeeCount = activeEmployees.filter((employee) =>
       employeeHasRole(employee.id, slot.role_id, data.employeeRoles)
     ).length;
-    const sourceRequirement = slot.source_id
-      ? requirementById.get(slot.source_id)
-      : null;
-    const isHighPriority =
-      sourceRequirement?.priority === "high" ||
-      sourceRequirement?.priority === "critical";
     const groupSlots = coverageSlots.filter(
       (candidateSlot) =>
         roleGroupKey(candidateSlot, staffingRequirements) ===
@@ -113,20 +103,12 @@ export function buildSlotDifficultyMap({
       add("Rare role", 100);
     }
 
-    if (isHighPriority) {
-      add("High priority", 80);
-    }
-
     if (roleGroupAssignedCount === 0) {
       add("Role group has no coverage", 500);
 
       if (roleGroupRequiredCount === 1) {
         add("Single-slot group has no coverage", 600);
       }
-    }
-
-    if (sourceRequirement?.priority === "critical") {
-      add("Critical priority", 80);
     }
 
     const minimumExperienceRank = experienceLevelRank(
@@ -166,7 +148,6 @@ export function buildSlotDifficultyMap({
       dateDemand: demand,
       roleGroupAssignedCount,
       roleGroupRequiredCount,
-      isHighPriority,
       reasons
     });
   }
@@ -207,6 +188,14 @@ function roleGroupKey(
   slot: ScheduleSlot,
   staffingRequirements: StaffingRequirement[]
 ): string {
+  if (slot.requirement_group_id) {
+    return slot.requirement_group_id;
+  }
+
+  if (slot.source_id) {
+    return `${slot.date}|${slot.source_type ?? "requirement"}|${slot.source_id}`;
+  }
+
   const shiftTemplateId = getSlotShiftTemplateId(slot, staffingRequirements);
   const shiftKey = shiftTemplateId ?? `${slot.start_time}-${slot.end_time}`;
 

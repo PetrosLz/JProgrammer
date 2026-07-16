@@ -79,6 +79,7 @@ import {
   evaluateSchedule,
   type ScheduleEvaluationResult
 } from "./evaluator";
+import { validateScheduleHardConstraints } from "./evaluation/scheduleValidator";
 import {
   defaultSchedulerOptimizationConfig,
   type OptimizationConfig,
@@ -154,6 +155,12 @@ type PlannedAssignment = {
   explanation: string;
 };
 
+type FinalHardConstraintViolation = {
+  assignmentId: string | null;
+  slotId: string | null;
+  message: string;
+};
+
 type CandidateSchedule = {
   profile: AttemptProfile;
   plannedAssignments: PlannedAssignment[];
@@ -171,12 +178,6 @@ type CandidateSchedule = {
   attemptsCompleted: number;
   noImprovementAttempts: number;
   evaluation: ScheduleEvaluationResult;
-};
-
-type FinalHardConstraintViolation = {
-  assignmentId: string | null;
-  slotId: string | null;
-  message: string;
 };
 
 type SimulationState = {
@@ -380,12 +381,56 @@ export async function assignEmployeesToRun({
     optimizationConfig,
     shiftTemplates
   });
-  const savedAssignments: ScheduleAssignment[] = [];
-
-  for (const plannedAssignment of sortPlannedAssignments(
+  const sortedPlannedAssignments = sortPlannedAssignments(
     selectedSchedule.plannedAssignments,
     runSlots
-  )) {
+  );
+  const candidateFinalAssignments = buildSyntheticAssignments({
+    run,
+    fixedAssignments: activeRunAssignments,
+    plannedAssignments: sortedPlannedAssignments
+  });
+  const candidateValidation = validateScheduleHardConstraints({
+    runSlots,
+    assignments: candidateFinalAssignments,
+    employees,
+    data,
+    manualOverrides
+  });
+
+  if (!candidateValidation.valid) {
+    for (const violation of candidateValidation.violations) {
+      await saveWarning({
+        scheduleRunId: run.id,
+        scheduleSlotId: violation.slotId,
+        scheduleAssignmentId: null,
+        severity: "critical",
+        warningType: "final_hard_constraint_violation",
+        message: `Critical validation issue: ${violation.message}`
+      });
+      warningsCreated += 1;
+    }
+
+    await databaseApi.updateRecord("schedule_runs", run.id, {
+      status: "needs_review",
+      parameters_json: mergeRunParameters(
+        run.parameters_json,
+        diagnostics,
+        selectedSchedule,
+        feasibility,
+        optimizationConfig,
+        selectedSchedule.evaluation
+      )
+    });
+
+    throw new Error(
+      `Automatic schedule validation failed with ${candidateValidation.violations.length} hard-rule issue(s). No assignments were saved.`
+    );
+  }
+
+  const savedAssignments: ScheduleAssignment[] = [];
+
+  for (const plannedAssignment of sortedPlannedAssignments) {
     const slot = runSlots.find(
       (item) => item.id === plannedAssignment.scheduleSlotId
     );
@@ -416,13 +461,17 @@ export async function assignEmployeesToRun({
     slots: runSlots,
     assignments: finalAssignments
   });
-  const finalHardConstraintViolations = validateFinalScheduleHardConstraints({
+  const finalHardConstraintViolations = validateScheduleHardConstraints({
     runSlots,
     assignments: finalAssignments,
     employees,
     data,
     manualOverrides
-  });
+  }).violations.map((violation) => ({
+    assignmentId: null,
+    slotId: violation.slotId,
+    message: `Critical validation issue: ${violation.message}`
+  }));
   const finalEvaluation = evaluateSchedule({
     run,
     slots: runSlots,
@@ -712,13 +761,17 @@ export function optimizeScheduleInMemory({
     slots: runSlots,
     assignments: finalAssignments
   });
-  const finalHardConstraintViolations = validateFinalScheduleHardConstraints({
+  const finalHardConstraintViolations = validateScheduleHardConstraints({
     runSlots,
     assignments: finalAssignments,
     employees,
     data,
     manualOverrides
-  });
+  }).violations.map((violation) => ({
+    assignmentId: null,
+    slotId: violation.slotId,
+    message: `Critical validation issue: ${violation.message}`
+  }));
 
   warnings.push(
     ...finalHardConstraintViolations.map(
@@ -1873,7 +1926,7 @@ function findBestMoveRepair({
           score: candidateScore,
           explanation: replacement
             ? `${targetExplanation} Refilled ${oldSlot.date} ${oldSlot.start_time}-${oldSlot.end_time}.`
-            : `${targetExplanation} Left the lower-priority slot open because total coverage improved.`
+            : `${targetExplanation} Left another slot open because total coverage improved.`
         };
       }
     }
@@ -2311,7 +2364,7 @@ function scoreCandidateSchedule({
       .map((assignment) => assignment.schedule_slot_id)
   );
   const unfilledSlots = runSlots.filter((slot) => !filledSlotIds.has(slot.id));
-  const hardConstraintViolations = validateScheduleHardConstraints({
+  const hardConstraintViolations = validatePlannedAssignmentHardConstraints({
     runSlots,
     plannedAssignments,
     employees,
@@ -2363,7 +2416,7 @@ function scoreCandidateSchedule({
   };
 }
 
-function validateScheduleHardConstraints({
+function validatePlannedAssignmentHardConstraints({
   runSlots,
   plannedAssignments,
   employees,
@@ -2805,6 +2858,18 @@ function buildCandidates({
       continue;
     }
 
+    if (
+      !candidatePreservesRequiredGroupExperience({
+        employee,
+        slot,
+        runSlots,
+        data,
+        assignedShifts
+      })
+    ) {
+      continue;
+    }
+
     const context = buildScoringContext({
       employee,
       slot,
@@ -2838,6 +2903,60 @@ function buildCandidates({
   }
 
   return candidates;
+}
+
+function candidatePreservesRequiredGroupExperience({
+  employee,
+  slot,
+  runSlots,
+  data,
+  assignedShifts
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  runSlots: ScheduleSlot[];
+  data: SchedulerData;
+  assignedShifts: AssignedShift[];
+}): boolean {
+  const experiencedRequiredCount = getSlotExperiencedRequiredCount(
+    slot,
+    data.staffingRequirements ?? []
+  );
+
+  if (experiencedRequiredCount <= 0) {
+    return true;
+  }
+
+  const groupSlots = getRoleGroupSlots({
+    slot,
+    slots: runSlots,
+    staffingRequirements: data.staffingRequirements ?? []
+  });
+  const groupSlotIds = new Set(groupSlots.map((groupSlot) => groupSlot.id));
+  const groupAssignedEmployeeIds = assignedShifts
+    .filter((assignedShift) => groupSlotIds.has(assignedShift.slotId))
+    .map((assignedShift) => assignedShift.employeeId);
+  const experiencedAssignedCount = groupAssignedEmployeeIds.filter(
+    (employeeId) =>
+      experienceLevelRank(
+        getEmployeeRoleExperience(employeeId, slot.role_id, data.employeeRoles)
+      ) >= 2
+  ).length;
+  const projectedAssignedCount = groupAssignedEmployeeIds.length + 1;
+  const requiredExperiencedForProjectedGroup = Math.min(
+    experiencedRequiredCount,
+    projectedAssignedCount
+  );
+
+  if (experiencedAssignedCount >= requiredExperiencedForProjectedGroup) {
+    return true;
+  }
+
+  return (
+    experienceLevelRank(
+      getEmployeeRoleExperience(employee.id, slot.role_id, data.employeeRoles)
+    ) >= 2
+  );
 }
 
 function buildScoringContext({
@@ -3851,7 +3970,7 @@ function createRoleGroupCoverageWarnings({
           scheduleSlotId: representativeSlot.id,
           scheduleAssignmentId: null,
           severity: "warning",
-          warningType: "critical_coverage_gap",
+          warningType: "role_group_zero_coverage",
           message: diagnosticMessage
         }
       ];
@@ -3898,9 +4017,6 @@ function buildCoverageGroupShortageMessage({
     blockedByWeeklyShifts: 0,
     blockedByTimeWindow: 0,
     blockedByWeekend: 0,
-    blockedBySameDayAssignment: 0,
-    blockedByMaxHours: 0,
-    blockedByMaxDays: 0,
     blockedByMissingRole: 0
   };
 
@@ -3974,10 +4090,6 @@ function buildCoverageGroupShortageMessage({
     }
   }
 
-  diagnostics.blockedBySameDayAssignment = diagnostics.blockedByOverlap;
-  diagnostics.blockedByMaxHours = diagnostics.blockedByDailyHours;
-  diagnostics.blockedByMaxDays = diagnostics.blockedByWeeklyShifts;
-
   const header =
     group.assignedCount === 0
       ? `Κρίσιμη έλλειψη: ${coverageLabel} έχει 0/${group.requiredCount} εργαζομένους.`
@@ -3989,9 +4101,11 @@ function buildCoverageGroupShortageMessage({
     `Διαθέσιμοι μετά τους βασικούς περιορισμούς: ${diagnostics.availableAfterHardConstraints}.`,
     `Μπλοκαρισμένοι από άδεια: ${diagnostics.blockedByTimeOff}.`,
     `Μπλοκαρισμένοι από cannot_work/διαθεσιμότητα βάρδιας: ${diagnostics.blockedByCannotWork}.`,
-    `Μπλοκαρισμένοι επειδή έχουν ήδη βάρδια την ίδια ημέρα: ${diagnostics.blockedBySameDayAssignment}.`,
-    `Μπλοκαρισμένοι από μέγιστες ώρες: ${diagnostics.blockedByMaxHours}.`,
-    `Μπλοκαρισμένοι από μέγιστες ημέρες: ${diagnostics.blockedByMaxDays}.`,
+    `Blocked by overlapping shift: ${diagnostics.blockedByOverlap}.`,
+    `Blocked by max daily hours: ${diagnostics.blockedByDailyHours}.`,
+    `Blocked by max weekly shifts: ${diagnostics.blockedByWeeklyShifts}.`,
+    `Blocked by time-window constraints: ${diagnostics.blockedByTimeWindow}.`,
+    `Blocked by weekend rule: ${diagnostics.blockedByWeekend}.`,
     `Δεν έχουν τον ρόλο: ${diagnostics.blockedByMissingRole}.`
   ].join(" ");
 }
@@ -4160,7 +4274,7 @@ function createFeasibilityWarnings(
 
   const warnings: SchedulerWarningDraft[] = [];
   const summary =
-    feasibility.status === "infeasible"
+    feasibility.status === "understaffed"
       ? "Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως με τα τωρινά δεδομένα."
       : "Το πρόγραμμα δημιουργήθηκε, αλλά είναι οριακό και έχει μικρό περιθώριο για αλλαγές.";
 

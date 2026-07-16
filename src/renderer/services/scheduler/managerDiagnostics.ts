@@ -11,7 +11,6 @@ export type ManagerScheduleStatus =
   | "Good"
   | "Needs review"
   | "Understaffed"
-  | "Infeasible"
   | "Likely scheduler gap"
   | "Invalid";
 
@@ -88,10 +87,6 @@ function getManagerStatus({
     return evaluation.grade === "excellent" ? "Excellent" : "Good";
   }
 
-  if (coverageDiagnosis.diagnosis === "infeasible") {
-    return "Infeasible";
-  }
-
   if (
     coverageDiagnosis.diagnosis === "understaffed" ||
     coverageCeiling.feasibleMaxAssignedSlots < coverageCeiling.totalSlots
@@ -127,10 +122,6 @@ function buildCoverageIssueSummaries({
       `Likely scheduler gap: ${coverageDiagnosis.coverageGap} more slot${
         coverageDiagnosis.coverageGap === 1 ? "" : "s"
       } appear feasible than were assigned.`
-    );
-  } else if (coverageDiagnosis.diagnosis === "infeasible") {
-    summaries.push(
-      `Infeasible: ${coverageCeiling.feasibleMaxAssignedSlots}/${coverageCeiling.totalSlots} slots appear feasible because some required roles or shifts have no hard-valid candidate.`
     );
   } else if (coverageCeiling.feasibleMaxAssignedSlots < coverageCeiling.totalSlots) {
     summaries.push(
@@ -332,7 +323,7 @@ function shortageSize(capacity: {
 function humanizeWarningType(warningType: string): string {
   const knownLabels: Record<string, string> = {
     feasibility_shortage: "Feasibility shortage",
-    critical_coverage_gap: "Critical coverage gap",
+    role_group_zero_coverage: "Role group without coverage",
     partial_coverage: "Partial coverage",
     role_under_supplied: "Role shortage",
     team_quality: "Team quality issue",

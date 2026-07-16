@@ -67,10 +67,10 @@ export {
 } from "./evaluation/scheduleValidator";
 export {
   buildShiftInterval,
+  getOwningDateMinuteContribution,
   getShiftDurationMinutes,
   getWeekKey,
   intervalsOverlap,
-  splitShiftMinutesByDate,
   type AbsoluteShiftInterval,
   type DailyMinuteContribution
 } from "./model/workingTime";

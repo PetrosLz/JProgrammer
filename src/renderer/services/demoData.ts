@@ -3,8 +3,7 @@ import {
   experienceLevelToLegacySkillLevel,
   type CrudTableName,
   type DayOfWeek,
-  type ExperienceLevel,
-  type StaffingPriority
+  type ExperienceLevel
 } from "../types";
 
 type RoleKey = "bar" | "waiter" | "kitchen" | "cashier" | "manager";
@@ -532,8 +531,7 @@ async function createStaffingRequirements(
     role,
     requiredCount,
     minimumExperienceLevel = "no_experience",
-    experiencedRequiredCount = 0,
-    priority = "normal"
+    experiencedRequiredCount = 0
   }: {
     dayOfWeek: DayOfWeek;
     shift: ShiftKey;
@@ -541,7 +539,6 @@ async function createStaffingRequirements(
     requiredCount: number;
     minimumExperienceLevel?: ExperienceLevel;
     experiencedRequiredCount?: number;
-    priority?: StaffingPriority;
   }) {
     const time = shiftTime(shift);
     await databaseApi.createRecord("staffing_requirements", {
@@ -553,7 +550,6 @@ async function createStaffingRequirements(
       required_count: requiredCount,
       minimum_experience_level: minimumExperienceLevel,
       experienced_required_count: experiencedRequiredCount,
-      priority,
       is_active: true,
       notes: "Demo requirement"
     });
@@ -569,15 +565,15 @@ async function createStaffingRequirements(
     await addRequirement({ dayOfWeek, shift: "evening", role: "waiter", requiredCount: 1 });
   }
 
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "bar", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "waiter", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "bar", requiredCount: 2, experiencedRequiredCount: 1 });
+  await addRequirement({ dayOfWeek: 6, shift: "morning", role: "waiter", requiredCount: 2, experiencedRequiredCount: 1 });
   await addRequirement({ dayOfWeek: 6, shift: "morning", role: "kitchen", requiredCount: 1, minimumExperienceLevel: "some_experience" });
   await addRequirement({ dayOfWeek: 6, shift: "morning", role: "cashier", requiredCount: 1, minimumExperienceLevel: "some_experience" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "bar", requiredCount: 2, experiencedRequiredCount: 1, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "waiter", requiredCount: 3, experiencedRequiredCount: 1, priority: "high" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "kitchen", requiredCount: 2, minimumExperienceLevel: "some_experience", experiencedRequiredCount: 1, priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "bar", requiredCount: 2, experiencedRequiredCount: 1 });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "waiter", requiredCount: 3, experiencedRequiredCount: 1 });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "kitchen", requiredCount: 2, minimumExperienceLevel: "some_experience", experiencedRequiredCount: 1 });
   await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "cashier", requiredCount: 1, minimumExperienceLevel: "some_experience" });
-  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, minimumExperienceLevel: "some_experience", priority: "high" });
+  await addRequirement({ dayOfWeek: 6, shift: "saturdayEvening", role: "manager", requiredCount: 1, minimumExperienceLevel: "some_experience" });
 
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "bar", requiredCount: 1 });
   await addRequirement({ dayOfWeek: 0, shift: "morning", role: "waiter", requiredCount: 1 });

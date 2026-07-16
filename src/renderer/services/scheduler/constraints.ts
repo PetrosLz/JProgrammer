@@ -20,13 +20,14 @@ import {
 import {
   type AbsoluteShiftInterval,
   type DailyMinuteContribution,
+  addDays,
   buildShiftInterval,
   dateToDayNumber,
   getDayOfWeekFromDate,
+  getOwningDateMinuteContribution,
   getShiftDurationMinutes,
   getWeekKey,
   intervalsOverlap,
-  splitShiftMinutesByDate,
   timeToMinutes
 } from "./model/workingTime";
 
@@ -42,7 +43,8 @@ export const hardConstraintViolationCodes = [
   "MAX_DAILY_HOURS",
   "MAX_WEEKLY_SHIFTS",
   "WEEKEND_NOT_ALLOWED",
-  "INVALID_SHIFT_INTERVAL"
+  "INVALID_SHIFT_INTERVAL",
+  "INSUFFICIENT_GROUP_EXPERIENCE"
 ] as const;
 
 export type HardConstraintViolationCode =
@@ -123,12 +125,14 @@ export function buildAssignedShift(
     durationHours: durationMinutes / 60,
     durationMinutes,
     interval,
-    dailyContributions: splitShiftMinutesByDate({
-      date: slot.date,
-      startTime: slot.start_time,
-      endTime: slot.end_time,
-      timezone: data?.timezone
-    }),
+    dailyContributions: [
+      getOwningDateMinuteContribution({
+        date: slot.date,
+        startTime: slot.start_time,
+        endTime: slot.end_time,
+        timezone: data?.timezone
+      })
+    ],
     weekKey: getWeekKey({
       date: slot.date,
       weekStartsOn: data?.weekStartsOn ?? 1
@@ -499,8 +503,10 @@ export function getSlotMinimumExperienceLevel(
   staffingRequirements: StaffingRequirement[]
 ): ExperienceLevel {
   return normalizeExperienceLevel(
-    getSlotStaffingRequirement(slot, staffingRequirements)
-      ?.minimum_experience_level ?? "no_experience"
+    slot.minimum_experience_level ??
+      getSlotStaffingRequirement(slot, staffingRequirements)
+        ?.minimum_experience_level ??
+      "no_experience"
   );
 }
 
@@ -510,8 +516,10 @@ export function getSlotExperiencedRequiredCount(
 ): number {
   return Math.max(
     0,
-    getSlotStaffingRequirement(slot, staffingRequirements)
-      ?.experienced_required_count ?? 0
+    slot.experienced_required_count ??
+      getSlotStaffingRequirement(slot, staffingRequirements)
+        ?.experienced_required_count ??
+      0
   );
 }
 
@@ -690,6 +698,8 @@ function getOverlappingCannotWorkTimeConstraints({
   constraints: EmployeeTimeConstraint[];
   timezone?: string | null;
 }): EmployeeTimeConstraint[] {
+  const intervalDates = getCandidateIntervalDates(candidateShift);
+
   return constraints.filter((constraint) => {
     if (
       constraint.employee_id !== employeeId ||
@@ -698,19 +708,17 @@ function getOverlappingCannotWorkTimeConstraints({
       return false;
     }
 
-    const applicableDates = candidateShift.dailyContributions
-      .map((item) => item.date)
-      .filter((date) => {
-        if (constraint.date !== null) {
-          return constraint.date === date;
-        }
+    const applicableDates = intervalDates.filter((date) => {
+      if (constraint.date !== null) {
+        return constraint.date === date;
+      }
 
-        if (constraint.day_of_week !== null) {
-          return constraint.day_of_week === getDayOfWeek(date);
-        }
+      if (constraint.day_of_week !== null) {
+        return constraint.day_of_week === getDayOfWeek(date);
+      }
 
-        return false;
-      });
+      return false;
+    });
 
     return applicableDates.some((date) => {
       const constraintInterval = buildShiftInterval({
@@ -723,6 +731,16 @@ function getOverlappingCannotWorkTimeConstraints({
       return intervalsOverlap(candidateShift.interval, constraintInterval);
     });
   });
+}
+
+function getCandidateIntervalDates(candidateShift: AssignedShift): string[] {
+  const dates = [candidateShift.date];
+
+  if (timeToMinutes(candidateShift.endTime) <= timeToMinutes(candidateShift.startTime)) {
+    dates.push(addDays(candidateShift.date, 1));
+  }
+
+  return dates;
 }
 
 function isViolationOverridden({

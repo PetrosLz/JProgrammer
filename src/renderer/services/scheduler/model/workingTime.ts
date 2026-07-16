@@ -62,7 +62,7 @@ export function intervalsOverlap(
   return first.startMs < second.endMs && second.startMs < first.endMs;
 }
 
-export function splitShiftMinutesByDate({
+export function getOwningDateMinuteContribution({
   date,
   startTime,
   endTime,
@@ -72,28 +72,11 @@ export function splitShiftMinutesByDate({
   startTime: string;
   endTime: string;
   timezone?: string | null;
-}): DailyMinuteContribution[] {
-  const interval = buildShiftInterval({ date, startTime, endTime, timezone });
-  const contributions: DailyMinuteContribution[] = [];
-  let cursor = interval.startMs;
-
-  while (cursor < interval.endMs) {
-    const dayNumber = Math.floor(cursor / msPerDay);
-    const dayEnd = (dayNumber + 1) * msPerDay;
-    const contributionEnd = Math.min(dayEnd, interval.endMs);
-    const minutes = Math.round((contributionEnd - cursor) / msPerMinute);
-
-    if (minutes > 0) {
-      contributions.push({
-        date: dayNumberToDate(dayNumber),
-        minutes
-      });
-    }
-
-    cursor = contributionEnd;
-  }
-
-  return contributions;
+}): DailyMinuteContribution {
+  return {
+    date,
+    minutes: getShiftDurationMinutes({ date, startTime, endTime, timezone })
+  };
 }
 
 export function getWeekKey({

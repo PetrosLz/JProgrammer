@@ -54,6 +54,7 @@ for (const scenario of createBenchmarkScenarios()) {
     weekStartDate: scenario.weekStartDate,
     openingHours: scenario.openingHours,
     staffingRequirements: scenario.staffingRequirements,
+    specialDayStaffingRequirements: scenario.specialDayStaffingRequirements,
     shiftTemplates: scenario.shiftTemplates,
     specialDays: scenario.specialDays
   });
@@ -66,7 +67,11 @@ for (const scenario of createBenchmarkScenarios()) {
       sourceId: slot.sourceId,
       startTime: slot.startTime,
       endTime: slot.endTime,
-      status: "unfilled"
+      status: "unfilled",
+      requirementGroupId: slot.requirementGroupId,
+      minimumExperienceLevel: slot.minimumExperienceLevel,
+      experiencedRequiredCount: slot.experiencedRequiredCount,
+      slotNumber: slot.slotNumber
     })
   );
   const assignmentResult = optimizeScheduleInMemory({

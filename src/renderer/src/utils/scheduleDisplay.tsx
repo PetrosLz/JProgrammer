@@ -336,7 +336,7 @@ function managerFriendlyWarningMessage({
 
   if (
     coverageIssue &&
-    ["critical_coverage_gap", "role_group_understaffed", "slot_unfilled"].includes(
+    ["role_group_zero_coverage", "role_group_understaffed", "slot_unfilled"].includes(
       warning.warning_type
     )
   ) {
@@ -372,7 +372,7 @@ function humanizeSchedulerWarningText(message: string, language: UiLanguage): st
   }
 
   const hidesDebugDetails =
-    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
+    /Score|Main factors|Blocked by|Missing role|candidate|max daily hours|max weekly shifts|overlapping shift|time-window constraint|weekend rule|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
       message
     );
 
@@ -920,7 +920,7 @@ function buildManagerReportPdfHtml({
     .join("");
   const coverageIssueKeys = new Set(coverageIssues.map((issue) => issue.groupKey));
   const coverageWarningTypes = new Set([
-    "critical_coverage_gap",
+    "role_group_zero_coverage",
     "role_group_understaffed",
     "slot_unfilled"
   ]);
@@ -968,7 +968,7 @@ function buildManagerReportPdfHtml({
     .map((recommendation) => `<li>${escapeHtml(recommendation)}</li>`)
     .join("");
   const technicalWarningCount = warnings.filter((warning) =>
-    /Score|Main factors|Blocked by|Missing role|candidate|max hours|same-day assignment|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
+    /Score|Main factors|Blocked by|Missing role|candidate|max daily hours|max weekly shifts|overlapping shift|time-window constraint|weekend rule|Μπλοκαρισ|Δεν έχουν τον ρόλο|Ενεργοί με αυτόν τον ρόλο|Διαθέσιμοι μετά/.test(
       warning.message
     )
   ).length;

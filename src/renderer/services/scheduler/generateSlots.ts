@@ -1,10 +1,13 @@
 import type {
   DayOfWeek,
+  ExperienceLevel,
   OpeningHours,
   SpecialDay,
+  SpecialDayStaffingRequirement,
   ShiftTemplate,
   StaffingRequirement
 } from "../../types";
+import { normalizeExperienceLevel } from "../../types";
 import {
   addDays as addBusinessDays,
   getDayOfWeekFromDate
@@ -16,9 +19,13 @@ export type SlotDraft = {
   roleId: string;
   startTime: string;
   endTime: string;
+  sourceType: "weekly_requirement" | "special_day_requirement";
   sourceId: string;
+  requirementGroupId: string;
   slotNumber: number;
   requiredCount: number;
+  minimumExperienceLevel: ExperienceLevel;
+  experiencedRequiredCount: number;
 };
 
 export type GenerationWarningDraft = {
@@ -64,12 +71,14 @@ export function buildScheduleGenerationPlan({
   weekStartDate,
   openingHours,
   staffingRequirements,
+  specialDayStaffingRequirements = [],
   shiftTemplates,
   specialDays
 }: {
   weekStartDate: string;
   openingHours: OpeningHours[];
   staffingRequirements: StaffingRequirement[];
+  specialDayStaffingRequirements?: SpecialDayStaffingRequirement[];
   shiftTemplates: ShiftTemplate[];
   specialDays: SpecialDay[];
 }): GenerationPlan {
@@ -98,17 +107,42 @@ export function buildScheduleGenerationPlan({
       continue;
     }
 
-    const openingHour = openingHours.find(
-      (item) => item.day_of_week === dayOfWeek
-    );
+    const activeSpecialDayRequirements = specialDay
+      ? specialDayStaffingRequirements.filter(
+          (requirement) =>
+            requirement.special_day_id === specialDay.id &&
+            requirement.required_count > 0
+        )
+      : [];
 
-    if (openingHour && !openingHour.is_open) {
-      continue;
+    if (!specialDay) {
+      const openingHour = openingHours.find(
+        (item) => item.day_of_week === dayOfWeek
+      );
+
+      if (openingHour && !openingHour.is_open) {
+        continue;
+      }
     }
 
-    const dayRequirements = activeRequirements.filter(
-      (requirement) => requirement.day_of_week === dayOfWeek
-    );
+    const dayRequirements: Array<
+      | { type: "weekly_requirement"; requirement: StaffingRequirement }
+      | {
+          type: "special_day_requirement";
+          requirement: SpecialDayStaffingRequirement;
+        }
+    > =
+      specialDay && activeSpecialDayRequirements.length > 0
+        ? activeSpecialDayRequirements.map((requirement) => ({
+            type: "special_day_requirement" as const,
+            requirement
+          }))
+        : activeRequirements
+            .filter((requirement) => requirement.day_of_week === dayOfWeek)
+            .map((requirement) => ({
+              type: "weekly_requirement" as const,
+              requirement
+            }));
 
     if (dayRequirements.length === 0) {
       warnings.push({
@@ -119,11 +153,16 @@ export function buildScheduleGenerationPlan({
       continue;
     }
 
-    for (const requirement of dayRequirements) {
-      const shiftSnapshot = getRequirementShiftSnapshot(
-        requirement,
-        shiftTemplates
-      );
+    for (const item of dayRequirements) {
+      const requirement = item.requirement;
+      const shiftSnapshot =
+        item.type === "weekly_requirement"
+          ? getRequirementShiftSnapshot(item.requirement, shiftTemplates)
+          : {
+              startTime: item.requirement.start_time,
+              endTime: item.requirement.end_time
+            };
+      const requirementGroupId = `${date}|${item.type}|${requirement.id}`;
 
       for (let index = 1; index <= requirement.required_count; index += 1) {
         slots.push({
@@ -132,9 +171,18 @@ export function buildScheduleGenerationPlan({
           roleId: requirement.role_id,
           startTime: shiftSnapshot.startTime,
           endTime: shiftSnapshot.endTime,
+          sourceType: item.type,
           sourceId: requirement.id,
+          requirementGroupId,
           slotNumber: index,
-          requiredCount: requirement.required_count
+          requiredCount: requirement.required_count,
+          minimumExperienceLevel: normalizeExperienceLevel(
+            requirement.minimum_experience_level
+          ),
+          experiencedRequiredCount: Math.max(
+            0,
+            requirement.experienced_required_count
+          )
         });
       }
     }

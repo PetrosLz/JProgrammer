@@ -13,6 +13,7 @@ import type {
   ScheduleSlot,
   ShiftTemplate,
   SpecialDay,
+  SpecialDayStaffingRequirement,
   StaffingRequirement,
   TimeOff
 } from "../src/renderer/types";
@@ -23,6 +24,7 @@ export type SchedulerFixture = {
   run: ScheduleRun;
   openingHours: OpeningHours[];
   specialDays: SpecialDay[];
+  specialDayStaffingRequirements: SpecialDayStaffingRequirement[];
   slots: ScheduleSlot[];
   assignments: ScheduleAssignment[];
   employees: Employee[];
@@ -44,6 +46,7 @@ export type SchedulerBenchmarkScenario = {
   run: ScheduleRun;
   openingHours: OpeningHours[];
   specialDays: SpecialDay[];
+  specialDayStaffingRequirements: SpecialDayStaffingRequirement[];
   roles: Role[];
   shiftTemplates: ShiftTemplate[];
   staffingRequirements: StaffingRequirement[];
@@ -114,6 +117,7 @@ export function createFixture(
     run,
     openingHours: overrides.openingHours ?? createOpeningHours(),
     specialDays: overrides.specialDays ?? [],
+    specialDayStaffingRequirements: overrides.specialDayStaffingRequirements ?? [],
     slots,
     assignments,
     employees,
@@ -203,7 +207,6 @@ export function createStaffingRequirement({
     required_count: requiredCount,
     minimum_experience_level: "no_experience",
     experienced_required_count: 0,
-    priority: "normal",
     is_active: 1,
     notes: null,
     created_at: timestamp,
@@ -219,7 +222,12 @@ export function createSlot({
   sourceId,
   startTime,
   endTime,
-  status = "filled"
+  status = "filled",
+  sourceType = "weekly_requirement",
+  requirementGroupId,
+  minimumExperienceLevel = "no_experience",
+  experiencedRequiredCount = 0,
+  slotNumber = 1
 }: {
   id: string;
   runId: string;
@@ -229,6 +237,11 @@ export function createSlot({
   startTime: string;
   endTime: string;
   status?: string;
+  sourceType?: string;
+  requirementGroupId?: string | null;
+  minimumExperienceLevel?: ScheduleSlot["minimum_experience_level"];
+  experiencedRequiredCount?: number;
+  slotNumber?: number | null;
 }): ScheduleSlot {
   return {
     id,
@@ -238,9 +251,15 @@ export function createSlot({
     start_time: startTime,
     end_time: endTime,
     required_count: 1,
+    requirement_group_id: requirementGroupId ?? (sourceId
+      ? `${date}|${sourceType}|${sourceId}`
+      : `${date}|${roleId}|${startTime}|${endTime}`),
+    minimum_experience_level: minimumExperienceLevel,
+    experienced_required_count: experiencedRequiredCount,
     status,
-    source_type: "staffing_requirement",
+    source_type: sourceType,
     source_id: sourceId,
+    slot_number: slotNumber,
     notes: null,
     created_at: timestamp,
     updated_at: timestamp
@@ -360,6 +379,62 @@ export function createOpeningHours(): OpeningHours[] {
   }));
 }
 
+export function createSpecialDay({
+  id,
+  date,
+  name = "Special day",
+  isClosed = 0
+}: {
+  id: string;
+  date: string;
+  name?: string;
+  isClosed?: SpecialDay["is_closed"];
+}): SpecialDay {
+  return {
+    id,
+    date,
+    name,
+    is_closed: isClosed,
+    notes: null,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+}
+
+export function createSpecialDayStaffingRequirement({
+  id,
+  specialDayId,
+  roleId,
+  startTime,
+  endTime,
+  requiredCount = 1,
+  minimumExperienceLevel = "no_experience",
+  experiencedRequiredCount = 0
+}: {
+  id: string;
+  specialDayId: string;
+  roleId: string;
+  startTime: string;
+  endTime: string;
+  requiredCount?: number;
+  minimumExperienceLevel?: SpecialDayStaffingRequirement["minimum_experience_level"];
+  experiencedRequiredCount?: number;
+}): SpecialDayStaffingRequirement {
+  return {
+    id,
+    special_day_id: specialDayId,
+    role_id: roleId,
+    start_time: startTime,
+    end_time: endTime,
+    required_count: requiredCount,
+    minimum_experience_level: minimumExperienceLevel,
+    experienced_required_count: experiencedRequiredCount,
+    notes: null,
+    created_at: timestamp,
+    updated_at: timestamp
+  };
+}
+
 export function createDayConstraint(
   id: string,
   employeeId: string,
@@ -469,6 +544,7 @@ function createScenarioBase(
     run,
     openingHours: createOpeningHours(),
     specialDays: [],
+    specialDayStaffingRequirements: [],
     roles,
     shiftTemplates,
     staffingRequirements: [],

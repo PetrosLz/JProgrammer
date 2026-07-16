@@ -456,6 +456,7 @@ function renderPage(
         openingHours={summary.openingHours}
         staffingRequirements={summary.staffingRequirements}
         specialDays={summary.specialDays}
+        specialDayStaffingRequirements={summary.specialDayStaffingRequirements}
         scheduleRuns={summary.scheduleRuns}
         scheduleSlots={summary.scheduleSlots}
         scheduleAssignments={summary.scheduleAssignments}
