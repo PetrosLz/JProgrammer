@@ -9,6 +9,8 @@ import type {
   ListRecordsOptions,
   PdfExportRequest,
   PdfExportResult,
+  PersistValidatedScheduleBatchRequest,
+  PersistValidatedScheduleBatchResult,
   SettingRecord
 } from "../shared/types";
 
@@ -65,6 +67,13 @@ const api = {
     setSetting: (key: string, value: string) =>
       ipcRenderer.invoke("database:setSetting", key, value) as Promise<
         DatabaseResult<SettingRecord>
+      >,
+    persistValidatedScheduleBatch: (request: PersistValidatedScheduleBatchRequest) =>
+      ipcRenderer.invoke(
+        "database:persistValidatedScheduleBatch",
+        request
+      ) as Promise<
+        DatabaseResult<PersistValidatedScheduleBatchResult>
       >
   }
 };

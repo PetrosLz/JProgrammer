@@ -6,6 +6,8 @@ import type {
   DatabaseResult,
   DatabaseStatus,
   ListRecordsOptions,
+  PersistValidatedScheduleBatchRequest,
+  PersistValidatedScheduleBatchResult,
   SettingRecord
 } from "../../shared/types";
 
@@ -61,7 +63,12 @@ export const databaseApi = {
     unwrap(await window.jprogrammer.database.getSetting(key)),
 
   setSetting: async (key: string, value: string): Promise<SettingRecord> =>
-    unwrap(await window.jprogrammer.database.setSetting(key, value))
+    unwrap(await window.jprogrammer.database.setSetting(key, value)),
+
+  persistValidatedScheduleBatch: async (
+    request: PersistValidatedScheduleBatchRequest
+  ): Promise<PersistValidatedScheduleBatchResult> =>
+    unwrap(await window.jprogrammer.database.persistValidatedScheduleBatch(request))
 };
 
 function unwrap<T>(result: DatabaseResult<T>): T {

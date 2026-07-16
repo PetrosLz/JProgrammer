@@ -305,6 +305,49 @@ export interface ScheduleWarning extends EntityBase {
   message: string;
 }
 
+export type PersistValidatedScheduleAssignmentInput = {
+  id: string;
+  scheduleSlotId: string;
+  employeeId: string;
+  status: string;
+  isManualOverride: SqlBoolean;
+  notes: string | null;
+};
+
+export type PersistValidatedScheduleSlotUpdate = {
+  slotId: string;
+  status: string;
+};
+
+export type PersistValidatedScheduleRunUpdate = {
+  status: string;
+  parametersJson: string | null;
+  completedAt: string;
+};
+
+export type PersistValidatedScheduleWarningInput = {
+  id: string;
+  scheduleSlotId: string | null;
+  scheduleAssignmentId: string | null;
+  severity: string;
+  warningType: string;
+  message: string;
+};
+
+export type PersistValidatedScheduleBatchRequest = {
+  scheduleRunId: string;
+  assignments: PersistValidatedScheduleAssignmentInput[];
+  slotUpdates: PersistValidatedScheduleSlotUpdate[];
+  runUpdate: PersistValidatedScheduleRunUpdate;
+  warnings: PersistValidatedScheduleWarningInput[];
+};
+
+export type PersistValidatedScheduleBatchResult = {
+  assignmentsInserted: number;
+  slotsUpdated: number;
+  warningsInserted: number;
+};
+
 export interface SettingRecord {
   key: string;
   value: string;

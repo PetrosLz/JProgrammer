@@ -6,6 +6,7 @@ import {
   getRecord,
   getSetting,
   listRecords,
+  persistValidatedScheduleBatch,
   resetLocalData,
   setSetting,
   updateRecord,
@@ -17,7 +18,8 @@ import type {
   DatabaseRecordInput,
   DatabaseRecordUpdate,
   DatabaseResult,
-  ListRecordsOptions
+  ListRecordsOptions,
+  PersistValidatedScheduleBatchRequest
 } from "../../shared/types";
 
 const databaseChannels = [
@@ -29,7 +31,8 @@ const databaseChannels = [
   "database:deleteRecord",
   "database:resetLocalData",
   "database:getSetting",
-  "database:setSetting"
+  "database:setSetting",
+  "database:persistValidatedScheduleBatch"
 ] as const;
 
 export function registerDatabaseIpc(): void {
@@ -85,6 +88,12 @@ export function registerDatabaseIpc(): void {
 
   ipcMain.handle("database:setSetting", (_event, key: string, value: string) =>
     handleDatabaseOperation(() => setSetting(key, value))
+  );
+
+  ipcMain.handle(
+    "database:persistValidatedScheduleBatch",
+    (_event, request: PersistValidatedScheduleBatchRequest) =>
+      handleDatabaseOperation(() => persistValidatedScheduleBatch(request))
   );
 }
 

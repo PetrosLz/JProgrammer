@@ -6,6 +6,8 @@ import {
   applyVersionedMigrations,
   latestSchemaVersion
 } from "../src/main/migrations";
+import { persistValidatedScheduleBatchInTransaction } from "../src/main/schedulePersistence";
+import type { PersistValidatedScheduleBatchRequest } from "../src/shared/types";
 
 type SqliteDatabase = Database.Database;
 
@@ -24,7 +26,11 @@ const tests: TestCase[] = [
   { name: "existing v1 database migrates to v2 safely", run: testV1Migration },
   { name: "forced migration failure rolls back schema and data", run: testRollback },
   { name: "running migrations twice is idempotent", run: testIdempotence },
-  { name: "schema version is not reset on startup", run: testSchemaVersionNotReset }
+  { name: "schema version is not reset on startup", run: testSchemaVersionNotReset },
+  { name: "validated schedule batch commits all rows atomically", run: testValidatedScheduleBatchSuccess },
+  { name: "validated schedule batch rolls back on mid-transaction failure", run: testValidatedScheduleBatchRollback },
+  { name: "validated schedule batch preserves manual assignments and rejects wrong-run slots", run: testValidatedScheduleBatchExistingData },
+  { name: "validated schedule batch duplicate execution is idempotent", run: testValidatedScheduleBatchDuplicateExecution }
 ];
 
 let passed = 0;
@@ -177,10 +183,256 @@ function testSchemaVersionNotReset(): void {
   db.close();
 }
 
+function testValidatedScheduleBatchSuccess(): void {
+  const db = createScheduleBatchDatabase();
+  const request = createScheduleBatchRequest();
+  const result = persistValidatedScheduleBatchInTransaction(db, request);
+
+  assertEqual(result.assignmentsInserted, 3, "assignments inserted");
+  assertEqual(result.slotsUpdated, 3, "slots updated");
+  assertEqual(result.warningsInserted, 2, "warnings inserted");
+  assertEqual(countRows(db, "schedule_assignments"), 3, "assignment row count");
+  assertEqual(
+    getValue<number>(
+      db,
+      "SELECT COUNT(*) FROM schedule_slots WHERE schedule_run_id = 'run-batch' AND status = 'filled'"
+    ),
+    3,
+    "all batch slots filled"
+  );
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT status FROM schedule_runs WHERE id = 'run-batch'"
+    ),
+    "assigned",
+    "run status committed"
+  );
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT completed_at FROM schedule_runs WHERE id = 'run-batch'"
+    ),
+    request.runUpdate.completedAt,
+    "run completion timestamp committed"
+  );
+  assertEqual(countRows(db, "schedule_warnings"), 2, "warning row count");
+
+  db.close();
+}
+
+function testValidatedScheduleBatchRollback(): void {
+  const db = createScheduleBatchDatabase();
+  db.exec(
+    `CREATE TRIGGER fail_second_batch_assignment
+     BEFORE INSERT ON schedule_assignments
+     WHEN NEW.id = 'as-batch-2'
+     BEGIN
+       SELECT RAISE(ABORT, 'forced assignment insert failure');
+     END`
+  );
+
+  assertThrows(
+    () => persistValidatedScheduleBatchInTransaction(db, createScheduleBatchRequest()),
+    "forced assignment insert failure should roll back the transaction"
+  );
+  assertEqual(countRows(db, "schedule_assignments"), 0, "rollback removed inserted assignments");
+  assertEqual(
+    getValue<number>(
+      db,
+      "SELECT COUNT(*) FROM schedule_slots WHERE schedule_run_id = 'run-batch' AND status = 'filled'"
+    ),
+    0,
+    "rollback left slot statuses unchanged"
+  );
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT status FROM schedule_runs WHERE id = 'run-batch'"
+    ),
+    "generated",
+    "rollback left run status unchanged"
+  );
+  assertEqual(
+    getValue<string | null>(
+      db,
+      "SELECT completed_at FROM schedule_runs WHERE id = 'run-batch'"
+    ),
+    null,
+    "rollback left run completion empty"
+  );
+  assertEqual(countRows(db, "schedule_warnings"), 0, "rollback removed warning batch");
+
+  db.close();
+}
+
+function testValidatedScheduleBatchExistingData(): void {
+  const manualDb = createScheduleBatchDatabase();
+  manualDb
+    .prepare(
+      `INSERT INTO schedule_assignments (
+        id,
+        schedule_run_id,
+        schedule_slot_id,
+        employee_id,
+        status,
+        is_manual_override,
+        notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run("as-manual", "run-batch", "slot-batch-1", "emp-batch-1", "assigned", 1, "manual");
+
+  assertThrows(
+    () => persistValidatedScheduleBatchInTransaction(manualDb, createScheduleBatchRequest()),
+    "batch should reject a slot with an existing manual assignment"
+  );
+  assertEqual(countRows(manualDb, "schedule_assignments"), 1, "manual assignment preserved");
+  assertEqual(
+    getValue<number>(
+      manualDb,
+      "SELECT is_manual_override FROM schedule_assignments WHERE id = 'as-manual'"
+    ),
+    1,
+    "manual flag preserved"
+  );
+  manualDb.close();
+
+  const wrongRunDb = createScheduleBatchDatabase();
+  const wrongRunRequest = createScheduleBatchRequest();
+  wrongRunRequest.assignments[0] = {
+    ...wrongRunRequest.assignments[0],
+    scheduleSlotId: "slot-other-run"
+  };
+  wrongRunRequest.slotUpdates[0] = {
+    ...wrongRunRequest.slotUpdates[0],
+    slotId: "slot-other-run"
+  };
+
+  assertThrows(
+    () => persistValidatedScheduleBatchInTransaction(wrongRunDb, wrongRunRequest),
+    "batch should reject a slot belonging to another run"
+  );
+  assertEqual(countRows(wrongRunDb, "schedule_assignments"), 0, "wrong-run rejection inserted no assignments");
+  wrongRunDb.close();
+}
+
+function testValidatedScheduleBatchDuplicateExecution(): void {
+  const db = createScheduleBatchDatabase();
+  const request = createScheduleBatchRequest();
+  const firstResult = persistValidatedScheduleBatchInTransaction(db, request);
+  const secondResult = persistValidatedScheduleBatchInTransaction(db, request);
+
+  assertEqual(firstResult.assignmentsInserted, 3, "first batch inserted assignments");
+  assertEqual(secondResult.assignmentsInserted, 0, "second batch inserted no duplicate assignments");
+  assertEqual(secondResult.warningsInserted, 0, "second batch inserted no duplicate warnings");
+  assertEqual(countRows(db, "schedule_assignments"), 3, "duplicate execution assignment count");
+  assertEqual(countRows(db, "schedule_warnings"), 2, "duplicate execution warning count");
+
+  db.close();
+}
+
 function createMemoryDatabase(): SqliteDatabase {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
   return db;
+}
+
+function createScheduleBatchDatabase(): SqliteDatabase {
+  const db = createMemoryDatabase();
+  db.exec(initSql);
+  applyVersionedMigrations(db);
+  db.exec(`
+    INSERT INTO roles (id, name, color, description, is_active)
+    VALUES ('role-service', 'Service', '#2563eb', NULL, 1);
+
+    INSERT INTO employees (id, first_name, last_name, email, phone, is_active, notes)
+    VALUES
+      ('emp-batch-1', 'Batch', 'One', NULL, NULL, 1, NULL),
+      ('emp-batch-2', 'Batch', 'Two', NULL, NULL, 1, NULL),
+      ('emp-batch-3', 'Batch', 'Three', NULL, NULL, 1, NULL);
+
+    INSERT INTO schedule_runs (id, name, start_date, end_date, status, parameters_json, completed_at)
+    VALUES
+      ('run-batch', 'Batch run', '2026-05-18', '2026-05-24', 'generated', NULL, NULL),
+      ('run-other', 'Other run', '2026-05-18', '2026-05-24', 'generated', NULL, NULL);
+
+    INSERT INTO schedule_slots (
+      id,
+      schedule_run_id,
+      date,
+      role_id,
+      start_time,
+      end_time,
+      required_count,
+      status
+    )
+    VALUES
+      ('slot-batch-1', 'run-batch', '2026-05-18', 'role-service', '08:00', '12:00', 1, 'unfilled'),
+      ('slot-batch-2', 'run-batch', '2026-05-18', 'role-service', '12:00', '16:00', 1, 'unfilled'),
+      ('slot-batch-3', 'run-batch', '2026-05-18', 'role-service', '16:00', '20:00', 1, 'unfilled'),
+      ('slot-other-run', 'run-other', '2026-05-18', 'role-service', '08:00', '12:00', 1, 'unfilled');
+  `);
+  return db;
+}
+
+function createScheduleBatchRequest(): PersistValidatedScheduleBatchRequest {
+  return {
+    scheduleRunId: "run-batch",
+    assignments: [
+      {
+        id: "as-batch-1",
+        scheduleSlotId: "slot-batch-1",
+        employeeId: "emp-batch-1",
+        status: "assigned",
+        isManualOverride: 0,
+        notes: "auto one"
+      },
+      {
+        id: "as-batch-2",
+        scheduleSlotId: "slot-batch-2",
+        employeeId: "emp-batch-2",
+        status: "assigned",
+        isManualOverride: 0,
+        notes: "auto two"
+      },
+      {
+        id: "as-batch-3",
+        scheduleSlotId: "slot-batch-3",
+        employeeId: "emp-batch-3",
+        status: "assigned",
+        isManualOverride: 0,
+        notes: "auto three"
+      }
+    ],
+    slotUpdates: [
+      { slotId: "slot-batch-1", status: "filled" },
+      { slotId: "slot-batch-2", status: "filled" },
+      { slotId: "slot-batch-3", status: "filled" }
+    ],
+    runUpdate: {
+      status: "assigned",
+      parametersJson: "{\"stage\":\"test\"}",
+      completedAt: "2026-05-18T12:00:00.000Z"
+    },
+    warnings: [
+      {
+        id: "warn-batch-1",
+        scheduleSlotId: null,
+        scheduleAssignmentId: null,
+        severity: "info",
+        warningType: "test_info",
+        message: "test warning one"
+      },
+      {
+        id: "warn-batch-2",
+        scheduleSlotId: "slot-batch-3",
+        scheduleAssignmentId: "as-batch-3",
+        severity: "warning",
+        warningType: "test_warning",
+        message: "test warning two"
+      }
+    ]
+  };
 }
 
 function createLegacyV1Database(): SqliteDatabase {

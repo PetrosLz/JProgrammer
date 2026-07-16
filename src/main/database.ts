@@ -7,6 +7,10 @@ import path from "node:path";
 import initSql from "./migrations/init.sql?raw";
 import { applyVersionedMigrations } from "./migrations";
 import {
+  SchedulePersistenceError,
+  persistValidatedScheduleBatchInTransaction
+} from "./schedulePersistence";
+import {
   databaseTableNames,
   type CrudTableName,
   type DatabaseEntityMap,
@@ -17,6 +21,8 @@ import {
   type DbStoredValue,
   type DbValue,
   type ListRecordsOptions,
+  type PersistValidatedScheduleBatchRequest,
+  type PersistValidatedScheduleBatchResult,
   type SettingRecord
 } from "../shared/types";
 
@@ -455,6 +461,20 @@ export function setSetting(key: string, value: string): SettingRecord {
   }
 
   return setting;
+}
+
+export function persistValidatedScheduleBatch(
+  request: PersistValidatedScheduleBatchRequest
+): PersistValidatedScheduleBatchResult {
+  try {
+    return persistValidatedScheduleBatchInTransaction(getDatabase(), request);
+  } catch (error) {
+    if (error instanceof SchedulePersistenceError) {
+      throw new DatabaseOperationError(error.code, error.message, error);
+    }
+
+    throw error;
+  }
 }
 
 function getDatabase(): SqliteDatabase {

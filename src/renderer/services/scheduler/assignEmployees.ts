@@ -13,7 +13,9 @@ import type {
   ScheduleSlot,
   ShiftTemplate,
   StaffingRequirement,
-  TimeOff
+  TimeOff,
+  PersistValidatedScheduleBatchRequest,
+  PersistValidatedScheduleWarningInput
 } from "../../types";
 import {
   type AssignedShift,
@@ -284,10 +286,11 @@ export async function assignEmployeesToRun({
     assignments,
     staffingRequirements
   });
+  const pendingWarnings: SchedulerWarningDraft[] = [];
   let warningsCreated = 0;
 
   if (slotsToAssign.length === 0) {
-    await saveWarning(createNoSlotsWarning(run.id));
+    const noSlotsWarning = createNoSlotsWarning(run.id);
     const evaluation = evaluateSchedule({
       run,
       slots: runSlots,
@@ -305,16 +308,22 @@ export async function assignEmployeesToRun({
       weekStartsOn,
       manualOverrides
     });
-    await updateRunStatus(
-      run,
-      runSlots.length,
-      assignedSlotIds.size,
-      undefined,
-      undefined,
-      undefined,
-      optimizationConfig,
-      evaluation
-    );
+    const batchResult = await databaseApi.persistValidatedScheduleBatch({
+      scheduleRunId: run.id,
+      assignments: [],
+      slotUpdates: [],
+      runUpdate: buildRunUpdate(
+        run,
+        runSlots.length,
+        assignedSlotIds.size,
+        undefined,
+        undefined,
+        undefined,
+        optimizationConfig,
+        evaluation
+      ),
+      warnings: materializeWarnings([noSlotsWarning])
+    });
 
     return {
       runId: run.id,
@@ -323,7 +332,7 @@ export async function assignEmployeesToRun({
       attemptedSlots: 0,
       assignedSlots: 0,
       unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
-      warningsCreated: 1,
+      warningsCreated: batchResult.warningsInserted,
       explanations: [],
       evaluation
     };
@@ -347,22 +356,17 @@ export async function assignEmployeesToRun({
     manualOverrides
   });
 
-  for (const warning of createFeasibilityWarnings(run.id, feasibility)) {
-    await saveWarning(warning);
-    warningsCreated += 1;
-  }
-
-  for (const message of diagnostics.warnings) {
-    await saveWarning({
+  pendingWarnings.push(...createFeasibilityWarnings(run.id, feasibility));
+  pendingWarnings.push(
+    ...diagnostics.warnings.map((message): SchedulerWarningDraft => ({
       scheduleRunId: run.id,
       scheduleSlotId: null,
       scheduleAssignmentId: null,
       severity: "warning",
       warningType: "role_under_supplied",
       message
-    });
-    warningsCreated += 1;
-  }
+    }))
+  );
 
   const selectedSchedule = optimizeCandidateSchedules({
     run,
@@ -428,35 +432,15 @@ export async function assignEmployeesToRun({
     );
   }
 
-  const savedAssignments: ScheduleAssignment[] = [];
-
-  for (const plannedAssignment of sortedPlannedAssignments) {
-    const slot = runSlots.find(
-      (item) => item.id === plannedAssignment.scheduleSlotId
-    );
-    const employee = employees.find(
-      (item) => item.id === plannedAssignment.employeeId
-    );
-
-    if (!slot || !employee) {
-      continue;
-    }
-
-    const { assignment } = await saveAutomaticAssignment({
-      run,
-      slot,
-      candidate: {
-        employee,
-        score: plannedAssignment.score
-      },
-      explanation: plannedAssignment.explanation
-    });
-
-    savedAssignments.push(assignment);
-    assignedSlotIds.add(slot.id);
-  }
-
-  const finalAssignments = [...activeRunAssignments, ...savedAssignments];
+  const automaticAssignments = buildAutomaticAssignmentRecords({
+    run,
+    plannedAssignments: sortedPlannedAssignments
+  });
+  const finalAssignments = [...activeRunAssignments, ...automaticAssignments];
+  const finalAssignedSlotIds = new Set([
+    ...assignedSlotIds,
+    ...automaticAssignments.map((assignment) => assignment.schedule_slot_id)
+  ]);
   const finalAssignedShifts = buildExistingAssignedShifts({
     slots: runSlots,
     assignments: finalAssignments
@@ -490,79 +474,64 @@ export async function assignEmployeesToRun({
     manualOverrides
   });
 
-  for (const violation of finalHardConstraintViolations) {
-    await saveWarning({
-      scheduleRunId: run.id,
-      scheduleSlotId: violation.slotId,
-      scheduleAssignmentId: violation.assignmentId,
-      severity: "critical",
-      warningType: "final_hard_constraint_violation",
-      message: violation.message
-    });
-    warningsCreated += 1;
+  if (finalHardConstraintViolations.length > 0) {
+    throw new Error(
+      `Automatic schedule validation failed with ${finalHardConstraintViolations.length} final hard-rule issue(s). No assignments were saved.`
+    );
   }
 
-  const coverageWarnings = createRoleGroupCoverageWarnings({
-    runId: run.id,
-    runSlots,
-    assignedShifts: finalAssignedShifts,
-    employees,
-    data,
-    roles,
-    shiftTemplates,
-    staffingRequirements,
-    manualOverrides
-  });
+  pendingWarnings.push(
+    ...createRoleGroupCoverageWarnings({
+      runId: run.id,
+      runSlots,
+      assignedShifts: finalAssignedShifts,
+      employees,
+      data,
+      roles,
+      shiftTemplates,
+      staffingRequirements,
+      manualOverrides
+    })
+  );
+  pendingWarnings.push(
+    ...createTeamQualityWarnings({
+      runId: run.id,
+      runSlots,
+      assignments: finalAssignments,
+      employees,
+      employeeRoles,
+      roles,
+      shiftTemplates,
+      staffingRequirements
+    })
+  );
 
-  for (const warning of coverageWarnings) {
-    await saveWarning(warning);
-    warningsCreated += 1;
-  }
-
-  const teamQualityWarnings = createTeamQualityWarnings({
-    runId: run.id,
-    runSlots,
-    assignments: finalAssignments,
-    employees,
-    employeeRoles,
-    roles,
-    shiftTemplates,
-    staffingRequirements
-  });
-
-  for (const warning of teamQualityWarnings) {
-    await saveWarning(warning);
-    warningsCreated += 1;
-  }
-
-  await updateRunStatus(
+  const batchRequest = buildPersistValidatedScheduleRequest({
     run,
-    runSlots.length,
-    finalAssignments.filter(
+    automaticAssignments,
+    runSlots,
+    totalSlots: runSlots.length,
+    assignedSlots: finalAssignments.filter(
       (assignment) =>
         assignment.status !== "cancelled" && assignment.status !== "removed"
     ).length,
+    warnings: pendingWarnings,
     diagnostics,
     selectedSchedule,
     feasibility,
     optimizationConfig,
-    finalEvaluation
-  );
-
-  if (finalHardConstraintViolations.length > 0) {
-    await databaseApi.updateRecord("schedule_runs", run.id, {
-      status: "needs_review"
-    });
-  }
+    evaluation: finalEvaluation
+  });
+  const batchResult = await persistValidatedScheduleBatch(batchRequest);
 
   return {
     runId: run.id,
     totalSlots: runSlots.length,
     alreadyAssignedSlots,
     attemptedSlots: slotsToAssign.length,
-    assignedSlots: savedAssignments.length,
-    unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
-    warningsCreated,
+    assignedSlots: automaticAssignments.length,
+    unfilledSlots: Math.max(0, runSlots.length - finalAssignedSlotIds.size),
+    warningsCreated: batchResult.warningsInserted,
     explanations: selectedSchedule.explanations,
     evaluation: finalEvaluation
   };
@@ -853,38 +822,141 @@ export function optimizeScheduleInMemory({
   };
 }
 
-async function saveAutomaticAssignment({
+function buildAutomaticAssignmentRecords({
   run,
-  slot,
-  candidate,
-  explanation: providedExplanation
+  plannedAssignments
 }: {
   run: ScheduleRun;
-  slot: ScheduleSlot;
-  candidate: AssignmentCandidate;
-  explanation?: string;
-}): Promise<{ assignment: ScheduleAssignment; explanation: string }> {
-  const explanation =
-    providedExplanation ??
-    buildAssignmentExplanation({
-      employee: candidate.employee,
-      slot,
-      score: candidate.score
-    });
-  const assignment = await databaseApi.createRecord("schedule_assignments", {
+  plannedAssignments: PlannedAssignment[];
+}): ScheduleAssignment[] {
+  return plannedAssignments.map((plannedAssignment) => ({
+    id: stableBatchId(
+      "auto-assignment",
+      run.id,
+      plannedAssignment.scheduleSlotId,
+      plannedAssignment.employeeId
+    ),
     schedule_run_id: run.id,
-    schedule_slot_id: slot.id,
-    employee_id: candidate.employee.id,
+    schedule_slot_id: plannedAssignment.scheduleSlotId,
+    employee_id: plannedAssignment.employeeId,
     status: "assigned",
-    is_manual_override: false,
-    notes: explanation
-  });
+    is_manual_override: 0,
+    notes: plannedAssignment.explanation,
+    created_at: "",
+    updated_at: ""
+  }));
+}
 
-  await databaseApi.updateRecord("schedule_slots", slot.id, {
-    status: "filled"
-  });
+function buildPersistValidatedScheduleRequest({
+  run,
+  automaticAssignments,
+  runSlots,
+  totalSlots,
+  assignedSlots,
+  warnings,
+  diagnostics,
+  selectedSchedule,
+  feasibility,
+  optimizationConfig,
+  evaluation
+}: {
+  run: ScheduleRun;
+  automaticAssignments: ScheduleAssignment[];
+  runSlots: ScheduleSlot[];
+  totalSlots: number;
+  assignedSlots: number;
+  warnings: SchedulerWarningDraft[];
+  diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>;
+  selectedSchedule?: CandidateSchedule;
+  feasibility?: FeasibilityResult;
+  optimizationConfig: OptimizationConfig;
+  evaluation?: ScheduleEvaluationResult;
+}): PersistValidatedScheduleBatchRequest {
+  const automaticSlotIds = new Set(
+    automaticAssignments.map((assignment) => assignment.schedule_slot_id)
+  );
 
-  return { assignment, explanation };
+  return {
+    scheduleRunId: run.id,
+    assignments: automaticAssignments.map((assignment) => ({
+      id: assignment.id,
+      scheduleSlotId: assignment.schedule_slot_id,
+      employeeId: assignment.employee_id,
+      status: assignment.status,
+      isManualOverride: assignment.is_manual_override,
+      notes: assignment.notes
+    })),
+    slotUpdates: runSlots
+      .filter((slot) => automaticSlotIds.has(slot.id))
+      .map((slot) => ({
+        slotId: slot.id,
+        status: "filled"
+      })),
+    runUpdate: buildRunUpdate(
+      run,
+      totalSlots,
+      assignedSlots,
+      diagnostics,
+      selectedSchedule,
+      feasibility,
+      optimizationConfig,
+      evaluation
+    ),
+    warnings: materializeWarnings(warnings)
+  };
+}
+
+async function persistValidatedScheduleBatch(
+  request: PersistValidatedScheduleBatchRequest
+) {
+  try {
+    return await databaseApi.persistValidatedScheduleBatch(request);
+  } catch (error) {
+    throw new Error(
+      `Schedule persistence failed. No automatic assignments were saved: ${getErrorMessage(error)}`
+    );
+  }
+}
+
+function materializeWarnings(
+  warnings: SchedulerWarningDraft[]
+): PersistValidatedScheduleWarningInput[] {
+  return warnings.map((warning, index) => ({
+    id: stableBatchId(
+      "schedule-warning",
+      warning.scheduleRunId,
+      String(index),
+      warning.warningType,
+      warning.scheduleSlotId ?? "run",
+      warning.scheduleAssignmentId ?? "none"
+    ),
+    scheduleSlotId: warning.scheduleSlotId,
+    scheduleAssignmentId: warning.scheduleAssignmentId,
+    severity: warning.severity,
+    warningType: warning.warningType,
+    message: warning.message
+  }));
+}
+
+function stableBatchId(...parts: string[]): string {
+  return parts
+    .join("-")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 220);
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return "Unknown persistence error.";
 }
 
 function optimizeCandidateSchedules({
@@ -4341,10 +4413,46 @@ async function updateRunStatus(
         : assignedSlots > 0
           ? "partially_assigned"
           : "unfilled";
+  const runUpdate = buildRunUpdate(
+    run,
+    totalSlots,
+    assignedSlots,
+    diagnostics,
+    selectedSchedule,
+    feasibility,
+    optimizationConfig,
+    evaluation
+  );
 
   await databaseApi.updateRecord("schedule_runs", run.id, {
     status,
-    parameters_json: mergeRunParameters(
+    parameters_json: runUpdate.parametersJson,
+    completed_at: runUpdate.completedAt
+  });
+}
+
+function buildRunUpdate(
+  run: ScheduleRun,
+  totalSlots: number,
+  assignedSlots: number,
+  diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
+  selectedSchedule?: CandidateSchedule,
+  feasibility?: FeasibilityResult,
+  optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
+  evaluation?: ScheduleEvaluationResult
+): PersistValidatedScheduleBatchRequest["runUpdate"] {
+  const status =
+    totalSlots === 0
+      ? "generated"
+      : assignedSlots === totalSlots
+        ? "assigned"
+        : assignedSlots > 0
+          ? "partially_assigned"
+          : "unfilled";
+
+  return {
+    status,
+    parametersJson: mergeRunParameters(
       run.parameters_json,
       diagnostics,
       selectedSchedule,
@@ -4352,8 +4460,8 @@ async function updateRunStatus(
       optimizationConfig,
       evaluation
     ),
-    completed_at: new Date().toISOString()
-  });
+    completedAt: new Date().toISOString()
+  };
 }
 
 function mergeRunParameters(

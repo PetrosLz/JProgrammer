@@ -4,11 +4,13 @@ import {
   buildCoverageCeilingAnalysis,
   buildManagerScheduleDiagnostics,
   buildScheduleGenerationPlan,
+  assignEmployeesToRun,
   diagnoseCoverageCeiling,
   evaluateSchedule,
   optimizeScheduleInMemory,
   validateScheduleHardConstraints
 } from "../src/renderer/services/scheduler";
+import { databaseApi } from "../src/renderer/services/databaseApi";
 import {
   buildShiftInterval,
   getShiftDurationMinutes,
@@ -165,7 +167,7 @@ function createTwoSlotSameEmployeeFixture({
   return fixture;
 }
 
-const tests: Array<{ name: string; run: () => void }> = [
+const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
   {
     name: "working-time engine handles duration overlap owning-date minutes and week keys",
     run: () => {
@@ -934,6 +936,150 @@ const tests: Array<{ name: string; run: () => void }> = [
     }
   },
   {
+    name: "automatic generation persists validated results with one batch call",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-service-batch",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalPersist = databaseApi.persistValidatedScheduleBatch;
+      const originalCreateRecord = databaseApi.createRecord;
+      const originalUpdateRecord = databaseApi.updateRecord;
+      let batchCalls = 0;
+      let assignmentCreateCalls = 0;
+      let slotUpdateCalls = 0;
+
+      databaseApi.persistValidatedScheduleBatch = (async (request) => {
+        batchCalls += 1;
+        assert.equal(request.assignments.length, 1, "batch assignment count");
+        assert.equal(request.slotUpdates.length, 1, "batch slot update count");
+        assert.equal(request.scheduleRunId, fixture.run.id, "batch run id");
+        return {
+          assignmentsInserted: request.assignments.length,
+          slotsUpdated: request.slotUpdates.length,
+          warningsInserted: request.warnings.length
+        };
+      }) as typeof databaseApi.persistValidatedScheduleBatch;
+      databaseApi.createRecord = (async (tableName) => {
+        if (tableName === "schedule_assignments") {
+          assignmentCreateCalls += 1;
+        }
+
+        throw new Error(`Unexpected per-record create: ${tableName}`);
+      }) as typeof databaseApi.createRecord;
+      databaseApi.updateRecord = (async (tableName) => {
+        if (tableName === "schedule_slots") {
+          slotUpdateCalls += 1;
+        }
+
+        throw new Error(`Unexpected per-record update: ${tableName}`);
+      }) as typeof databaseApi.updateRecord;
+
+      try {
+        const result = await assignEmployeesToRun({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(result.assignedSlots, 1, "assigned slot count");
+        assert.equal(batchCalls, 1, "batch persistence call count");
+        assert.equal(assignmentCreateCalls, 0, "per-assignment create calls");
+        assert.equal(slotUpdateCalls, 0, "per-slot update calls");
+      } finally {
+        databaseApi.persistValidatedScheduleBatch = originalPersist;
+        databaseApi.createRecord = originalCreateRecord;
+        databaseApi.updateRecord = originalUpdateRecord;
+      }
+    }
+  },
+  {
+    name: "automatic generation surfaces batch persistence failure without fallback writes",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-service-batch-failure",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalPersist = databaseApi.persistValidatedScheduleBatch;
+      const originalCreateRecord = databaseApi.createRecord;
+      const originalUpdateRecord = databaseApi.updateRecord;
+      let batchCalls = 0;
+      let perRecordWriteCalls = 0;
+
+      databaseApi.persistValidatedScheduleBatch = (async () => {
+        batchCalls += 1;
+        throw new Error("forced batch failure");
+      }) as typeof databaseApi.persistValidatedScheduleBatch;
+      databaseApi.createRecord = (async (tableName) => {
+        perRecordWriteCalls += 1;
+        throw new Error(`Unexpected per-record create after batch failure: ${tableName}`);
+      }) as typeof databaseApi.createRecord;
+      databaseApi.updateRecord = (async (tableName) => {
+        perRecordWriteCalls += 1;
+        throw new Error(`Unexpected per-record update after batch failure: ${tableName}`);
+      }) as typeof databaseApi.updateRecord;
+
+      try {
+        let failed = false;
+        try {
+          await assignEmployeesToRun({
+            run: fixture.run,
+            slots: fixture.slots,
+            employees: fixture.employees,
+            employeeRoles: fixture.employeeRoles,
+            employeeWorkRules: fixture.employeeWorkRules,
+            employeeDayConstraints: fixture.employeeDayConstraints,
+            employeeShiftAvailability: fixture.employeeShiftAvailability,
+            employeeTimeConstraints: fixture.employeeTimeConstraints,
+            timeOff: fixture.timeOff,
+            assignments: fixture.assignments,
+            roles: fixture.roles,
+            shiftTemplates: fixture.shiftTemplates,
+            staffingRequirements: fixture.staffingRequirements
+          });
+        } catch (error) {
+          failed = getMessage(error).includes("Schedule persistence failed");
+        }
+
+        assert(failed, "batch persistence failure surfaced to caller");
+        assert.equal(batchCalls, 1, "batch persistence failure call count");
+        assert.equal(perRecordWriteCalls, 0, "no per-record fallback writes");
+      } finally {
+        databaseApi.persistValidatedScheduleBatch = originalPersist;
+        databaseApi.createRecord = originalCreateRecord;
+        databaseApi.updateRecord = originalUpdateRecord;
+      }
+    }
+  },
+  {
     name: "optimized scheduler is deterministic and stops early on easy scenario",
     run: () => {
       const first = optimizeBenchmarkScenario("easy cafe");
@@ -1051,9 +1197,21 @@ const tests: Array<{ name: string; run: () => void }> = [
   }
 ];
 
-for (const test of tests) {
-  test.run();
-  console.log(`ok - ${test.name}`);
+void runTests();
+
+async function runTests() {
+  for (const test of tests) {
+    await test.run();
+    console.log(`ok - ${test.name}`);
+  }
+
+  console.log(`Scheduler regression tests passed (${tests.length}).`);
 }
 
-console.log(`Scheduler regression tests passed (${tests.length}).`);
+function getMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
