@@ -23,3 +23,9 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# Python local environments and cache
+.venv-solver/
+venv/
+__pycache__/
+*.py[cod]
