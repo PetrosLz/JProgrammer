@@ -16,7 +16,9 @@ export type OptimizerEngine = "cp_sat" | "heuristic_fallback";
 export type SolverAvailability = {
   available: boolean;
   pythonExecutable: string | null;
+  pythonVersion: string | null;
   ortoolsAvailable: boolean;
+  ortoolsVersion: string | null;
   message: string | null;
 };
 
@@ -25,6 +27,7 @@ export type CpSatSolveEmployee = {
   isActive: boolean;
   maxShiftsPerWeek: number;
   maxHoursPerDayMinutes: number;
+  targetHoursPerDayMinutes: number | null;
   canWorkWeekends: boolean;
 };
 
@@ -32,6 +35,7 @@ export type CpSatSolveEmployeeRole = {
   employeeId: string;
   roleId: string;
   experienceLevel: ExperienceLevel;
+  isPreferredRole: boolean;
 };
 
 export type CpSatSolveSlot = {
@@ -51,12 +55,39 @@ export type CpSatSolveSlot = {
 export type CpSatSolveEligibility = {
   employeeId: string;
   slotId: string;
+  preferenceScore: number;
 };
 
 export type CpSatExistingAssignment = {
   employeeId: string;
   slotId: string;
   locked: boolean;
+};
+
+export type CpSatHint = {
+  employeeId: string;
+  slotId: string;
+};
+
+export type CpSatHintDiagnostics = {
+  received: number;
+  accepted: number;
+  ignored: number;
+};
+
+export type CpSatObjectiveStageResult = {
+  value: number;
+  status: CpSatSolveStatus;
+  provenOptimal: boolean;
+};
+
+export type CpSatObjectiveStages = {
+  coverage: CpSatObjectiveStageResult;
+  targetHours?: CpSatObjectiveStageResult;
+  shiftFairness?: CpSatObjectiveStageResult;
+  minuteFairness?: CpSatObjectiveStageResult;
+  preferences?: CpSatObjectiveStageResult;
+  stability?: CpSatObjectiveStageResult;
 };
 
 export type CpSatSolveRequest = {
@@ -70,6 +101,7 @@ export type CpSatSolveRequest = {
   slots: CpSatSolveSlot[];
   eligibility: CpSatSolveEligibility[];
   existingAssignments: CpSatExistingAssignment[];
+  hints: CpSatHint[];
   timeoutSeconds: number;
 };
 
@@ -87,6 +119,12 @@ export type CpSatSolveResult = {
     totalSlots: number;
     coverageRate: number;
   };
+  coverageProvenOptimal: boolean;
+  fullLexicographicOptimality: boolean;
+  objectiveStages: CpSatObjectiveStages;
+  hintDiagnostics: CpSatHintDiagnostics;
+  pythonVersion: string | null;
+  ortoolsVersion: string | null;
   runtimeMs: number;
   message: string | null;
 };
@@ -97,6 +135,13 @@ export type CpSatTelemetry = {
   runtimeMs: number | null;
   coveredSlots: number | null;
   totalSlots: number | null;
+  coverageRate: number | null;
+  coverageProvenOptimal: boolean;
+  fullLexicographicOptimality: boolean;
+  objectiveStages: CpSatObjectiveStages | null;
+  hintDiagnostics: CpSatHintDiagnostics;
+  pythonVersion: string | null;
+  ortoolsVersion: string | null;
   fallbackReason: string | null;
 };
 

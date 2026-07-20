@@ -1,4 +1,5 @@
 import type {
+  CpSatHint,
   CpSatSolveRequest,
   CpSatSolveResult
 } from "../../../shared/solverTypes";
@@ -15,7 +16,10 @@ import {
   buildExistingAssignedShifts,
   checkHardConstraints,
   getEffectiveMaxShiftsPerWeek,
+  getDayConstraint,
+  getDayOfWeek,
   getEmployeeWorkRules,
+  getEmployeeShiftAvailability,
   getSlotExperiencedRequiredCount,
   getSlotMinimumExperienceLevel
 } from "./constraints";
@@ -35,6 +39,7 @@ export type BuildCpSatSolveRequestInput = {
   data: SchedulerData;
   activeRunAssignments: ScheduleAssignment[];
   timeoutSeconds: number;
+  hints?: Array<{ employeeId: string; slotId: string }>;
   manualOverrides?: ManualOverrideMap;
 };
 
@@ -47,6 +52,7 @@ export function buildCpSatSolveRequest({
   data,
   activeRunAssignments,
   timeoutSeconds,
+  hints = [],
   manualOverrides = {}
 }: BuildCpSatSolveRequestInput): CpSatSolveRequest {
   const activeAssignments = activeRunAssignments.filter(
@@ -78,12 +84,18 @@ export function buildCpSatSolveRequest({
           workRules?.max_hours_per_day !== null && workRules?.max_hours_per_day !== undefined
             ? Math.round(workRules.max_hours_per_day * 60)
             : 24 * 60;
+        const targetHoursPerDayMinutes =
+          workRules?.target_hours_per_day !== null &&
+          workRules?.target_hours_per_day !== undefined
+            ? Math.round(workRules.target_hours_per_day * 60)
+            : null;
 
         return {
           id: employee.id,
           isActive: employee.is_active === 1,
           maxShiftsPerWeek,
           maxHoursPerDayMinutes,
+          targetHoursPerDayMinutes,
           canWorkWeekends: workRules?.can_work_weekends !== 0
         };
       }),
@@ -96,7 +108,8 @@ export function buildCpSatSolveRequest({
       .map((employeeRole) => ({
         employeeId: employeeRole.employee_id,
         roleId: employeeRole.role_id,
-        experienceLevel: employeeRole.experience_level
+        experienceLevel: employeeRole.experience_level,
+        isPreferredRole: employeeRole.is_preferred_role === 1
       })),
     slots: [...runSlots].sort(compareSlots).map((slot) => {
       const interval = buildShiftInterval({
@@ -148,6 +161,7 @@ export function buildCpSatSolveRequest({
           left.slotId.localeCompare(right.slotId) ||
           left.employeeId.localeCompare(right.employeeId)
       ),
+    hints: sanitizeHints(hints),
     timeoutSeconds
   };
 }
@@ -177,6 +191,121 @@ export function getCpSatGeneratedAssignments({
     );
 }
 
+export function buildCpSatWarmStartHints({
+  request,
+  timeBudgetMs = 200
+}: {
+  request: CpSatSolveRequest;
+  timeBudgetMs?: number;
+}): CpSatHint[] {
+  const deadline = Date.now() + Math.max(0, timeBudgetMs);
+  const slotById = new Map(request.slots.map((slot) => [slot.id, slot]));
+  const employeeById = new Map(
+    request.employees.map((employee) => [employee.id, employee])
+  );
+  const lockedSlotIds = new Set<string>();
+  const assignedSlotIds = new Set<string>();
+  const weeklyShiftCountByEmployee = new Map<string, number>();
+  const dailyMinutesByEmployeeAndDate = new Map<string, number>();
+  const intervalsByEmployee = new Map<
+    string,
+    Array<{ start: number; end: number }>
+  >();
+
+  for (const assignment of request.existingAssignments) {
+    const slot = slotById.get(assignment.slotId);
+    if (!slot) {
+      continue;
+    }
+
+    assignedSlotIds.add(slot.id);
+    if (assignment.locked) {
+      lockedSlotIds.add(slot.id);
+    }
+    addHintState({
+      employeeId: assignment.employeeId,
+      slot,
+      weeklyShiftCountByEmployee,
+      dailyMinutesByEmployeeAndDate,
+      intervalsByEmployee
+    });
+  }
+
+  const eligibilityBySlot = new Map<string, typeof request.eligibility>();
+  for (const pair of request.eligibility) {
+    const existing = eligibilityBySlot.get(pair.slotId) ?? [];
+    existing.push(pair);
+    eligibilityBySlot.set(pair.slotId, existing);
+  }
+
+  const slots = [...request.slots]
+    .filter((slot) => !lockedSlotIds.has(slot.id))
+    .sort((left, right) => {
+      const leftCandidates = eligibilityBySlot.get(left.id)?.length ?? 0;
+      const rightCandidates = eligibilityBySlot.get(right.id)?.length ?? 0;
+      return (
+        leftCandidates - rightCandidates ||
+        left.date.localeCompare(right.date) ||
+        left.startTime.localeCompare(right.startTime) ||
+        left.id.localeCompare(right.id)
+      );
+    });
+  const hints: CpSatHint[] = [];
+
+  for (const slot of slots) {
+    if (Date.now() >= deadline) {
+      break;
+    }
+    if (assignedSlotIds.has(slot.id)) {
+      continue;
+    }
+
+    const candidates = [...(eligibilityBySlot.get(slot.id) ?? [])].sort(
+      (left, right) => {
+        const leftShiftCount =
+          weeklyShiftCountByEmployee.get(left.employeeId) ?? 0;
+        const rightShiftCount =
+          weeklyShiftCountByEmployee.get(right.employeeId) ?? 0;
+
+        return (
+          right.preferenceScore - left.preferenceScore ||
+          leftShiftCount - rightShiftCount ||
+          left.employeeId.localeCompare(right.employeeId)
+        );
+      }
+    );
+
+    for (const candidate of candidates) {
+      const employee = employeeById.get(candidate.employeeId);
+      if (!employee || !canAddHint({
+        employee,
+        slot,
+        weeklyShiftCountByEmployee,
+        dailyMinutesByEmployeeAndDate,
+        intervalsByEmployee
+      })) {
+        continue;
+      }
+
+      hints.push({
+        employeeId: candidate.employeeId,
+        slotId: slot.id
+      });
+      assignedSlotIds.add(slot.id);
+      addHintState({
+        employeeId: candidate.employeeId,
+        slot,
+        weeklyShiftCountByEmployee,
+        dailyMinutesByEmployeeAndDate,
+        intervalsByEmployee
+      });
+      break;
+    }
+  }
+
+  return hints;
+}
+
 function buildEligibilityPairs({
   runSlots,
   employees,
@@ -200,7 +329,11 @@ function buildEligibilityPairs({
       (assignment) => `${assignment.employee_id}|${assignment.schedule_slot_id}`
     )
   );
-  const pairs: Array<{ employeeId: string; slotId: string }> = [];
+  const pairs: Array<{
+    employeeId: string;
+    slotId: string;
+    preferenceScore: number;
+  }> = [];
 
   for (const slot of [...runSlots].sort(compareSlots)) {
     for (const employee of [...employees].sort(compareEmployees)) {
@@ -236,7 +369,8 @@ function buildEligibilityPairs({
       if (hardConstraintResult.allowed) {
         pairs.push({
           employeeId: employee.id,
-          slotId: slot.id
+          slotId: slot.id,
+          preferenceScore: getPreferenceScore({ employee, slot, data })
         });
       }
     }
@@ -247,6 +381,131 @@ function buildEligibilityPairs({
       left.employeeId.localeCompare(right.employeeId) ||
       left.slotId.localeCompare(right.slotId)
   );
+}
+
+function getPreferenceScore({
+  employee,
+  slot,
+  data
+}: {
+  employee: Employee;
+  slot: ScheduleSlot;
+  data: SchedulerData;
+}): number {
+  const preferredRoleScore = data.employeeRoles.some(
+    (employeeRole) =>
+      employeeRole.employee_id === employee.id &&
+      employeeRole.role_id === slot.role_id &&
+      employeeRole.is_preferred_role === 1
+  )
+    ? 3
+    : 0;
+  const shiftPreferenceScore =
+    getEmployeeShiftAvailability({
+      employeeId: employee.id,
+      slot,
+      data
+    })?.availability_type === "prefers_to_work"
+      ? 2
+      : 0;
+  const dayPreferenceScore =
+    getDayConstraint(employee.id, getDayOfWeek(slot.date), data.employeeDayConstraints)
+      ?.constraint_type === "prefers_to_work"
+      ? 1
+      : 0;
+
+  return preferredRoleScore + shiftPreferenceScore + dayPreferenceScore;
+}
+
+function canAddHint({
+  employee,
+  slot,
+  weeklyShiftCountByEmployee,
+  dailyMinutesByEmployeeAndDate,
+  intervalsByEmployee
+}: {
+  employee: CpSatSolveRequest["employees"][number];
+  slot: CpSatSolveRequest["slots"][number];
+  weeklyShiftCountByEmployee: Map<string, number>;
+  dailyMinutesByEmployeeAndDate: Map<string, number>;
+  intervalsByEmployee: Map<string, Array<{ start: number; end: number }>>;
+}): boolean {
+  const weeklyShiftCount =
+    weeklyShiftCountByEmployee.get(employee.id) ?? 0;
+  if (weeklyShiftCount + 1 > employee.maxShiftsPerWeek) {
+    return false;
+  }
+
+  const dailyKey = getDailyHintKey(employee.id, slot.date);
+  const dailyMinutes = dailyMinutesByEmployeeAndDate.get(dailyKey) ?? 0;
+  if (dailyMinutes + slot.durationMinutes > employee.maxHoursPerDayMinutes) {
+    return false;
+  }
+
+  return !(intervalsByEmployee.get(employee.id) ?? []).some((interval) =>
+    intervalsOverlap(interval, {
+      start: slot.absoluteStartMinute,
+      end: slot.absoluteEndMinute
+    })
+  );
+}
+
+function addHintState({
+  employeeId,
+  slot,
+  weeklyShiftCountByEmployee,
+  dailyMinutesByEmployeeAndDate,
+  intervalsByEmployee
+}: {
+  employeeId: string;
+  slot: CpSatSolveRequest["slots"][number];
+  weeklyShiftCountByEmployee: Map<string, number>;
+  dailyMinutesByEmployeeAndDate: Map<string, number>;
+  intervalsByEmployee: Map<string, Array<{ start: number; end: number }>>;
+}): void {
+  weeklyShiftCountByEmployee.set(
+    employeeId,
+    (weeklyShiftCountByEmployee.get(employeeId) ?? 0) + 1
+  );
+
+  const dailyKey = getDailyHintKey(employeeId, slot.date);
+  dailyMinutesByEmployeeAndDate.set(
+    dailyKey,
+    (dailyMinutesByEmployeeAndDate.get(dailyKey) ?? 0) + slot.durationMinutes
+  );
+
+  const intervals = intervalsByEmployee.get(employeeId) ?? [];
+  intervals.push({
+    start: slot.absoluteStartMinute,
+    end: slot.absoluteEndMinute
+  });
+  intervalsByEmployee.set(employeeId, intervals);
+}
+
+function intervalsOverlap(
+  left: { start: number; end: number },
+  right: { start: number; end: number }
+): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function getDailyHintKey(employeeId: string, date: string): string {
+  return `${employeeId}|${date}`;
+}
+
+function sanitizeHints(
+  hints: Array<{ employeeId: string; slotId: string }>
+): Array<{ employeeId: string; slotId: string }> {
+  return hints
+    .filter(
+      (hint) =>
+        typeof hint.employeeId === "string" && typeof hint.slotId === "string"
+    )
+    .sort(
+      (left, right) =>
+        left.employeeId.localeCompare(right.employeeId) ||
+        left.slotId.localeCompare(right.slotId)
+    );
 }
 
 function compareEmployees(left: Employee, right: Employee): number {

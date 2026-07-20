@@ -63,6 +63,16 @@ type CpSatBenchmarkResult = {
   runtimeMs: number;
   hardViolationCount: number;
   validated: boolean;
+  coverageProvenOptimal: boolean;
+  fullLexicographicOptimality: boolean;
+  objectiveStages: Record<
+    string,
+    {
+      value: number;
+      status: string;
+      provenOptimal: boolean;
+    }
+  >;
   message: string | null;
 };
 
@@ -299,7 +309,7 @@ async function runCpSatBenchmark({
       weekStartsOn: 1
     },
     activeRunAssignments: scenario.existingAssignments,
-    timeoutSeconds: 10
+    timeoutSeconds: 30
   });
   const result = await solveScheduleWithCpSat(request);
   const assignments = buildCpSatAssignments({
@@ -344,6 +354,9 @@ async function runCpSatBenchmark({
     runtimeMs: result.runtimeMs,
     hardViolationCount: validation.violations.length,
     validated: accepted && validation.valid,
+    coverageProvenOptimal: result.coverageProvenOptimal,
+    fullLexicographicOptimality: result.fullLexicographicOptimality,
+    objectiveStages: result.objectiveStages,
     message: result.message
   };
 }
@@ -369,11 +382,15 @@ function printCpSatResult(result: CpSatBenchmarkResult) {
   console.log(
     [
       "  CP-SAT".padEnd(28),
+      "production=cp_sat",
       `status=${result.status}`,
       `coverage=${Math.round(result.coverageRate * 100)}%`,
       `assigned=${result.assignedSlots}/${result.totalSlots}`,
       `hard=${result.hardViolationCount}`,
       `validated=${result.validated ? "yes" : "no"}`,
+      `coverageOptimal=${result.coverageProvenOptimal ? "yes" : "no"}`,
+      `lexOptimal=${result.fullLexicographicOptimality ? "yes" : "no"}`,
+      `stages=${formatObjectiveStages(result.objectiveStages)}`,
       `time=${result.runtimeMs}ms`
     ].join(" | ")
   );
@@ -381,6 +398,17 @@ function printCpSatResult(result: CpSatBenchmarkResult) {
   if (result.message) {
     console.log(`  CP-SAT note: ${result.message}`);
   }
+}
+
+function formatObjectiveStages(
+  stages: CpSatBenchmarkResult["objectiveStages"]
+): string {
+  return Object.entries(stages)
+    .map(
+      ([name, stage]) =>
+        `${name}:${stage.value}/${stage.status}${stage.provenOptimal ? "*" : ""}`
+    )
+    .join(",");
 }
 
 function countHardViolations(

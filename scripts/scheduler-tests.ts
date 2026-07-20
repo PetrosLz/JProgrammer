@@ -1042,7 +1042,9 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         availability: {
           available: true,
           pythonExecutable: "mock-python",
+          pythonVersion: "3.12.0",
           ortoolsAvailable: true,
+          ortoolsVersion: "9.15.0",
           message: null
         },
         assignment: {
@@ -1056,10 +1058,12 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           ? (JSON.parse(request.runUpdate.parametersJson) as {
               optimizerEngine?: string;
               solver?: { status?: string };
+              optimization?: { selectedProfile?: string | null };
             })
           : {};
         optimizerEngine = parameters.optimizerEngine ?? null;
         assert.equal(parameters.solver?.status, "OPTIMAL");
+        assert.equal(parameters.optimization?.selectedProfile, null);
         assert.equal(request.assignments.length, 1);
         return {
           assignmentsInserted: request.assignments.length,
@@ -1305,6 +1309,27 @@ function setMockSolverWindow({
             totalSlots: request.slots.length,
             coverageRate: request.slots.length === 0 ? 0 : 1 / request.slots.length
           },
+          coverageProvenOptimal: true,
+          fullLexicographicOptimality: true,
+          objectiveStages: {
+            coverage: {
+              value: 1,
+              status: "OPTIMAL",
+              provenOptimal: true
+            },
+            targetHours: {
+              value: 0,
+              status: "OPTIMAL",
+              provenOptimal: true
+            }
+          },
+          hintDiagnostics: {
+            received: 0,
+            accepted: 0,
+            ignored: 0
+          },
+          pythonVersion: "3.12.0",
+          ortoolsVersion: "9.15.0",
           runtimeMs: 1,
           message: null
         }

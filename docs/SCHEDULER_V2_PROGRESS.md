@@ -437,10 +437,82 @@ The migration test script verifies:
   - Accepted CP-SAT benchmark results must pass the TypeScript validator.
   - `OPTIMAL` CP-SAT coverage must not be lower than heuristic coverage for the same hard model.
 
-### Known Limitations / Next Phase
+### Known Limitations Before Phase 4.2
 
 - CP-SAT Phase 4 optimizes maximum coverage only.
 - It does not yet implement lexicographic soft objectives for fairness, preferences, role scarcity, rotation, or manager-friendly team quality beyond hard group experience.
 - Heuristic warm-start hints are not wired yet; the integration point exists, but hints are not faked.
 - Windows packaging of a Python/OR-Tools runtime remains a later phase.
 - Next phase: add lexicographic CP-SAT objectives after maximum coverage, then compare soft-quality reward against the heuristic without weakening hard constraints.
+
+## Phase 4.2 - CP-SAT Production Optimization
+
+### Production Execution Order
+
+- Automatic generation now attempts CP-SAT before the expensive full heuristic.
+- The full heuristic optimizer remains present but runs only as a labelled `HEURISTIC_FALLBACK` when CP-SAT is unavailable, crashes, times out without usable output, returns an unusable status, produces malformed data, or fails independent TypeScript validation.
+- Accepted CP-SAT and fallback heuristic schedules both flow through:
+  - in-memory solve,
+  - `validateScheduleHardConstraints`,
+  - complete batch request construction,
+  - one atomic `persistValidatedScheduleBatch` transaction.
+
+### Lexicographic Objective Stages
+
+- Stage 1: maximize exact requested-slot coverage. All slots have equal value.
+- Stage 2: minimize target daily-hour deviation by owning/start date.
+  - For employees with `target_hours_per_day`, deviation is `abs(worked_minutes - target_minutes * worked_day)`.
+  - Non-working employee-days contribute zero deviation.
+  - Employees without `target_hours_per_day` are ignored by this objective.
+- Stage 3: minimize weekly shift-count range among active employees with at least one eligible assignment variable.
+- Stage 4: minimize weekly minute range for the same fairness-eligible employees.
+- Stage 5: maximize explicit preference score only from existing data:
+  - preferred role,
+  - day-level `prefers_to_work`,
+  - shift-level `prefers_to_work`.
+- Stage 6: maximize agreement with valid hints when hints are supplied.
+- A lower-priority stage runs only after the previous stage is `OPTIMAL`; each proven optimum is frozen before continuing.
+
+### Proof And Status Semantics
+
+- `OPTIMAL` means every requested/reached objective stage was proven optimal.
+- `FEASIBLE` means a valid solution exists but full lexicographic proof stopped early.
+- Coverage proof is reported independently as `coverageProvenOptimal`.
+- Full staged proof is reported as `fullLexicographicOptimality`.
+- Ordinary understaffing remains a valid optimal result when no more eligible employee-slot assignments exist.
+
+### Hints
+
+- The protocol and Python model support safe hints.
+- Hints are accepted only for existing sparse eligible variables and ignored otherwise.
+- Hints never become hard constraints.
+- Production does not run the full heuristic to create hints; no separate 100-300ms heuristic mode has been isolated yet.
+
+### Runtime Discovery
+
+- Runtime discovery checks:
+  - `JPROGRAMMER_PYTHON`,
+  - `.venv-solver/Scripts/python.exe`,
+  - `.venv-solver/bin/python`,
+  - `py -3.12`,
+  - `py -3.11`,
+  - `python`,
+  - `python3`.
+- Availability verifies both `ortools` and `ortools.sat.python.cp_model`.
+- The solver reports Python and OR-Tools versions in telemetry.
+- `.venv-solver` remains ignored by Git.
+
+### Tests And Benchmarks
+
+- Python solver tests now execute real OR-Tools in this workspace using the available local/bundled Python runtime plus `.venv-solver` packages.
+- Scheduler regression tests include a mocked CP-SAT acceptance path that verifies:
+  - CP-SAT output uses one atomic batch,
+  - `cp_sat` is recorded,
+  - the heuristic selected profile remains `null`, proving the full heuristic was not constructed first.
+- Benchmark output now includes CP-SAT status, coverage proof, full lexicographic proof, stage values, validation status, and runtime alongside the heuristic comparison baseline.
+
+### Remaining Limitations
+
+- Production hint generation is intentionally omitted until a genuinely bounded fast heuristic mode exists.
+- CP-SAT does not yet optimize role scarcity/rotation beyond explicit preference and fairness stages.
+- Windows installer packaging still does not bundle Python/OR-Tools.

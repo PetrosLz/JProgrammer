@@ -90,6 +90,7 @@ import {
   type SchedulerStopReason
 } from "./optimizationConfig";
 import {
+  buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
   getCpSatGeneratedAssignments
 } from "./cpSatAdapter";
@@ -192,6 +193,7 @@ type OptimizerPlanSelection = {
   plannedAssignments: PlannedAssignment[];
   telemetry: CpSatTelemetry;
   explanations: string[];
+  selectedSchedule?: CandidateSchedule;
 };
 
 type SimulationState = {
@@ -380,32 +382,22 @@ export async function assignEmployeesToRun({
     }))
   );
 
-  const selectedSchedule = optimizeCandidateSchedules({
+  const optimizerPlan = await selectOptimizerPlan({
     run,
     runSlots,
     slotsToAssign,
     employees,
     roles,
     activeEmployees,
-    data,
-    initialAssignedShifts,
-    fixedAssignments: activeRunAssignments,
-    rotationHistory,
-    manualOverrides,
-    staffingRequirements,
-    feasibility,
-    optimizationConfig,
-    shiftTemplates
-  });
-  const optimizerPlan = await selectOptimizerPlan({
-    run,
-    runSlots,
-    employees,
     employeeRoles,
     data,
+    initialAssignedShifts,
     activeRunAssignments,
-    selectedSchedule,
+    rotationHistory,
     optimizationConfig,
+    staffingRequirements,
+    feasibility,
+    shiftTemplates,
     manualOverrides
   });
   const sortedPlannedAssignments = sortPlannedAssignments(
@@ -443,10 +435,10 @@ export async function assignEmployeesToRun({
       parameters_json: mergeRunParameters(
         run.parameters_json,
         diagnostics,
-        selectedSchedule,
+        optimizerPlan.selectedSchedule,
         feasibility,
         optimizationConfig,
-        selectedSchedule.evaluation,
+        optimizerPlan.selectedSchedule?.evaluation,
         optimizerPlan.telemetry
       )
     });
@@ -541,7 +533,7 @@ export async function assignEmployeesToRun({
     ).length,
     warnings: pendingWarnings,
     diagnostics,
-    selectedSchedule,
+    selectedSchedule: optimizerPlan.selectedSchedule,
     feasibility,
     optimizationConfig,
     evaluation: finalEvaluation,
@@ -949,41 +941,90 @@ async function persistValidatedScheduleBatch(
 async function selectOptimizerPlan({
   run,
   runSlots,
+  slotsToAssign,
   employees,
+  roles,
+  activeEmployees,
   employeeRoles,
   data,
+  initialAssignedShifts,
   activeRunAssignments,
-  selectedSchedule,
+  rotationHistory,
   optimizationConfig,
+  staffingRequirements,
+  feasibility,
+  shiftTemplates,
   manualOverrides
 }: {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
+  slotsToAssign: ScheduleSlot[];
   employees: Employee[];
+  roles: Role[];
+  activeEmployees: Employee[];
   employeeRoles: EmployeeRole[];
   data: SchedulerData;
+  initialAssignedShifts: AssignedShift[];
   activeRunAssignments: ScheduleAssignment[];
-  selectedSchedule: CandidateSchedule;
+  rotationHistory: RotationHistoryMap;
   optimizationConfig: OptimizationConfig;
+  staffingRequirements: StaffingRequirement[];
+  feasibility: FeasibilityResult;
+  shiftTemplates: ShiftTemplate[];
   manualOverrides: ManualOverrideMap;
 }): Promise<OptimizerPlanSelection> {
-  const heuristicFallback = (fallbackReason: string | null): OptimizerPlanSelection => ({
-    plannedAssignments: selectedSchedule.plannedAssignments,
-    telemetry: {
-      engine: "heuristic_fallback",
-      solverStatus: "HEURISTIC_FALLBACK",
-      runtimeMs: null,
-      coveredSlots: selectedSchedule.plannedAssignments.length,
-      totalSlots: runSlots.length,
-      fallbackReason
-    },
-    explanations: fallbackReason
-      ? [
-          `HEURISTIC_FALLBACK: ${fallbackReason}`,
-          ...selectedSchedule.explanations
-        ]
-      : selectedSchedule.explanations
-  });
+  const heuristicFallback = (fallbackReason: string | null): OptimizerPlanSelection => {
+    const selectedSchedule = optimizeCandidateSchedules({
+      run,
+      runSlots,
+      slotsToAssign,
+      employees,
+      roles,
+      activeEmployees,
+      data,
+      initialAssignedShifts,
+      fixedAssignments: activeRunAssignments,
+      rotationHistory,
+      manualOverrides,
+      staffingRequirements,
+      feasibility,
+      optimizationConfig,
+      shiftTemplates
+    });
+
+    return {
+      plannedAssignments: selectedSchedule.plannedAssignments,
+      selectedSchedule,
+      telemetry: {
+        engine: "heuristic_fallback",
+        solverStatus: "HEURISTIC_FALLBACK",
+        runtimeMs: null,
+        coveredSlots: selectedSchedule.plannedAssignments.length,
+        totalSlots: runSlots.length,
+        coverageRate:
+          runSlots.length === 0
+            ? 0
+            : selectedSchedule.plannedAssignments.length / runSlots.length,
+        coverageProvenOptimal: false,
+        fullLexicographicOptimality: false,
+        objectiveStages: null,
+        hintDiagnostics: {
+          received: 0,
+          accepted: 0,
+          ignored: 0
+        },
+        pythonVersion: null,
+        ortoolsVersion: null,
+        fallbackReason
+      },
+      explanations: fallbackReason
+        ? [
+            `HEURISTIC_FALLBACK: ${fallbackReason}`,
+            ...selectedSchedule.explanations
+          ]
+        : selectedSchedule.explanations
+    };
+  };
 
   try {
     const availability = await solverApi.getCpSatAvailability();
@@ -992,7 +1033,7 @@ async function selectOptimizerPlan({
       return heuristicFallback(availability.message ?? "CP-SAT solver unavailable.");
     }
 
-    const request = buildCpSatSolveRequest({
+    const baseRequest = buildCpSatSolveRequest({
       requestId: `cp-sat-${run.id}-${Date.now()}`,
       run,
       runSlots,
@@ -1003,6 +1044,13 @@ async function selectOptimizerPlan({
       timeoutSeconds: getCpSatTimeoutSeconds(optimizationConfig),
       manualOverrides
     });
+    const request = {
+      ...baseRequest,
+      hints: buildCpSatWarmStartHints({
+        request: baseRequest,
+        timeBudgetMs: getCpSatHintBudgetMs(optimizationConfig)
+      })
+    };
     const result = await solverApi.solveScheduleWithCpSat(request);
 
     if (result.status !== "OPTIMAL" && result.status !== "FEASIBLE") {
@@ -1048,11 +1096,17 @@ async function selectOptimizerPlan({
         runtimeMs: result.runtimeMs,
         coveredSlots: result.objectiveValues.coveredSlots,
         totalSlots: result.objectiveValues.totalSlots,
+        coverageRate: result.objectiveValues.coverageRate,
+        coverageProvenOptimal: result.coverageProvenOptimal,
+        fullLexicographicOptimality: result.fullLexicographicOptimality,
+        objectiveStages: result.objectiveStages,
+        hintDiagnostics: result.hintDiagnostics,
+        pythonVersion: result.pythonVersion ?? availability.pythonVersion,
+        ortoolsVersion: result.ortoolsVersion ?? availability.ortoolsVersion,
         fallbackReason: null
       },
       explanations: [
-        `CP-SAT ${result.status}: covered ${result.objectiveValues.coveredSlots}/${result.objectiveValues.totalSlots} slots in ${result.runtimeMs}ms.`,
-        ...selectedSchedule.explanations
+        `CP-SAT ${result.status}: covered ${result.objectiveValues.coveredSlots}/${result.objectiveValues.totalSlots} slots in ${result.runtimeMs}ms.`
       ]
     };
   } catch (error) {
@@ -1091,10 +1145,11 @@ function createCpSatPlannedAssignment({
 }
 
 function getCpSatTimeoutSeconds(optimizationConfig: OptimizationConfig): number {
-  return Math.max(
-    5,
-    Math.min(15, Math.ceil(optimizationConfig.timeBudgetMs / 1_000))
-  );
+  return Math.max(8, Math.min(12, Math.ceil(optimizationConfig.timeBudgetMs / 1_000)));
+}
+
+function getCpSatHintBudgetMs(optimizationConfig: OptimizationConfig): number {
+  return Math.max(100, Math.min(300, Math.floor(optimizationConfig.timeBudgetMs / 50)));
 }
 
 function materializeWarnings(
@@ -4666,6 +4721,14 @@ function mergeRunParameters(
           runtimeMs: optimizerTelemetry.runtimeMs,
           coveredSlots: optimizerTelemetry.coveredSlots,
           totalSlots: optimizerTelemetry.totalSlots,
+          coverageRate: optimizerTelemetry.coverageRate,
+          coverageProvenOptimal: optimizerTelemetry.coverageProvenOptimal,
+          fullLexicographicOptimality:
+            optimizerTelemetry.fullLexicographicOptimality,
+          objectiveStages: optimizerTelemetry.objectiveStages,
+          hintDiagnostics: optimizerTelemetry.hintDiagnostics,
+          pythonVersion: optimizerTelemetry.pythonVersion,
+          ortoolsVersion: optimizerTelemetry.ortoolsVersion,
           fallbackReason: optimizerTelemetry.fallbackReason
         }
       : {
@@ -4674,6 +4737,17 @@ function mergeRunParameters(
           runtimeMs: null,
           coveredSlots: null,
           totalSlots: null,
+          coverageRate: null,
+          coverageProvenOptimal: false,
+          fullLexicographicOptimality: false,
+          objectiveStages: null,
+          hintDiagnostics: {
+            received: 0,
+            accepted: 0,
+            ignored: 0
+          },
+          pythonVersion: null,
+          ortoolsVersion: null,
           fallbackReason: null
         },
     assignedAt,

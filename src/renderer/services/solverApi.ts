@@ -9,7 +9,9 @@ import { DatabaseApiError } from "./databaseApi";
 const unavailableSolver: SolverAvailability = {
   available: false,
   pythonExecutable: null,
+  pythonVersion: null,
   ortoolsAvailable: false,
+  ortoolsVersion: null,
   message: "CP-SAT solver IPC is unavailable in this runtime."
 };
 
@@ -39,6 +41,22 @@ export const solverApi = {
           totalSlots: request.slots.length,
           coverageRate: 0
         },
+        coverageProvenOptimal: false,
+        fullLexicographicOptimality: false,
+        objectiveStages: {
+          coverage: {
+            value: 0,
+            status: "UNKNOWN",
+            provenOptimal: false
+          }
+        },
+        hintDiagnostics: {
+          received: 0,
+          accepted: 0,
+          ignored: 0
+        },
+        pythonVersion: null,
+        ortoolsVersion: null,
         runtimeMs: 0,
         message: unavailableSolver.message
       };

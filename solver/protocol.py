@@ -21,6 +21,12 @@ def build_result(
     total_slots: int,
     runtime_ms: int,
     message: str | None,
+    coverage_proven_optimal: bool = False,
+    full_lexicographic_optimality: bool = False,
+    objective_stages: Dict[str, Any] | None = None,
+    hint_diagnostics: Dict[str, int] | None = None,
+    python_version: str | None = None,
+    ortools_version: str | None = None,
 ) -> Dict[str, Any]:
     coverage_rate = 0 if total_slots == 0 else covered_slots / total_slots
     return {
@@ -32,6 +38,22 @@ def build_result(
             "totalSlots": total_slots,
             "coverageRate": coverage_rate,
         },
+        "coverageProvenOptimal": coverage_proven_optimal,
+        "fullLexicographicOptimality": full_lexicographic_optimality,
+        "objectiveStages": objective_stages
+        if objective_stages is not None
+        else {
+            "coverage": {
+                "value": covered_slots,
+                "status": status if status in VALID_STATUSES else "UNKNOWN",
+                "provenOptimal": status == "OPTIMAL",
+            }
+        },
+        "hintDiagnostics": hint_diagnostics
+        if hint_diagnostics is not None
+        else {"received": 0, "accepted": 0, "ignored": 0},
+        "pythonVersion": python_version,
+        "ortoolsVersion": ortools_version,
         "runtimeMs": runtime_ms,
         "message": message,
     }
@@ -58,6 +80,7 @@ def validate_request(payload: Any) -> Tuple[str, List[str]]:
         "slots",
         "eligibility",
         "existingAssignments",
+        "hints",
         "timeoutSeconds",
     ]:
         if key not in payload:
@@ -67,7 +90,7 @@ def validate_request(payload: Any) -> Tuple[str, List[str]]:
         errors.append("requestId must be a string.")
     if not isinstance(payload.get("schedule"), dict):
         errors.append("schedule must be an object.")
-    for key in ["employees", "employeeRoles", "slots", "eligibility", "existingAssignments"]:
+    for key in ["employees", "employeeRoles", "slots", "eligibility", "existingAssignments", "hints"]:
         if not isinstance(payload.get(key), list):
             errors.append(f"{key} must be an array.")
     if not isinstance(payload.get("timeoutSeconds"), (int, float)):
@@ -90,6 +113,12 @@ def validate_request(payload: Any) -> Tuple[str, List[str]]:
             errors.append(f"Employee {employee['id']} must have maxShiftsPerWeek.")
         if not isinstance(employee.get("maxHoursPerDayMinutes"), int):
             errors.append(f"Employee {employee['id']} must have maxHoursPerDayMinutes.")
+        if employee.get("targetHoursPerDayMinutes") is not None and not isinstance(
+            employee.get("targetHoursPerDayMinutes"), int
+        ):
+            errors.append(
+                f"Employee {employee['id']} must have targetHoursPerDayMinutes or null."
+            )
 
     for slot in slots:
         if not isinstance(slot, dict) or not isinstance(slot.get("id"), str):
@@ -113,6 +142,8 @@ def validate_request(payload: Any) -> Tuple[str, List[str]]:
             errors.append(f"Eligibility references unknown slot {slot_id}.")
         if isinstance(employee_id, str) and isinstance(slot_id, str):
             eligibility_pairs.add((employee_id, slot_id))
+        if not isinstance(pair.get("preferenceScore"), int):
+            errors.append(f"Eligibility {employee_id}/{slot_id} must have preferenceScore.")
 
     locked_by_slot: Dict[str, str] = {}
     for assignment in payload["existingAssignments"]:
@@ -135,6 +166,10 @@ def validate_request(payload: Any) -> Tuple[str, List[str]]:
                     errors.append(
                         f"Locked assignment {employee_id}/{slot_id} is not eligible."
                     )
+
+    for hint in payload["hints"]:
+        if not isinstance(hint, dict):
+            errors.append("Hints must be objects.")
 
     return request_id, errors
 

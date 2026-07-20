@@ -5,6 +5,9 @@ export type PythonCommand = {
   executable: string;
   args: string[];
   label: string;
+  env?: NodeJS.ProcessEnv;
+  pythonVersion?: string;
+  ortoolsVersion?: string;
 };
 
 const maxStdoutBytes = 1_000_000;
@@ -25,7 +28,8 @@ export async function runSolverProcess({
     const startedAt = Date.now();
     const child = spawn(python.executable, [...python.args, scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true
+      windowsHide: true,
+      env: python.env ? { ...process.env, ...python.env } : process.env
     });
     let stdout = "";
     let stderr = "";
@@ -39,15 +43,7 @@ export async function runSolverProcess({
       finished = true;
       child.kill();
       resolve({
-        requestId: request.requestId,
-        assignments: [],
-        status: "UNKNOWN",
-        objectiveValues: {
-          coveredSlots: 0,
-          totalSlots: request.slots.length,
-          coverageRate: 0
-        },
-        runtimeMs: Date.now() - startedAt,
+        ...buildUnknownResult(request, Date.now() - startedAt),
         message: `CP-SAT solver timed out after ${timeoutMs}ms.`
       });
     }, timeoutMs);
@@ -78,15 +74,7 @@ export async function runSolverProcess({
       finished = true;
       clearTimeout(timeout);
       resolve({
-        requestId: request.requestId,
-        assignments: [],
-        status: "UNKNOWN",
-        objectiveValues: {
-          coveredSlots: 0,
-          totalSlots: request.slots.length,
-          coverageRate: 0
-        },
-        runtimeMs: Date.now() - startedAt,
+        ...buildUnknownResult(request, Date.now() - startedAt),
         message: `CP-SAT solver process failed: ${error.message}`
       });
     });
@@ -150,14 +138,7 @@ function parseSolverStdout({
 
   if (!finalLine) {
     return {
-      requestId,
-      assignments: [],
-      status: "UNKNOWN",
-      objectiveValues: {
-        coveredSlots: 0,
-        totalSlots,
-        coverageRate: 0
-      },
+      ...buildUnknownResultFromIds({ requestId, totalSlots, runtimeMs }),
       runtimeMs,
       message: "CP-SAT solver produced no protocol output."
     };
@@ -176,14 +157,7 @@ function parseSolverStdout({
     };
   } catch (error) {
     return {
-      requestId,
-      assignments: [],
-      status: "UNKNOWN",
-      objectiveValues: {
-        coveredSlots: 0,
-        totalSlots,
-        coverageRate: 0
-      },
+      ...buildUnknownResultFromIds({ requestId, totalSlots, runtimeMs }),
       runtimeMs,
       message: `CP-SAT solver returned invalid JSON: ${
         error instanceof Error ? error.message : String(error)
@@ -203,7 +177,63 @@ function isCpSatSolveResult(value: CpSatSolveResult): value is CpSatSolveResult 
     typeof value.objectiveValues.coveredSlots === "number" &&
     typeof value.objectiveValues.totalSlots === "number" &&
     typeof value.objectiveValues.coverageRate === "number" &&
+    typeof value.coverageProvenOptimal === "boolean" &&
+    typeof value.fullLexicographicOptimality === "boolean" &&
+    typeof value.objectiveStages === "object" &&
+    value.objectiveStages !== null &&
+    typeof value.hintDiagnostics === "object" &&
+    value.hintDiagnostics !== null &&
     typeof value.runtimeMs === "number" &&
     typeof value.status === "string"
   );
+}
+
+function buildUnknownResult(
+  request: CpSatSolveRequest,
+  runtimeMs: number
+): CpSatSolveResult {
+  return buildUnknownResultFromIds({
+    requestId: request.requestId,
+    totalSlots: request.slots.length,
+    runtimeMs
+  });
+}
+
+function buildUnknownResultFromIds({
+  requestId,
+  totalSlots,
+  runtimeMs
+}: {
+  requestId: string;
+  totalSlots: number;
+  runtimeMs: number;
+}): CpSatSolveResult {
+  return {
+    requestId,
+    assignments: [],
+    status: "UNKNOWN",
+    objectiveValues: {
+      coveredSlots: 0,
+      totalSlots,
+      coverageRate: 0
+    },
+    coverageProvenOptimal: false,
+    fullLexicographicOptimality: false,
+    objectiveStages: {
+      coverage: {
+        value: 0,
+        status: "UNKNOWN",
+        provenOptimal: false
+      }
+    },
+    hintDiagnostics: {
+      received: 0,
+      accepted: 0,
+      ignored: 0
+    },
+    pythonVersion: null,
+    ortoolsVersion: null,
+    runtimeMs,
+    message: null
+  };
 }

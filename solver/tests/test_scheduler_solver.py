@@ -35,6 +35,7 @@ def base_request() -> dict:
                 "isActive": True,
                 "maxShiftsPerWeek": 5,
                 "maxHoursPerDayMinutes": 480,
+                "targetHoursPerDayMinutes": 480,
                 "canWorkWeekends": True,
             }
         ],
@@ -43,6 +44,7 @@ def base_request() -> dict:
                 "employeeId": "emp-1",
                 "roleId": "role-service",
                 "experienceLevel": "some_experience",
+                "isPreferredRole": True,
             }
         ],
         "slots": [
@@ -60,8 +62,9 @@ def base_request() -> dict:
                 "experiencedRequiredCount": 0,
             }
         ],
-        "eligibility": [{"employeeId": "emp-1", "slotId": "slot-1"}],
+        "eligibility": [{"employeeId": "emp-1", "slotId": "slot-1", "preferenceScore": 3}],
         "existingAssignments": [],
+        "hints": [],
         "timeoutSeconds": 5,
     }
 
@@ -104,7 +107,7 @@ class SchedulerSolverModelTests(unittest.TestCase):
                 "absoluteEndMinute": 1360,
             }
         )
-        request["eligibility"].append({"employeeId": "emp-1", "slotId": "slot-2"})
+        request["eligibility"].append({"employeeId": "emp-1", "slotId": "slot-2", "preferenceScore": 0})
         result = run_solver(request)
         self.assertEqual(result["status"], "OPTIMAL")
         self.assertEqual(result["objectiveValues"]["coveredSlots"], 1)
@@ -122,7 +125,7 @@ class SchedulerSolverModelTests(unittest.TestCase):
                 "absoluteEndMinute": 1720,
             }
         )
-        request["eligibility"].append({"employeeId": "emp-1", "slotId": "slot-2"})
+        request["eligibility"].append({"employeeId": "emp-1", "slotId": "slot-2", "preferenceScore": 0})
         result = run_solver(request)
         self.assertEqual(result["status"], "OPTIMAL")
         self.assertEqual(result["objectiveValues"]["coveredSlots"], 2)
@@ -135,6 +138,7 @@ class SchedulerSolverModelTests(unittest.TestCase):
                 "isActive": True,
                 "maxShiftsPerWeek": 5,
                 "maxHoursPerDayMinutes": 480,
+                "targetHoursPerDayMinutes": 480,
                 "canWorkWeekends": True,
             }
         )
@@ -143,10 +147,11 @@ class SchedulerSolverModelTests(unittest.TestCase):
                 "employeeId": "emp-2",
                 "roleId": "role-service",
                 "experienceLevel": "no_experience",
+                "isPreferredRole": False,
             }
         )
         request["slots"][0]["experiencedRequiredCount"] = 1
-        request["eligibility"].append({"employeeId": "emp-2", "slotId": "slot-1"})
+        request["eligibility"].append({"employeeId": "emp-2", "slotId": "slot-1", "preferenceScore": 0})
         result = run_solver(request)
         self.assertEqual(result["status"], "OPTIMAL")
         self.assertEqual(result["assignments"], [{"scheduleSlotId": "slot-1", "employeeId": "emp-1"}])
@@ -157,6 +162,109 @@ class SchedulerSolverModelTests(unittest.TestCase):
         result = run_solver(request)
         self.assertEqual(result["status"], "OPTIMAL")
         self.assertEqual(result["objectiveValues"]["coveredSlots"], 0)
+
+    def test_target_hours_stage_reports_optimum(self) -> None:
+        request = base_request()
+        request["employees"][0]["targetHoursPerDayMinutes"] = 240
+        result = run_solver(request)
+        self.assertEqual(result["objectiveStages"]["coverage"]["provenOptimal"], True)
+        self.assertIn("targetHours", result["objectiveStages"])
+        self.assertEqual(result["objectiveStages"]["targetHours"]["value"], 0)
+
+    def test_valid_hints_are_accepted_but_not_hard(self) -> None:
+        request = base_request()
+        request["employees"].append(
+            {
+                "id": "emp-2",
+                "isActive": True,
+                "maxShiftsPerWeek": 5,
+                "maxHoursPerDayMinutes": 480,
+                "targetHoursPerDayMinutes": 480,
+                "canWorkWeekends": True,
+            }
+        )
+        request["employeeRoles"].append(
+            {
+                "employeeId": "emp-2",
+                "roleId": "role-service",
+                "experienceLevel": "some_experience",
+                "isPreferredRole": False,
+            }
+        )
+        request["eligibility"].append({"employeeId": "emp-2", "slotId": "slot-1", "preferenceScore": 0})
+        request["hints"] = [
+            {"employeeId": "emp-2", "slotId": "slot-1"},
+            {"employeeId": "missing", "slotId": "slot-1"},
+        ]
+        result = run_solver(request)
+        self.assertEqual(result["status"], "OPTIMAL")
+        self.assertEqual(result["hintDiagnostics"], {"received": 2, "accepted": 1, "ignored": 1})
+        self.assertEqual(result["objectiveStages"]["coverage"]["value"], 1)
+
+    def test_preference_stage_preserves_coverage(self) -> None:
+        request = base_request()
+        request["employees"][0]["targetHoursPerDayMinutes"] = None
+        request["employees"].append(
+            {
+                "id": "emp-2",
+                "isActive": True,
+                "maxShiftsPerWeek": 5,
+                "maxHoursPerDayMinutes": 480,
+                "targetHoursPerDayMinutes": None,
+                "canWorkWeekends": True,
+            }
+        )
+        request["employeeRoles"].append(
+            {
+                "employeeId": "emp-2",
+                "roleId": "role-service",
+                "experienceLevel": "some_experience",
+                "isPreferredRole": False,
+            }
+        )
+        request["eligibility"] = [
+            {"employeeId": "emp-1", "slotId": "slot-1", "preferenceScore": 5},
+            {"employeeId": "emp-2", "slotId": "slot-1", "preferenceScore": 0},
+        ]
+        result = run_solver(request)
+        self.assertEqual(result["objectiveStages"]["coverage"]["value"], 1)
+        self.assertEqual(result["objectiveStages"]["preferences"]["value"], 5)
+        self.assertEqual(result["assignments"], [{"scheduleSlotId": "slot-1", "employeeId": "emp-1"}])
+
+    def test_weekly_shift_fairness_excludes_employees_without_variables(self) -> None:
+        request = base_request()
+        request["employees"].append(
+            {
+                "id": "emp-no-work",
+                "isActive": True,
+                "maxShiftsPerWeek": 5,
+                "maxHoursPerDayMinutes": 480,
+                "targetHoursPerDayMinutes": None,
+                "canWorkWeekends": True,
+            }
+        )
+        result = run_solver(request)
+        self.assertEqual(result["objectiveStages"]["shiftFairness"]["value"], 0)
+
+    def test_locked_assignments_contribute_to_weekly_limit(self) -> None:
+        request = base_request()
+        request["employees"][0]["maxShiftsPerWeek"] = 1
+        request["slots"].append(
+            {
+                **request["slots"][0],
+                "id": "slot-2",
+                "requirementGroupId": "group-2",
+                "startTime": "16:00",
+                "endTime": "20:00",
+                "absoluteStartMinute": 1480,
+                "absoluteEndMinute": 1720,
+            }
+        )
+        request["eligibility"].append({"employeeId": "emp-1", "slotId": "slot-2", "preferenceScore": 0})
+        request["existingAssignments"] = [{"employeeId": "emp-1", "slotId": "slot-1", "locked": True}]
+        result = run_solver(request)
+        self.assertEqual(result["objectiveStages"]["coverage"]["value"], 1)
+        self.assertEqual(result["assignments"], [{"scheduleSlotId": "slot-1", "employeeId": "emp-1"}])
 
 
 if __name__ == "__main__":
