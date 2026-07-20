@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { runSolverProcess } from "../src/main/solver/solverProcess";
 import {
   buildCoverageCeilingAnalysis,
   buildManagerScheduleDiagnostics,
@@ -106,6 +107,59 @@ function optimizeBenchmarkScenario(name: string) {
       shiftTemplates: scenario.shiftTemplates,
       staffingRequirements: scenario.staffingRequirements
     })
+  };
+}
+
+function createMinimalCpSatRequest(requestId: string): CpSatSolveRequest {
+  return {
+    requestId,
+    schedule: {
+      runId: "run-1",
+      weekStartsOn: 1
+    },
+    employees: [
+      {
+        id: "employee-1",
+        isActive: true,
+        maxShiftsPerWeek: 5,
+        maxHoursPerDayMinutes: 480,
+        targetHoursPerDayMinutes: null,
+        canWorkWeekends: true
+      }
+    ],
+    employeeRoles: [
+      {
+        employeeId: "employee-1",
+        roleId: "role-1",
+        experienceLevel: "some_experience",
+        isPreferredRole: false
+      }
+    ],
+    slots: [
+      {
+        id: "slot-1",
+        requirementGroupId: "group-1",
+        date: "2026-05-18",
+        roleId: "role-1",
+        startTime: "08:00",
+        endTime: "16:00",
+        durationMinutes: 480,
+        absoluteStartMinute: 29_654_880,
+        absoluteEndMinute: 29_655_360,
+        minimumExperienceLevel: "no_experience",
+        experiencedRequiredCount: 0
+      }
+    ],
+    eligibility: [
+      {
+        employeeId: "employee-1",
+        slotId: "slot-1",
+        preferenceScore: 0
+      }
+    ],
+    existingAssignments: [],
+    hints: [],
+    timeoutSeconds: 1
   };
 }
 
@@ -1096,6 +1150,61 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         databaseApi.persistValidatedScheduleBatch = originalPersist;
         restoreWindow(originalWindow);
       }
+    }
+  },
+  {
+    name: "solver protocol rejects mismatched request id",
+    run: async () => {
+      const request = createMinimalCpSatRequest("expected-request");
+      const script = `
+        process.stdin.resume();
+        process.stdin.on("end", () => {
+          process.stdout.write(JSON.stringify({
+            requestId: "other-request",
+            assignments: [{ scheduleSlotId: "slot-1", employeeId: "employee-1" }],
+            status: "OPTIMAL",
+            objectiveValues: {
+              coveredSlots: 1,
+              totalSlots: 1,
+              coverageRate: 1
+            },
+            coverageProvenOptimal: true,
+            fullLexicographicOptimality: true,
+            objectiveStages: {
+              coverage: {
+                value: 1,
+                status: "OPTIMAL",
+                provenOptimal: true
+              }
+            },
+            hintDiagnostics: {
+              received: 0,
+              accepted: 0,
+              ignored: 0
+            },
+            pythonVersion: "test",
+            ortoolsVersion: "test",
+            runtimeMs: 1,
+            message: null
+          }) + "\\n");
+        });
+      `;
+
+      const result = await runSolverProcess({
+        python: {
+          executable: process.execPath,
+          args: ["-e", script],
+          label: "node fake solver"
+        },
+        scriptPath: "unused",
+        request,
+        timeoutMs: 2_000
+      });
+
+      assert.equal(result.requestId, request.requestId);
+      assert.equal(result.status, "UNKNOWN");
+      assert.equal(result.assignments.length, 0);
+      assert.match(result.message ?? "", /mismatched request id/);
     }
   },
   {

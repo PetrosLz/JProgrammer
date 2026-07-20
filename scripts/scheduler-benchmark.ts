@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 
 import {
@@ -26,6 +28,8 @@ import {
   createSlot,
   type SchedulerBenchmarkScenario
 } from "./scheduler-fixtures";
+
+configureTestPythonRuntime();
 
 type BenchmarkResult = {
   scenario: SchedulerBenchmarkScenario;
@@ -68,13 +72,38 @@ type CpSatBenchmarkResult = {
   objectiveStages: Record<
     string,
     {
-      value: number;
+      value: number | null;
       status: string;
       provenOptimal: boolean;
     }
   >;
   message: string | null;
 };
+
+function configureTestPythonRuntime(): void {
+  if (process.env.JPROGRAMMER_TEST_PYTHON || process.env.JPROGRAMMER_PYTHON) {
+    return;
+  }
+
+  const root = process.cwd();
+  const localSitePackages = path.join(root, ".venv-solver", "Lib", "site-packages");
+  const bundledPython = path.join(
+    process.env.USERPROFILE ?? "",
+    ".cache",
+    "codex-runtimes",
+    "codex-primary-runtime",
+    "dependencies",
+    "python",
+    "python.exe"
+  );
+
+  if (!existsSync(bundledPython) || !existsSync(localSitePackages)) {
+    return;
+  }
+
+  process.env.JPROGRAMMER_TEST_PYTHON = bundledPython;
+  process.env.JPROGRAMMER_TEST_PYTHONPATH = localSitePackages;
+}
 
 void main().catch((error) => {
   console.error(error);
@@ -406,7 +435,7 @@ function formatObjectiveStages(
   return Object.entries(stages)
     .map(
       ([name, stage]) =>
-        `${name}:${stage.value}/${stage.status}${stage.provenOptimal ? "*" : ""}`
+        `${name}:${stage.value ?? "pending"}/${stage.status}${stage.provenOptimal ? "*" : ""}`
     )
     .join(",");
 }

@@ -151,6 +151,14 @@ function parseSolverStdout({
       throw new Error("Invalid CP-SAT result shape.");
     }
 
+    if (parsed.requestId !== requestId) {
+      return {
+        ...buildUnknownResultFromIds({ requestId, totalSlots, runtimeMs }),
+        runtimeMs,
+        message: `CP-SAT solver returned mismatched request id ${parsed.requestId}; expected ${requestId}.`
+      };
+    }
+
     return {
       ...parsed,
       runtimeMs: Number.isFinite(parsed.runtimeMs) ? parsed.runtimeMs : runtimeMs

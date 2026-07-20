@@ -76,7 +76,7 @@ export type CpSatHintDiagnostics = {
 };
 
 export type CpSatObjectiveStageResult = {
-  value: number;
+  value: number | null;
   status: CpSatSolveStatus;
   provenOptimal: boolean;
 };

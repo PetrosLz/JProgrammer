@@ -483,15 +483,16 @@ The migration test script verifies:
 
 ### Hints
 
-- The protocol and Python model support safe hints.
+- Production creates bounded greedy warm-start hints from the already hard-filtered sparse eligibility pairs.
+- This hint pass does not run the full heuristic optimizer before CP-SAT.
 - Hints are accepted only for existing sparse eligible variables and ignored otherwise.
 - Hints never become hard constraints.
-- Production does not run the full heuristic to create hints; no separate 100-300ms heuristic mode has been isolated yet.
 
 ### Runtime Discovery
 
 - Runtime discovery checks:
   - `JPROGRAMMER_PYTHON`,
+  - `JPROGRAMMER_TEST_PYTHON` only for explicit test harness use,
   - `.venv-solver/Scripts/python.exe`,
   - `.venv-solver/bin/python`,
   - `py -3.12`,

@@ -12,7 +12,7 @@ from protocol import build_result, validate_request
 
 @dataclass
 class StageResult:
-    value: int
+    value: int | None
     status: str
     proven_optimal: bool
 
@@ -139,12 +139,13 @@ def solve(payload: Dict[str, Any], started_at: float) -> Dict[str, Any]:
     deadline = started_at + max(0.1, float(payload["timeoutSeconds"]))
     objective_stages: Dict[str, StageResult] = {}
     best_assignments: List[Dict[str, str]] = []
+    has_feasible_solution = False
     final_status = "UNKNOWN"
 
     for stage in build_stage_sequence(expressions):
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
-            final_status = "FEASIBLE" if best_assignments else "UNKNOWN"
+            final_status = "FEASIBLE" if has_feasible_solution else "UNKNOWN"
             break
 
         if stage["sense"] == "maximize":
@@ -157,6 +158,7 @@ def solve(payload: Dict[str, Any], started_at: float) -> Dict[str, Any]:
 
         if mapped_status in {"OPTIMAL", "FEASIBLE"}:
             best_assignments = extract_assignments(solver, variables)
+            has_feasible_solution = True
             value = int(round(solver.Value(stage["expression"])))
             objective_stages[stage["name"]] = StageResult(
                 value=value,
@@ -175,7 +177,7 @@ def solve(payload: Dict[str, Any], started_at: float) -> Dict[str, Any]:
             final_status = "OPTIMAL"
             continue
 
-        if mapped_status in {"INFEASIBLE", "MODEL_INVALID"} and not best_assignments:
+        if mapped_status in {"INFEASIBLE", "MODEL_INVALID"} and not has_feasible_solution:
             final_status = mapped_status
             objective_stages[stage["name"]] = StageResult(
                 value=0,
@@ -184,9 +186,9 @@ def solve(payload: Dict[str, Any], started_at: float) -> Dict[str, Any]:
             )
             break
 
-        final_status = "FEASIBLE" if best_assignments else mapped_status
+        final_status = "FEASIBLE" if has_feasible_solution else mapped_status
         objective_stages[stage["name"]] = StageResult(
-            value=get_stage_value_from_assignments(stage["name"], expressions, best_assignments),
+            value=None,
             status=mapped_status,
             proven_optimal=False,
         )
@@ -497,12 +499,6 @@ def apply_hints(model: Any, variables: Dict[Tuple[str, str], Any], payload: Dict
         "ignored": received - len(accepted_pairs),
         "acceptedPairs": accepted_pairs,
     }
-
-
-def get_stage_value_from_assignments(stage_name: str, expressions: Dict[str, Any], assignments: List[Dict[str, str]]) -> int:
-    if stage_name == "coverage":
-        return len(assignments)
-    return 0
 
 
 def extract_assignments(solver: Any, variables: Dict[Tuple[str, str], Any]) -> List[Dict[str, str]]:

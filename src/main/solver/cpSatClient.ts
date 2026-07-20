@@ -79,17 +79,10 @@ export async function solveScheduleWithCpSat(
 
 function discoverPythonCommand(): PythonCommand | null {
   const configuredPython = process.env.JPROGRAMMER_PYTHON?.trim();
+  const testPython = process.env.JPROGRAMMER_TEST_PYTHON?.trim();
+  const testPythonPath = process.env.JPROGRAMMER_TEST_PYTHONPATH?.trim();
   const projectRoot = findProjectRoot();
   const localSitePackages = getLocalVenvSitePackages(projectRoot);
-  const fallbackPythonPath = path.join(
-    process.env.USERPROFILE ?? "",
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-    "dependencies",
-    "python",
-    "python.exe"
-  );
   const candidates: PythonCommand[] = [
     ...(configuredPython
       ? [
@@ -97,6 +90,23 @@ function discoverPythonCommand(): PythonCommand | null {
             executable: configuredPython,
             args: [],
             label: configuredPython
+          }
+        ]
+      : []),
+    ...(testPython
+      ? [
+          {
+            executable: testPython,
+            args: [],
+            label: "test python",
+            env:
+              testPythonPath || localSitePackages
+                ? {
+                    PYTHONPATH: [testPythonPath, localSitePackages]
+                      .filter(Boolean)
+                      .join(path.delimiter)
+                  }
+                : undefined
           }
         ]
       : []),
@@ -129,19 +139,7 @@ function discoverPythonCommand(): PythonCommand | null {
       executable: "python3",
       args: [],
       label: "python3"
-    },
-    ...(localSitePackages && existsSync(fallbackPythonPath)
-      ? [
-          {
-            executable: fallbackPythonPath,
-            args: [],
-            label: "bundled python with .venv-solver site-packages",
-            env: {
-              PYTHONPATH: localSitePackages
-            }
-          }
-        ]
-      : [])
+    }
   ];
 
   return candidates.map(hydratePythonCommand).find(Boolean) ?? null;
