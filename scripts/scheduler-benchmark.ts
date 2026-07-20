@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 
 import {
   buildCoverageCeilingAnalysis,
+  buildCpSatSolveRequest,
   buildManagerScheduleDiagnostics,
   buildScheduleGenerationPlan,
   defaultSchedulerOptimizationConfig,
@@ -14,6 +15,13 @@ import {
   type SchedulerStopReason
 } from "../src/renderer/services/scheduler";
 import {
+  getCpSatAvailability,
+  solveScheduleWithCpSat
+} from "../src/main/solver/cpSatClient";
+import { validateScheduleHardConstraints } from "../src/renderer/services/scheduler/evaluation/scheduleValidator";
+import type { ScheduleAssignment, ScheduleSlot } from "../src/renderer/types";
+import {
+  createAssignment,
   createBenchmarkScenarios,
   createSlot,
   type SchedulerBenchmarkScenario
@@ -46,7 +54,32 @@ type BenchmarkResult = {
   notes: string[];
 };
 
+type CpSatBenchmarkResult = {
+  scenarioName: string;
+  status: string;
+  assignedSlots: number;
+  totalSlots: number;
+  coverageRate: number;
+  runtimeMs: number;
+  hardViolationCount: number;
+  validated: boolean;
+  message: string | null;
+};
+
+void main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+async function main() {
 const results: BenchmarkResult[] = [];
+const cpSatAvailability = await getCpSatAvailability();
+
+if (!cpSatAvailability.available) {
+  console.log(
+    `CP-SAT benchmark skipped: ${cpSatAvailability.message ?? "solver unavailable"}`
+  );
+}
 
 for (const scenario of createBenchmarkScenarios()) {
   const startedAt = performance.now();
@@ -186,10 +219,20 @@ for (const scenario of createBenchmarkScenarios()) {
 
   results.push(result);
   printResult(result);
+
+  if (cpSatAvailability.available) {
+    const cpSatResult = await runCpSatBenchmark({
+      scenario,
+      slots,
+      heuristicAssignedSlots: result.assignedSlots
+    });
+    printCpSatResult(cpSatResult);
+  }
 }
 
 assertBenchmarkThresholds(results);
 console.log(`Scheduler optimized benchmark passed (${results.length} scenarios).`);
+}
 
 function printResult(result: BenchmarkResult) {
   console.log(
@@ -227,6 +270,116 @@ function printResult(result: BenchmarkResult) {
 
   if (result.notes.length > 0) {
     console.log(`  notes: ${result.notes.join(" / ")}`);
+  }
+}
+
+async function runCpSatBenchmark({
+  scenario,
+  slots,
+  heuristicAssignedSlots
+}: {
+  scenario: SchedulerBenchmarkScenario;
+  slots: ScheduleSlot[];
+  heuristicAssignedSlots: number;
+}): Promise<CpSatBenchmarkResult> {
+  const request = buildCpSatSolveRequest({
+    requestId: `benchmark-${scenario.run.id}`,
+    run: scenario.run,
+    runSlots: slots,
+    employees: scenario.employees,
+    employeeRoles: scenario.employeeRoles,
+    data: {
+      employeeRoles: scenario.employeeRoles,
+      employeeWorkRules: scenario.employeeWorkRules,
+      employeeDayConstraints: scenario.employeeDayConstraints,
+      employeeShiftAvailability: scenario.employeeShiftAvailability,
+      employeeTimeConstraints: scenario.employeeTimeConstraints,
+      staffingRequirements: scenario.staffingRequirements,
+      timeOff: scenario.timeOff,
+      weekStartsOn: 1
+    },
+    activeRunAssignments: scenario.existingAssignments,
+    timeoutSeconds: 10
+  });
+  const result = await solveScheduleWithCpSat(request);
+  const assignments = buildCpSatAssignments({
+    runId: scenario.run.id,
+    assignments: result.assignments
+  });
+  const validation = validateScheduleHardConstraints({
+    runSlots: slots,
+    assignments,
+    employees: scenario.employees,
+    data: {
+      employeeRoles: scenario.employeeRoles,
+      employeeWorkRules: scenario.employeeWorkRules,
+      employeeDayConstraints: scenario.employeeDayConstraints,
+      employeeShiftAvailability: scenario.employeeShiftAvailability,
+      employeeTimeConstraints: scenario.employeeTimeConstraints,
+      staffingRequirements: scenario.staffingRequirements,
+      timeOff: scenario.timeOff,
+      weekStartsOn: 1
+    }
+  });
+  const accepted = result.status === "OPTIMAL" || result.status === "FEASIBLE";
+
+  if (accepted && !validation.valid) {
+    throw new Error(
+      `${scenario.name} CP-SAT result produced ${validation.violations.length} TypeScript validator violation(s).`
+    );
+  }
+
+  if (result.status === "OPTIMAL" && result.assignments.length < heuristicAssignedSlots) {
+    throw new Error(
+      `${scenario.name} CP-SAT OPTIMAL coverage ${result.assignments.length} is below heuristic coverage ${heuristicAssignedSlots}.`
+    );
+  }
+
+  return {
+    scenarioName: scenario.name,
+    status: result.status,
+    assignedSlots: result.objectiveValues.coveredSlots,
+    totalSlots: result.objectiveValues.totalSlots,
+    coverageRate: result.objectiveValues.coverageRate,
+    runtimeMs: result.runtimeMs,
+    hardViolationCount: validation.violations.length,
+    validated: accepted && validation.valid,
+    message: result.message
+  };
+}
+
+function buildCpSatAssignments({
+  runId,
+  assignments
+}: {
+  runId: string;
+  assignments: Array<{ scheduleSlotId: string; employeeId: string }>;
+}): ScheduleAssignment[] {
+  return assignments.map((assignment, index) =>
+    createAssignment(
+      `cp-sat-${runId}-${index}-${assignment.scheduleSlotId}`,
+      runId,
+      assignment.scheduleSlotId,
+      assignment.employeeId
+    )
+  );
+}
+
+function printCpSatResult(result: CpSatBenchmarkResult) {
+  console.log(
+    [
+      "  CP-SAT".padEnd(28),
+      `status=${result.status}`,
+      `coverage=${Math.round(result.coverageRate * 100)}%`,
+      `assigned=${result.assignedSlots}/${result.totalSlots}`,
+      `hard=${result.hardViolationCount}`,
+      `validated=${result.validated ? "yes" : "no"}`,
+      `time=${result.runtimeMs}ms`
+    ].join(" | ")
+  );
+
+  if (result.message) {
+    console.log(`  CP-SAT note: ${result.message}`);
   }
 }
 

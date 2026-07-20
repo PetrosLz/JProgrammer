@@ -1,4 +1,6 @@
 import { databaseApi } from "../databaseApi";
+import { solverApi } from "../solverApi";
+import type { CpSatTelemetry } from "../../../shared/solverTypes";
 import type {
   Employee,
   DayOfWeek,
@@ -87,6 +89,10 @@ import {
   type OptimizationConfig,
   type SchedulerStopReason
 } from "./optimizationConfig";
+import {
+  buildCpSatSolveRequest,
+  getCpSatGeneratedAssignments
+} from "./cpSatAdapter";
 
 export type AssignmentResult = {
   runId: string;
@@ -180,6 +186,12 @@ type CandidateSchedule = {
   attemptsCompleted: number;
   noImprovementAttempts: number;
   evaluation: ScheduleEvaluationResult;
+};
+
+type OptimizerPlanSelection = {
+  plannedAssignments: PlannedAssignment[];
+  telemetry: CpSatTelemetry;
+  explanations: string[];
 };
 
 type SimulationState = {
@@ -385,8 +397,19 @@ export async function assignEmployeesToRun({
     optimizationConfig,
     shiftTemplates
   });
+  const optimizerPlan = await selectOptimizerPlan({
+    run,
+    runSlots,
+    employees,
+    employeeRoles,
+    data,
+    activeRunAssignments,
+    selectedSchedule,
+    optimizationConfig,
+    manualOverrides
+  });
   const sortedPlannedAssignments = sortPlannedAssignments(
-    selectedSchedule.plannedAssignments,
+    optimizerPlan.plannedAssignments,
     runSlots
   );
   const candidateFinalAssignments = buildSyntheticAssignments({
@@ -423,7 +446,8 @@ export async function assignEmployeesToRun({
         selectedSchedule,
         feasibility,
         optimizationConfig,
-        selectedSchedule.evaluation
+        selectedSchedule.evaluation,
+        optimizerPlan.telemetry
       )
     });
 
@@ -520,7 +544,8 @@ export async function assignEmployeesToRun({
     selectedSchedule,
     feasibility,
     optimizationConfig,
-    evaluation: finalEvaluation
+    evaluation: finalEvaluation,
+    optimizerTelemetry: optimizerPlan.telemetry
   });
   const batchResult = await persistValidatedScheduleBatch(batchRequest);
 
@@ -532,7 +557,7 @@ export async function assignEmployeesToRun({
     assignedSlots: automaticAssignments.length,
     unfilledSlots: Math.max(0, runSlots.length - finalAssignedSlotIds.size),
     warningsCreated: batchResult.warningsInserted,
-    explanations: selectedSchedule.explanations,
+    explanations: optimizerPlan.explanations,
     evaluation: finalEvaluation
   };
 }
@@ -858,7 +883,8 @@ function buildPersistValidatedScheduleRequest({
   selectedSchedule,
   feasibility,
   optimizationConfig,
-  evaluation
+  evaluation,
+  optimizerTelemetry
 }: {
   run: ScheduleRun;
   automaticAssignments: ScheduleAssignment[];
@@ -871,6 +897,7 @@ function buildPersistValidatedScheduleRequest({
   feasibility?: FeasibilityResult;
   optimizationConfig: OptimizationConfig;
   evaluation?: ScheduleEvaluationResult;
+  optimizerTelemetry?: CpSatTelemetry;
 }): PersistValidatedScheduleBatchRequest {
   const automaticSlotIds = new Set(
     automaticAssignments.map((assignment) => assignment.schedule_slot_id)
@@ -900,7 +927,8 @@ function buildPersistValidatedScheduleRequest({
       selectedSchedule,
       feasibility,
       optimizationConfig,
-      evaluation
+      evaluation,
+      optimizerTelemetry
     ),
     warnings: materializeWarnings(warnings)
   };
@@ -916,6 +944,157 @@ async function persistValidatedScheduleBatch(
       `Schedule persistence failed. No automatic assignments were saved: ${getErrorMessage(error)}`
     );
   }
+}
+
+async function selectOptimizerPlan({
+  run,
+  runSlots,
+  employees,
+  employeeRoles,
+  data,
+  activeRunAssignments,
+  selectedSchedule,
+  optimizationConfig,
+  manualOverrides
+}: {
+  run: ScheduleRun;
+  runSlots: ScheduleSlot[];
+  employees: Employee[];
+  employeeRoles: EmployeeRole[];
+  data: SchedulerData;
+  activeRunAssignments: ScheduleAssignment[];
+  selectedSchedule: CandidateSchedule;
+  optimizationConfig: OptimizationConfig;
+  manualOverrides: ManualOverrideMap;
+}): Promise<OptimizerPlanSelection> {
+  const heuristicFallback = (fallbackReason: string | null): OptimizerPlanSelection => ({
+    plannedAssignments: selectedSchedule.plannedAssignments,
+    telemetry: {
+      engine: "heuristic_fallback",
+      solverStatus: "HEURISTIC_FALLBACK",
+      runtimeMs: null,
+      coveredSlots: selectedSchedule.plannedAssignments.length,
+      totalSlots: runSlots.length,
+      fallbackReason
+    },
+    explanations: fallbackReason
+      ? [
+          `HEURISTIC_FALLBACK: ${fallbackReason}`,
+          ...selectedSchedule.explanations
+        ]
+      : selectedSchedule.explanations
+  });
+
+  try {
+    const availability = await solverApi.getCpSatAvailability();
+
+    if (!availability.available) {
+      return heuristicFallback(availability.message ?? "CP-SAT solver unavailable.");
+    }
+
+    const request = buildCpSatSolveRequest({
+      requestId: `cp-sat-${run.id}-${Date.now()}`,
+      run,
+      runSlots,
+      employees,
+      employeeRoles,
+      data,
+      activeRunAssignments,
+      timeoutSeconds: getCpSatTimeoutSeconds(optimizationConfig),
+      manualOverrides
+    });
+    const result = await solverApi.solveScheduleWithCpSat(request);
+
+    if (result.status !== "OPTIMAL" && result.status !== "FEASIBLE") {
+      return heuristicFallback(
+        `CP-SAT returned ${result.status}${result.message ? `: ${result.message}` : ""}.`
+      );
+    }
+
+    const plannedAssignments = getCpSatGeneratedAssignments({
+      result,
+      activeRunAssignments
+    }).map((assignment) =>
+      createCpSatPlannedAssignment({
+        scheduleSlotId: assignment.scheduleSlotId,
+        employeeId: assignment.employeeId,
+        status: result.status
+      })
+    );
+    const syntheticAssignments = buildSyntheticAssignments({
+      run,
+      fixedAssignments: activeRunAssignments,
+      plannedAssignments
+    });
+    const validation = validateScheduleHardConstraints({
+      runSlots,
+      assignments: syntheticAssignments,
+      employees,
+      data,
+      manualOverrides
+    });
+
+    if (!validation.valid) {
+      return heuristicFallback(
+        `CP-SAT result failed TypeScript validation with ${validation.violations.length} hard-rule issue(s).`
+      );
+    }
+
+    return {
+      plannedAssignments,
+      telemetry: {
+        engine: "cp_sat",
+        solverStatus: result.status,
+        runtimeMs: result.runtimeMs,
+        coveredSlots: result.objectiveValues.coveredSlots,
+        totalSlots: result.objectiveValues.totalSlots,
+        fallbackReason: null
+      },
+      explanations: [
+        `CP-SAT ${result.status}: covered ${result.objectiveValues.coveredSlots}/${result.objectiveValues.totalSlots} slots in ${result.runtimeMs}ms.`,
+        ...selectedSchedule.explanations
+      ]
+    };
+  } catch (error) {
+    return heuristicFallback(
+      `CP-SAT failed before validation: ${getErrorMessage(error)}.`
+    );
+  }
+}
+
+function createCpSatPlannedAssignment({
+  scheduleSlotId,
+  employeeId,
+  status
+}: {
+  scheduleSlotId: string;
+  employeeId: string;
+  status: string;
+}): PlannedAssignment {
+  return {
+    scheduleSlotId,
+    employeeId,
+    score: {
+      employeeId,
+      baseScore: 0,
+      totalScore: 0,
+      details: [
+        {
+          label: `CP-SAT ${status}`,
+          points: 0
+        }
+      ],
+      warnings: []
+    },
+    explanation: `CP-SAT ${status}: assigned ${employeeId} to ${scheduleSlotId} for maximum hard-rule coverage.`
+  };
+}
+
+function getCpSatTimeoutSeconds(optimizationConfig: OptimizationConfig): number {
+  return Math.max(
+    5,
+    Math.min(15, Math.ceil(optimizationConfig.timeBudgetMs / 1_000))
+  );
 }
 
 function materializeWarnings(
@@ -4439,7 +4618,8 @@ function buildRunUpdate(
   selectedSchedule?: CandidateSchedule,
   feasibility?: FeasibilityResult,
   optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
-  evaluation?: ScheduleEvaluationResult
+  evaluation?: ScheduleEvaluationResult,
+  optimizerTelemetry?: CpSatTelemetry
 ): PersistValidatedScheduleBatchRequest["runUpdate"] {
   const status =
     totalSlots === 0
@@ -4458,7 +4638,8 @@ function buildRunUpdate(
       selectedSchedule,
       feasibility,
       optimizationConfig,
-      evaluation
+      evaluation,
+      optimizerTelemetry
     ),
     completedAt: new Date().toISOString()
   };
@@ -4470,12 +4651,31 @@ function mergeRunParameters(
   selectedSchedule?: CandidateSchedule,
   feasibility?: FeasibilityResult,
   optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
-  evaluation?: ScheduleEvaluationResult
+  evaluation?: ScheduleEvaluationResult,
+  optimizerTelemetry?: CpSatTelemetry
 ): string {
   const assignedAt = new Date().toISOString();
   const assignmentParameters = {
     stage: "employee_assignment",
     algorithm: "multi_start_coverage_first_manager_policy",
+    optimizerEngine: optimizerTelemetry?.engine ?? "heuristic_fallback",
+    solver: optimizerTelemetry
+      ? {
+          engine: optimizerTelemetry.engine,
+          status: optimizerTelemetry.solverStatus,
+          runtimeMs: optimizerTelemetry.runtimeMs,
+          coveredSlots: optimizerTelemetry.coveredSlots,
+          totalSlots: optimizerTelemetry.totalSlots,
+          fallbackReason: optimizerTelemetry.fallbackReason
+        }
+      : {
+          engine: "heuristic_fallback",
+          status: "HEURISTIC_FALLBACK",
+          runtimeMs: null,
+          coveredSlots: null,
+          totalSlots: null,
+          fallbackReason: null
+        },
     assignedAt,
     optimization: selectedSchedule
       ? {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { initializeDatabase } from "./database";
 import { registerDatabaseIpc } from "./ipc/databaseIpc";
 import { registerPdfExportIpc } from "./ipc/pdfExportIpc";
+import { registerSolverIpc } from "./ipc/solverIpc";
 
 const isWindows = process.platform === "win32";
 
@@ -40,6 +41,7 @@ app.whenReady().then(() => {
     initializeDatabase();
     registerDatabaseIpc();
     registerPdfExportIpc();
+    registerSolverIpc();
     createMainWindow();
   } catch (error) {
     console.error("JProgrammer failed to start:", error);

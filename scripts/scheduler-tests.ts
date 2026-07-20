@@ -11,6 +11,11 @@ import {
   validateScheduleHardConstraints
 } from "../src/renderer/services/scheduler";
 import { databaseApi } from "../src/renderer/services/databaseApi";
+import type {
+  CpSatAssignment,
+  CpSatSolveRequest,
+  SolverAvailability
+} from "../src/shared/solverTypes";
 import {
   buildShiftInterval,
   getShiftDurationMinutes,
@@ -1013,6 +1018,83 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
     }
   },
   {
+    name: "accepted CP-SAT result uses atomic batch persistence once",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-service-cp-sat",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalPersist = databaseApi.persistValidatedScheduleBatch;
+      const originalWindow = globalThis.window;
+      let batchCalls = 0;
+      let optimizerEngine: string | null = null;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          ortoolsAvailable: true,
+          message: null
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[0].id,
+          employeeId: fixture.employees[0].id
+        }
+      });
+      databaseApi.persistValidatedScheduleBatch = (async (request) => {
+        batchCalls += 1;
+        const parameters = request.runUpdate.parametersJson
+          ? (JSON.parse(request.runUpdate.parametersJson) as {
+              optimizerEngine?: string;
+              solver?: { status?: string };
+            })
+          : {};
+        optimizerEngine = parameters.optimizerEngine ?? null;
+        assert.equal(parameters.solver?.status, "OPTIMAL");
+        assert.equal(request.assignments.length, 1);
+        return {
+          assignmentsInserted: request.assignments.length,
+          slotsUpdated: request.slotUpdates.length,
+          warningsInserted: request.warnings.length
+        };
+      }) as typeof databaseApi.persistValidatedScheduleBatch;
+
+      try {
+        const result = await assignEmployeesToRun({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(result.assignedSlots, 1);
+        assert.equal(batchCalls, 1);
+        assert.equal(optimizerEngine, "cp_sat");
+      } finally {
+        databaseApi.persistValidatedScheduleBatch = originalPersist;
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
     name: "automatic generation surfaces batch persistence failure without fallback writes",
     run: async () => {
       const fixture = createFixture({ assignments: [] });
@@ -1198,6 +1280,60 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
 ];
 
 void runTests();
+
+function setMockSolverWindow({
+  availability,
+  assignment
+}: {
+  availability: SolverAvailability;
+  assignment: CpSatAssignment;
+}) {
+  const mockApi = {
+    solver: {
+      getCpSatAvailability: async () => ({
+        ok: true,
+        data: availability
+      }),
+      solveScheduleWithCpSat: async (request: CpSatSolveRequest) => ({
+        ok: true,
+        data: {
+          requestId: request.requestId,
+          assignments: [assignment],
+          status: "OPTIMAL",
+          objectiveValues: {
+            coveredSlots: 1,
+            totalSlots: request.slots.length,
+            coverageRate: request.slots.length === 0 ? 0 : 1 / request.slots.length
+          },
+          runtimeMs: 1,
+          message: null
+        }
+      })
+    }
+  } as unknown as Window["jprogrammer"];
+  type TestWindow = Window & typeof globalThis;
+  const globalWithWindow = globalThis as typeof globalThis & {
+    window?: TestWindow;
+  };
+
+  globalWithWindow.window = {
+    ...(globalWithWindow.window ?? {}),
+    jprogrammer: mockApi
+  } as unknown as TestWindow;
+}
+
+function restoreWindow(originalWindow: (Window & typeof globalThis) | undefined) {
+  const globalWithWindow = globalThis as typeof globalThis & {
+    window?: Window & typeof globalThis;
+  };
+
+  if (originalWindow) {
+    globalWithWindow.window = originalWindow;
+    return;
+  }
+
+  Reflect.deleteProperty(globalWithWindow, "window");
+}
 
 async function runTests() {
   for (const test of tests) {

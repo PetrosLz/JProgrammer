@@ -13,6 +13,11 @@ import type {
   PersistValidatedScheduleBatchResult,
   SettingRecord
 } from "../shared/types";
+import type {
+  CpSatSolveRequest,
+  CpSatSolveResult,
+  SolverAvailability
+} from "../shared/solverTypes";
 
 const api = {
   getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
@@ -74,6 +79,16 @@ const api = {
         request
       ) as Promise<
         DatabaseResult<PersistValidatedScheduleBatchResult>
+      >
+  },
+  solver: {
+    getCpSatAvailability: () =>
+      ipcRenderer.invoke("solver:getCpSatAvailability") as Promise<
+        DatabaseResult<SolverAvailability>
+      >,
+    solveScheduleWithCpSat: (request: CpSatSolveRequest) =>
+      ipcRenderer.invoke("solver:solveScheduleWithCpSat", request) as Promise<
+        DatabaseResult<CpSatSolveResult>
       >
   }
 };

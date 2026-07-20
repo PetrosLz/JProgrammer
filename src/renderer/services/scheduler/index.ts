@@ -79,6 +79,11 @@ export {
   buildUnfilledSlotMessage
 } from "./explanations";
 export {
+  buildCpSatSolveRequest,
+  getCpSatGeneratedAssignments,
+  type BuildCpSatSolveRequestInput
+} from "./cpSatAdapter";
+export {
   createNoSlotsWarning,
   createSoftScoreWarnings,
   createUnfilledSlotWarning,

@@ -372,3 +372,75 @@ The migration test script verifies:
 - The heuristic scheduler still uses its existing repair/move/swap architecture. Hard-rule checks now support split shifts, but a future CP-SAT phase should replace heuristic repair with a proper optimizer.
 - Large benchmark scenarios can still consume the current 15s optimizer budget; coverage ceiling correctly labels approximate results.
 - Some existing manager-facing strings remain mojibake from previous UI encoding work and should be cleaned separately from scheduler semantics.
+
+## Phase 4 - CP-SAT Optimizer Foundation
+
+### Architecture
+
+- Added a Python OR-Tools solver boundary under `solver/`.
+  - `scheduler_solver.py` reads exactly one JSON request from stdin and writes one JSON result to stdout.
+  - Python logs and failures go to stderr/message fields so protocol output remains parseable.
+  - `requirements.txt` documents the runtime dependency: `python -m pip install -r solver/requirements.txt`.
+- Added main-process solver integration under `src/main/solver/`.
+  - Runtime discovery checks Python plus OR-Tools without installing anything.
+  - Solver execution has timeout handling, stderr/stdout capture, non-zero exit handling, and invalid JSON handling.
+- Added solver IPC through `src/main/ipc/solverIpc.ts` and the preload bridge.
+  - The renderer receives only typed availability/solve operations.
+  - No arbitrary shell command is exposed to renderer code.
+
+### Protocol
+
+- Shared solver types live in `src/shared/solverTypes.ts`.
+- The request includes:
+  - request id,
+  - schedule/run metadata,
+  - employees with active flag, max weekly shift blocks, max daily minutes, and weekend eligibility,
+  - role-specific experience,
+  - schedule slots with requirement-group snapshots and absolute intervals,
+  - sparse eligible employee-slot pairs,
+  - locked existing assignments,
+  - timeout seconds.
+- The result includes assignments, `OPTIMAL`/`FEASIBLE`/`INFEASIBLE`/`MODEL_INVALID`/`UNKNOWN` status, covered/total slots, coverage rate, runtime, and message.
+
+### Implemented CP-SAT Model
+
+- Boolean variable only for each eligible employee-slot pair.
+- Hard constraints:
+  - at most one employee per slot,
+  - locked existing assignments fixed,
+  - true interval overlap blocked while adjacent split shifts remain allowed,
+  - all overnight minutes belong to the owning/start date for daily-hour limits,
+  - max weekly shift blocks,
+  - requirement-group prior-experience composition with `min(experiencedRequiredCount, assignedCount)`.
+- Primary objective:
+  - maximize exact total covered slots.
+  - all slots have equal value.
+  - no staffing priority, critical-role, or role-name weighting was restored.
+
+### TypeScript Validation And Persistence
+
+- `src/renderer/services/scheduler/cpSatAdapter.ts` preprocesses solver input using the existing TypeScript hard-rule checker.
+- Accepted CP-SAT results are converted to planned assignments, combined with locked existing assignments, and passed through `validateScheduleHardConstraints`.
+- Invalid solver output is rejected before persistence.
+- Accepted automatic assignments still use the existing atomic `persistValidatedScheduleBatch` operation.
+- The existing heuristic remains the explicit fallback and is recorded as `HEURISTIC_FALLBACK` when CP-SAT is unavailable, fails, times out, returns a non-accepted status, or fails validation.
+
+### Tests And Benchmarks
+
+- Added `npm.cmd run test:solver`.
+  - It runs Python unittest solver tests when Python is installed.
+  - It reports a clear skip when Python is not present.
+- Added focused Python protocol/model tests for malformed JSON, full coverage, overlap blocking, adjacent split shifts, group experience, and zero-worker zero coverage.
+- Added a TypeScript scheduler regression test proving accepted CP-SAT output uses atomic batch persistence once and records `cp_sat`.
+- Extended `benchmark:scheduler` to compare CP-SAT when available.
+  - If unavailable, the benchmark prints a CP-SAT skip and still runs the full heuristic benchmark.
+  - Accepted CP-SAT benchmark results must pass the TypeScript validator.
+  - `OPTIMAL` CP-SAT coverage must not be lower than heuristic coverage for the same hard model.
+
+### Known Limitations / Next Phase
+
+- CP-SAT Phase 4 optimizes maximum coverage only.
+- It does not yet implement lexicographic soft objectives for fairness, preferences, role scarcity, rotation, or manager-friendly team quality beyond hard group experience.
+- Heuristic warm-start hints are not wired yet; the integration point exists, but hints are not faked.
+- Windows packaging of a Python/OR-Tools runtime remains a later phase.
+- Next phase: add lexicographic CP-SAT objectives after maximum coverage, then compare soft-quality reward against the heuristic without weakening hard constraints.
