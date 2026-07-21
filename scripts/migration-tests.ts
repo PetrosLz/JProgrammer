@@ -25,6 +25,7 @@ const tests: TestCase[] = [
   { name: "fresh database creates newest scheduler schema", run: testFreshDatabase },
   { name: "existing v1 database migrates to v2 safely", run: testV1Migration },
   { name: "existing v3 opening-hours schema migrates to explicit 24-hour mode", run: testV3OpeningHoursMigration },
+  { name: "existing v4 database migrates legacy equal-time shifts to safe inactive records", run: testV4LegacyEqualTimeShiftSafetyMigration },
   { name: "forced migration failure rolls back schema and data", run: testRollback },
   { name: "running migrations twice is idempotent", run: testIdempotence },
   { name: "schema version is not reset on startup", run: testSchemaVersionNotReset },
@@ -211,6 +212,83 @@ function testV3OpeningHoursMigration(): void {
   );
 
   db.close();
+}
+
+function testV4LegacyEqualTimeShiftSafetyMigration(): void {
+  const db = createOldV4LegacyEqualTimeDatabase();
+  applyVersionedMigrations(db);
+
+  assertEqual(readUserVersion(db), 5, "v4 database migrated to v5");
+  assertEqual(latestSchemaVersion, 5, "latest schema version is 5");
+
+  const invalidShift = getRow<{
+    name: string;
+    start_time: string;
+    end_time: string;
+    is_overnight: number;
+    is_active: number;
+    color: string;
+    notes: string;
+  }>(
+    db,
+    "SELECT name, start_time, end_time, is_overnight, is_active, color, notes FROM shift_templates WHERE id = 'shift-equal-active'"
+  );
+  assertEqual(invalidShift.name, "Legacy equal", "invalid shift name preserved");
+  assertEqual(invalidShift.start_time, "12:00", "invalid shift start preserved");
+  assertEqual(invalidShift.end_time, "12:00", "invalid shift end preserved");
+  assertEqual(invalidShift.is_overnight, 0, "invalid equal-time shift no longer overnight");
+  assertEqual(invalidShift.is_active, 0, "invalid equal-time active shift deactivated");
+  assertEqual(invalidShift.color, "#123456", "invalid shift color preserved");
+  assertEqual(invalidShift.notes, "preserve me", "invalid shift notes preserved");
+
+  const sameDayShift = getRow<{ is_overnight: number; is_active: number }>(
+    db,
+    "SELECT is_overnight, is_active FROM shift_templates WHERE id = 'shift-same-day-active'"
+  );
+  assertEqual(sameDayShift.is_overnight, 0, "valid same-day shift remains non-overnight");
+  assertEqual(sameDayShift.is_active, 1, "valid same-day shift stays active");
+
+  const overnightShift = getRow<{ is_overnight: number; is_active: number }>(
+    db,
+    "SELECT is_overnight, is_active FROM shift_templates WHERE id = 'shift-overnight-active'"
+  );
+  assertEqual(overnightShift.is_overnight, 1, "valid overnight shift stays overnight");
+  assertEqual(overnightShift.is_active, 1, "valid overnight shift stays active");
+
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT value FROM settings WHERE key = 'scheduler_v4_invalid_equal_time_shifts_need_review'"
+    ),
+    "true",
+    "v5 review setting created"
+  );
+
+  const snapshotAfterFirstRun = dumpTable(
+    db,
+    "SELECT id, name, start_time, end_time, is_overnight, is_active, color, notes FROM shift_templates ORDER BY id"
+  );
+  applyVersionedMigrations(db);
+  assertEqual(readUserVersion(db), 5, "second migration run keeps user_version at 5");
+  assertEqual(
+    dumpTable(
+      db,
+      "SELECT id, name, start_time, end_time, is_overnight, is_active, color, notes FROM shift_templates ORDER BY id"
+    ),
+    snapshotAfterFirstRun,
+    "v5 migration is idempotent"
+  );
+
+  db.close();
+
+  const dbWithoutShiftTemplates = createV4DatabaseWithoutShiftTemplates();
+  applyVersionedMigrations(dbWithoutShiftTemplates);
+  assertEqual(
+    readUserVersion(dbWithoutShiftTemplates),
+    5,
+    "v5 migration handles missing shift_templates table safely"
+  );
+  dbWithoutShiftTemplates.close();
 }
 
 function testRollback(): void {
@@ -586,6 +664,39 @@ function createV3OpeningHoursDatabase(): SqliteDatabase {
       VALUES ('schema_version', '3', datetime('now'));
   `);
   db.pragma("user_version = 3");
+  return db;
+}
+
+function createOldV4LegacyEqualTimeDatabase(): SqliteDatabase {
+  const db = createMemoryDatabase();
+  db.exec(initSql);
+  db.exec(`
+    INSERT INTO shift_templates (id, name, start_time, end_time, is_overnight, color, notes, is_active)
+      VALUES
+        ('shift-equal-active', 'Legacy equal', '12:00', '12:00', 1, '#123456', 'preserve me', 1),
+        ('shift-same-day-active', 'Same day', '09:00', '17:00', 0, '#abcdef', 'same day', 1),
+        ('shift-overnight-active', 'Overnight', '22:00', '06:00', 1, '#fedcba', 'overnight', 1);
+
+    INSERT INTO settings (key, value, updated_at)
+      VALUES ('schema_version', '4', datetime('now'));
+  `);
+  db.pragma("user_version = 4");
+  return db;
+}
+
+function createV4DatabaseWithoutShiftTemplates(): SqliteDatabase {
+  const db = createMemoryDatabase();
+  db.exec(`
+    CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO settings (key, value, updated_at)
+      VALUES ('schema_version', '4', datetime('now'));
+  `);
+  db.pragma("user_version = 4");
   return db;
 }
 
@@ -989,6 +1100,10 @@ function dumpSchema(db: SqliteDatabase): string {
       )
       .all()
   );
+}
+
+function dumpTable(db: SqliteDatabase, sql: string): string {
+  return JSON.stringify(db.prepare(sql).all());
 }
 
 function assert(condition: unknown, message: string): asserts condition {

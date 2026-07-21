@@ -21,6 +21,7 @@ export type DailyMinuteContribution = {
 const minutesPerDay = 24 * 60;
 const msPerMinute = 60 * 1000;
 const msPerDay = minutesPerDay * msPerMinute;
+const strictTimePattern = /^(\d{2}):(\d{2})$/;
 
 export function buildShiftInterval({
   date,
@@ -188,8 +189,27 @@ export function dayNumberToDate(dayNumber: number): string {
 }
 
 export function timeToMinutes(value: string): number {
-  const [hour = "0", minute = "0"] = value.split(":");
+  if (!isValidTimeString(value)) {
+    throw new Error(`Invalid time value: ${JSON.stringify(value)}. Expected HH:mm between 00:00 and 23:59.`);
+  }
+
+  const [hour = "00", minute = "00"] = value.split(":");
   return Number(hour) * 60 + Number(minute);
+}
+
+export function isValidTimeString(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const match = strictTimePattern.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
 export function normalizeTime(value: string): string {

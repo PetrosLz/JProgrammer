@@ -273,7 +273,8 @@ function assertCiSchedulerRuntimeConfiguration(content: string): void {
     "npm run audit:scheduler",
     "npm run benchmark:scheduler",
     "npm run benchmark:scheduler:stress",
-    "JPROGRAMMER_STRESS_TIERS: small,medium"
+    "JPROGRAMMER_STRESS_TIERS: small,medium",
+    'JPROGRAMMER_RUN_VERY_LARGE_BENCHMARK: "1"'
   ]) {
     assertIncludes(content, expected, `CI scheduler/runtime configuration missing: ${expected}`);
   }

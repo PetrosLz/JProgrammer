@@ -34,7 +34,7 @@ npm run build
 
 `audit:scheduler` scans active scheduler/schema/UI surfaces for deprecated work-rule fields, `break_minutes`, manual overnight controls, staffing priority in the fresh schema, role-name-based criticality, and Demo Cafe business-data drift beyond 24-hour schema compatibility.
 
-`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode, normalizes stored overnight flags without inferring 24-hour operation from equal opening times, and deactivates legacy equal-time shift templates for manager review.
+`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode, normalizes stored overnight flags without inferring 24-hour operation from equal opening times, and the v4-to-v5 migration that deactivates legacy equal-time shift templates for manager review.
 
 `test:solver` runs the Python CP-SAT solver protocol/model tests and fails clearly when no Python runtime with OR-Tools is available. For local CP-SAT development, install the runtime with:
 
@@ -49,6 +49,8 @@ Runtime discovery checks `JPROGRAMMER_PYTHON`, project-local `.venv-solver`, `py
 Opening hours are modeled as continuous absolute local business intervals. A 24-hour day runs from local `00:00` of that business date to local `00:00` of the next date; it does not automatically cover the next morning if the next day is closed or opens later. Cross-midnight custom openings may carry into the following date, closed days prevent new intervals from starting, and adjacent intervals merge only when there is no gap. Slot generation validates the whole shift interval against those merged openings, not just the shift start time.
 
 Scheduler V2 stores the business timezone, but duration and daily-limit math intentionally use the manager-entered wall-clock schedule minutes. DST clock changes do not alter scheduled shift duration, and the model does not yet represent repeated/nonexistent local-time disambiguation or real elapsed UTC duration.
+
+Stored time strings are accepted only in strict `HH:mm` form from `00:00` through `23:59`. Midnight end times such as `16:00-00:00` remain valid and mean the shift ends the next day; equal ordinary start/end times remain invalid. If the v5 migration finds legacy equal-time shift templates, it marks `scheduler_v4_invalid_equal_time_shifts_need_review=true`, deactivates those shifts, and the Shift Templates page shows the invalid legacy time-range badge as the intended manager review mechanism.
 
 The Phase 4.2 CP-SAT model implements sparse Boolean employee-slot variables, one employee per slot, locked existing assignments, true overlap blocking, owning-date daily-hour limits, weekly shift-block limits, and hard requirement-group prior-experience composition. It solves staged lexicographic objectives with one shared deadline:
 
@@ -71,6 +73,6 @@ The evaluator reward is the final source of truth for full-schedule quality.
 Per-slot candidate scoring can still guide construction, but full schedule
 selection and repair decisions compare evaluator reward.
 
-GitHub Actions uses Node 22 and Python 3.12, installs `solver/requirements.txt`, runs `npm ci`, and then runs build, solver tests, scheduler tests, migration tests, time-model tests, randomized tests, scheduler audit, the scheduler benchmark, and small/medium stress tiers on push and pull request. A manual workflow dispatch option can run the full stress benchmark.
+GitHub Actions uses Node 22 and Python 3.12, installs `solver/requirements.txt`, runs `npm ci`, and then runs build, solver tests, scheduler tests, migration tests, time-model tests, randomized tests, scheduler audit, the scheduler benchmark, and small/medium stress tiers on push and pull request. A manual workflow dispatch option can run the full stress benchmark with `JPROGRAMMER_RUN_VERY_LARGE_BENCHMARK=1`, so it executes small, medium, large, and very-large tiers.
 
 Packaging note: the current Windows electron-builder configuration packages the Electron output and `package.json`; it does not bundle `solver/scheduler_solver.py`, Python, or OR-Tools. The installed app is therefore not yet a fully self-contained CP-SAT distribution. A future packaging task should add an explicit Windows solver runtime bundle or installer prerequisite flow.

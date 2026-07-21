@@ -15,7 +15,8 @@ import {
   formatDurationMinutes,
   formatTimeRange,
   getShiftDurationMinutes,
-  isNextDayTimeRange
+  isNextDayTimeRange,
+  isValidTimeString
 } from "../../services/scheduler/model/workingTime";
 
 type ShiftTemplateCrudForm = {
@@ -133,7 +134,7 @@ export function ShiftTemplatesCrudPage({
         role_id: null,
         start_time: form.startTime,
         end_time: form.endTime,
-        is_overnight: isNextDayTimeRange(form.startTime, form.endTime),
+        is_overnight: isSafeNextDayTimeRange(form.startTime, form.endTime),
         color: form.color,
         notes: optionalText(form.notes),
         is_active: form.isActive
@@ -197,7 +198,7 @@ export function ShiftTemplatesCrudPage({
       name: template.name,
       startTime: template.start_time,
       endTime: template.end_time,
-      isOvernight: isNextDayTimeRange(template.start_time, template.end_time),
+      isOvernight: isSafeNextDayTimeRange(template.start_time, template.end_time),
       color: template.color ?? roleColors[1],
       notes: template.notes ?? "",
       isActive: Boolean(template.is_active)
@@ -285,13 +286,11 @@ export function ShiftTemplatesCrudPage({
           <Field label={text.duration}>
             <p className="flex h-10 items-center text-sm text-slate-600">
               {form.startTime && form.endTime && form.startTime !== form.endTime
-                ? formatDurationMinutes(
-                    getShiftDurationMinutes({
-                      date: "2026-01-05",
-                      startTime: form.startTime,
-                      endTime: form.endTime
-                    })
-                  )
+                ? safeShiftDurationLabel({
+                    startTime: form.startTime,
+                    endTime: form.endTime,
+                    invalidLabel: invalidDurationLabel
+                  })
                 : "-"}
             </p>
           </Field>
@@ -456,6 +455,12 @@ function validateShiftTemplateCrudForm(
         ? "Start time is required."
         : "Η ώρα έναρξης είναι υποχρεωτική."
     );
+  } else if (!isValidTimeString(form.startTime)) {
+    errors.push(
+      language === "en"
+        ? "Start time must use HH:mm between 00:00 and 23:59."
+        : "Η ώρα έναρξης πρέπει να είναι σε μορφή HH:mm από 00:00 έως 23:59."
+    );
   }
 
   if (!form.endTime) {
@@ -463,6 +468,12 @@ function validateShiftTemplateCrudForm(
       language === "en"
         ? "End time is required."
         : "Η ώρα λήξης είναι υποχρεωτική."
+    );
+  } else if (!isValidTimeString(form.endTime)) {
+    errors.push(
+      language === "en"
+        ? "End time must use HH:mm between 00:00 and 23:59."
+        : "Η ώρα λήξης πρέπει να είναι σε μορφή HH:mm από 00:00 έως 23:59."
     );
   }
 
@@ -483,7 +494,15 @@ function validateShiftTemplateCrudForm(
 }
 
 function isInvalidShiftTimeRange(startTime: string, endTime: string): boolean {
-  return startTime === endTime;
+  return !isValidTimeString(startTime) || !isValidTimeString(endTime) || startTime === endTime;
+}
+
+function isSafeNextDayTimeRange(startTime: string, endTime: string): boolean {
+  try {
+    return isNextDayTimeRange(startTime, endTime);
+  } catch {
+    return false;
+  }
 }
 
 function safeShiftTimeLabel({
@@ -501,7 +520,11 @@ function safeShiftTimeLabel({
     return invalidLabel;
   }
 
-  return formatTimeRange({ startTime, endTime, language });
+  try {
+    return formatTimeRange({ startTime, endTime, language });
+  } catch {
+    return invalidLabel;
+  }
 }
 
 function safeShiftDurationLabel({
@@ -517,12 +540,16 @@ function safeShiftDurationLabel({
     return invalidLabel;
   }
 
-  return formatDurationMinutes(
-    getShiftDurationMinutes({
-      date: "2026-01-05",
-      startTime,
-      endTime
-    })
-  );
+  try {
+    return formatDurationMinutes(
+      getShiftDurationMinutes({
+        date: "2026-01-05",
+        startTime,
+        endTime
+      })
+    );
+  } catch {
+    return invalidLabel;
+  }
 }
 

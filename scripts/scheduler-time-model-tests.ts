@@ -10,7 +10,9 @@ import {
 } from "../src/renderer/services/scheduler";
 import {
   buildShiftInterval,
-  formatTimeRange
+  formatTimeRange,
+  isValidTimeString,
+  timeToMinutes
 } from "../src/renderer/services/scheduler/model/workingTime";
 import type { DayOfWeek, OpeningHours } from "../src/renderer/types";
 import {
@@ -91,6 +93,11 @@ const tests: TestCase[] = [
     name: "opening-hours display helper",
     scenarios: 7,
     run: testOpeningHoursDisplayHelper
+  },
+  {
+    name: "strict malformed time validation matrix",
+    scenarios: 18,
+    run: testMalformedTimeValidationMatrix
   },
   {
     name: "DST policy regression: scheduled wall-clock duration remains stable",
@@ -653,6 +660,98 @@ function testOpeningHoursDisplayHelper(): void {
       language: "el"
     }),
     "Μη έγκυρο"
+  );
+}
+
+function testMalformedTimeValidationMatrix(): void {
+  const invalidValues = ["24:00", "25:00", "12:60", "abc", "", "9:00", "09:0", "09:000"];
+  for (const value of invalidValues) {
+    assert.equal(isValidTimeString(value), false, `${value} should be rejected`);
+    assert.throws(() => timeToMinutes(value), `${value} should throw`);
+  }
+
+  for (const value of ["00:00", "08:30", "23:59"]) {
+    assert.equal(isValidTimeString(value), true, `${value} should be accepted`);
+    assert.equal(Number.isInteger(timeToMinutes(value)), true, `${value} should convert to minutes`);
+  }
+
+  assert.throws(() =>
+    buildShiftInterval({
+      date: "2026-05-18",
+      startTime: "24:00",
+      endTime: "01:00"
+    })
+  );
+  assert.throws(() =>
+    buildShiftInterval({
+      date: "2026-05-18",
+      startTime: "09:00",
+      endTime: "09:00"
+    })
+  );
+
+  const malformedWeekly = buildPlanForSingleRequirement({
+    date: "2026-05-18",
+    openingHours: openingHoursFromRows({ 1: { mode: "24" } }),
+    startTime: "24:00",
+    endTime: "01:00"
+  });
+  assert.equal(malformedWeekly.slots.length, 0, "malformed weekly shift creates no slots");
+  assert.equal(
+    malformedWeekly.warnings.some((warning) => warning.warningType === "invalid_slot_time_range"),
+    true,
+    "malformed weekly shift creates controlled invalid slot warning"
+  );
+
+  const malformedSpecial = buildPlanForSpecialRequirement({
+    date: "2026-05-19",
+    openingHours: openingHoursFromRows({ 2: { mode: "24" } }),
+    specialDay: createSpecialDay({
+      id: "special-malformed-time",
+      date: "2026-05-19",
+      isClosed: 0
+    }),
+    startTime: "12:60",
+    endTime: "14:00"
+  });
+  assert.equal(malformedSpecial.slots.length, 0, "malformed special-day shift creates no slots");
+  assert.equal(
+    malformedSpecial.warnings.some((warning) => warning.warningType === "invalid_slot_time_range"),
+    true,
+    "malformed special-day shift creates controlled invalid slot warning"
+  );
+
+  const malformedOpening = buildPlanForSingleRequirement({
+    date: "2026-05-18",
+    openingHours: openingHoursFromRows({ 1: { mode: "custom", open: "abc", close: "17:00" } }),
+    startTime: "09:00",
+    endTime: "12:00"
+  });
+  assert.equal(malformedOpening.slots.length, 0, "malformed opening hours create no slots");
+  assert.equal(
+    malformedOpening.warnings.some((warning) => warning.warningType === "invalid_opening_hours"),
+    true,
+    "malformed opening hours create controlled warning"
+  );
+
+  const containment = isShiftContainedWithinOpeningIntervals({
+    date: "2026-05-18",
+    startTime: "09:00",
+    endTime: "25:00",
+    openingHours: openingHoursFromRows({ 1: { mode: "24" } })
+  });
+  assert.equal(containment.allowed, false);
+  assert.equal(containment.reasonCode, "INVALID_SLOT_INTERVAL");
+
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: false,
+      openTime: "24:00",
+      closeTime: "08:00",
+      language: "en"
+    }),
+    "Invalid time range"
   );
 }
 

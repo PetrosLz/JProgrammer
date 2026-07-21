@@ -91,4 +91,6 @@ jobs:
         run: npm ci
 
       - name: Full scheduler stress benchmark
+        env:
+          JPROGRAMMER_RUN_VERY_LARGE_BENCHMARK: "1"
         run: npm run benchmark:scheduler:stress

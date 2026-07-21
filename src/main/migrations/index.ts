@@ -4,6 +4,7 @@ import { applyV1CompatibilityMigration } from "./v1Compatibility";
 import { applyV2SchedulerModelMigration } from "./v2SchedulerModel";
 import { applyV3SchedulerRuleCleanupMigration } from "./v3SchedulerRuleCleanup";
 import { applyV4OpeningHours24HourModeMigration } from "./v4OpeningHours24HourMode";
+import { applyV5LegacyEqualTimeShiftSafetyMigration } from "./v5LegacyEqualTimeShiftSafety";
 
 export type DatabaseMigration = {
   version: number;
@@ -12,7 +13,7 @@ export type DatabaseMigration = {
   disableForeignKeys?: boolean;
 };
 
-export const latestSchemaVersion = 4;
+export const latestSchemaVersion = 5;
 
 const migrations: DatabaseMigration[] = [
   {
@@ -36,6 +37,11 @@ const migrations: DatabaseMigration[] = [
     version: 4,
     name: "v4 opening hours 24-hour mode",
     up: applyV4OpeningHours24HourModeMigration
+  },
+  {
+    version: 5,
+    name: "v5 legacy equal-time shift safety",
+    up: applyV5LegacyEqualTimeShiftSafetyMigration
   }
 ];
 

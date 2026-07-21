@@ -5,7 +5,8 @@ import {
   dateToDayNumber,
   dayNumberToDate,
   formatTimeRange,
-  getDayOfWeekFromDate
+  getDayOfWeekFromDate,
+  isValidTimeString
 } from "./workingTime";
 
 export type OpeningIntervalReasonCode =
@@ -122,7 +123,7 @@ export function buildOpeningIntervalForBusinessDate({
       reasonCode: "INVALID_OPENING_HOURS",
       businessDate,
       openingHoursId: openingHour.id,
-      message: `${businessDate} opening interval ${formatTimeRange({
+      message: `${businessDate} opening interval ${formatSafeTimeRange({
         startTime: openingHour.open_time,
         endTime: openingHour.close_time
       })} is invalid: ${error instanceof Error ? error.message : String(error)}`
@@ -217,7 +218,7 @@ export function isShiftContainedWithinOpeningIntervals({
       relevantOpeningIntervals: [],
       mergedOpeningIntervals: [],
       reasonCode: "INVALID_SLOT_INTERVAL",
-      message: `${date} ${formatTimeRange({ startTime, endTime })} was not generated because the time range is invalid: ${
+      message: `${date} ${formatSafeTimeRange({ startTime, endTime })} was not generated because the time range is invalid: ${
         error instanceof Error ? error.message : String(error)
       }`
     };
@@ -305,7 +306,11 @@ export function formatOpeningHoursSummary({
     return language === "en" ? "Open 24 hours" : "24 Ώρες";
   }
 
-  if (!openTime || !closeTime || openTime === closeTime) {
+  if (
+    !isValidTimeString(openTime) ||
+    !isValidTimeString(closeTime) ||
+    openTime === closeTime
+  ) {
     return language === "en" ? "Invalid time range" : "Μη έγκυρο";
   }
 
@@ -355,7 +360,7 @@ function buildContainmentFailureMessage({
   reasonCode: OpeningIntervalReasonCode;
   mergedOpeningIntervals: ContinuousOpeningInterval[];
 }): string {
-  const slotLabel = `${date} ${formatTimeRange({ startTime, endTime })}`;
+  const slotLabel = `${date} ${formatSafeTimeRange({ startTime, endTime })}`;
 
   if (mergedOpeningIntervals.length === 0) {
     return `${slotLabel} was not generated because the business is closed.`;
@@ -370,6 +375,20 @@ function buildContainmentFailureMessage({
         : "across a closed period";
 
   return `${slotLabel} was not generated because it falls ${reason}. Continuous opening interval: ${openingLabels}.`;
+}
+
+function formatSafeTimeRange({
+  startTime,
+  endTime
+}: {
+  startTime: string;
+  endTime: string;
+}): string {
+  try {
+    return formatTimeRange({ startTime, endTime });
+  } catch {
+    return `${startTime}-${endTime}`;
+  }
 }
 
 function formatAbsoluteEndpoint(ms: number): string {
