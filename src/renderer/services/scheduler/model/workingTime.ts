@@ -5,6 +5,14 @@ export type AbsoluteShiftInterval = {
   endMs: number;
 };
 
+export type TimeRangeInterpretation = {
+  startMinutes: number;
+  endMinutes: number;
+  durationMinutes: number;
+  endsNextDay: boolean;
+  isEqualTime: boolean;
+};
+
 export type DailyMinuteContribution = {
   date: string;
   minutes: number;
@@ -25,17 +33,19 @@ export function buildShiftInterval({
   timezone?: string | null;
 }): AbsoluteShiftInterval {
   const startDay = dateToDayNumber(date);
-  const startMinutes = timeToMinutes(startTime);
-  const endMinutes = timeToMinutes(endTime);
-  const durationMinutes =
-    endMinutes > startMinutes
-      ? endMinutes - startMinutes
-      : endMinutes + minutesPerDay - startMinutes;
+  const interpretation = interpretTimeRange({
+    startTime,
+    endTime,
+    allowEqualAsFullDay: false
+  });
 
   return {
-    startMs: (startDay * minutesPerDay + startMinutes) * msPerMinute,
+    startMs:
+      (startDay * minutesPerDay + interpretation.startMinutes) * msPerMinute,
     endMs:
-      (startDay * minutesPerDay + startMinutes + durationMinutes) *
+      (startDay * minutesPerDay +
+        interpretation.startMinutes +
+        interpretation.durationMinutes) *
       msPerMinute
   };
 }
@@ -53,6 +63,69 @@ export function getShiftDurationMinutes({
 }): number {
   const interval = buildShiftInterval({ date, startTime, endTime, timezone });
   return Math.round((interval.endMs - interval.startMs) / msPerMinute);
+}
+
+export function interpretTimeRange({
+  startTime,
+  endTime,
+  allowEqualAsFullDay = false
+}: {
+  startTime: string;
+  endTime: string;
+  allowEqualAsFullDay?: boolean;
+}): TimeRangeInterpretation {
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = timeToMinutes(endTime);
+  const isEqualTime = endMinutes === startMinutes;
+
+  if (isEqualTime && !allowEqualAsFullDay) {
+    throw new Error("Equal start and end times are not valid for an ordinary shift.");
+  }
+
+  const endsNextDay = endMinutes < startMinutes || (isEqualTime && allowEqualAsFullDay);
+  const durationMinutes =
+    endMinutes > startMinutes
+      ? endMinutes - startMinutes
+      : endMinutes + minutesPerDay - startMinutes;
+
+  return {
+    startMinutes,
+    endMinutes,
+    durationMinutes,
+    endsNextDay,
+    isEqualTime
+  };
+}
+
+export function isNextDayTimeRange(startTime: string, endTime: string): boolean {
+  return timeToMinutes(endTime) < timeToMinutes(startTime);
+}
+
+export function formatTimeRange({
+  startTime,
+  endTime,
+  language = "en"
+}: {
+  startTime: string;
+  endTime: string;
+  language?: "en" | "el";
+}): string {
+  const suffix = isNextDayTimeRange(startTime, endTime)
+    ? ` ${language === "en" ? "(+1 day)" : "(+1 ημέρα)"}`
+    : "";
+
+  return `${startTime}–${endTime}${suffix}`;
+}
+
+export function formatDurationMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+
+  if (remainder === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${remainder}m`;
 }
 
 export function intervalsOverlap(
@@ -133,3 +206,4 @@ function parseDateParts(date: string): [number, number, number] {
 
   return [year, month, day];
 }
+

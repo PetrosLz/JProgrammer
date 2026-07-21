@@ -113,24 +113,24 @@ async function createOpeningHours(): Promise<void> {
     dayOfWeek: DayOfWeek;
     openTime: string;
     closeTime: string;
-    isOvernight: boolean;
   }> = [
-    { dayOfWeek: 1, openTime: "08:00", closeTime: "22:00", isOvernight: false },
-    { dayOfWeek: 2, openTime: "08:00", closeTime: "22:00", isOvernight: false },
-    { dayOfWeek: 3, openTime: "08:00", closeTime: "22:00", isOvernight: false },
-    { dayOfWeek: 4, openTime: "08:00", closeTime: "22:00", isOvernight: false },
-    { dayOfWeek: 5, openTime: "08:00", closeTime: "22:00", isOvernight: false },
-    { dayOfWeek: 6, openTime: "08:00", closeTime: "00:00", isOvernight: true },
-    { dayOfWeek: 0, openTime: "10:00", closeTime: "20:00", isOvernight: false }
+    { dayOfWeek: 1, openTime: "08:00", closeTime: "22:00" },
+    { dayOfWeek: 2, openTime: "08:00", closeTime: "22:00" },
+    { dayOfWeek: 3, openTime: "08:00", closeTime: "22:00" },
+    { dayOfWeek: 4, openTime: "08:00", closeTime: "22:00" },
+    { dayOfWeek: 5, openTime: "08:00", closeTime: "22:00" },
+    { dayOfWeek: 6, openTime: "08:00", closeTime: "00:00" },
+    { dayOfWeek: 0, openTime: "10:00", closeTime: "20:00" }
   ];
 
   for (const row of rows) {
     await databaseApi.createRecord("opening_hours", {
       day_of_week: row.dayOfWeek,
       is_open: true,
+      is_24_hours: false,
       open_time: row.openTime,
       close_time: row.closeTime,
-      is_overnight: row.isOvernight,
+      is_overnight: row.closeTime < row.openTime,
       notes: null
     });
   }
@@ -170,7 +170,6 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
     name: string;
     startTime: string;
     endTime: string;
-    isOvernight: boolean;
     color: string;
   }> = [
     {
@@ -178,7 +177,6 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
       name: "Morning",
       startTime: "08:00",
       endTime: "16:00",
-      isOvernight: false,
       color: "#0f766e"
     },
     {
@@ -186,7 +184,6 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
       name: "Evening",
       startTime: "16:00",
       endTime: "22:00",
-      isOvernight: false,
       color: "#2563eb"
     },
     {
@@ -194,7 +191,6 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
       name: "Saturday Evening",
       startTime: "16:00",
       endTime: "00:00",
-      isOvernight: true,
       color: "#9333ea"
     }
   ];
@@ -206,7 +202,7 @@ async function createShiftTemplates(): Promise<Record<ShiftKey, string>> {
       role_id: null,
       start_time: row.startTime,
       end_time: row.endTime,
-      is_overnight: row.isOvernight,
+      is_overnight: row.endTime < row.startTime,
       color: row.color,
       notes: null,
       is_active: true

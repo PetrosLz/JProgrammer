@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 import { databaseApi } from "../services/databaseApi";
 import { loadDemoData } from "../services/demoData";
+import { isNextDayTimeRange } from "../services/scheduler/model/workingTime";
 import {
   createInitialSetupDraft,
   hasAnyRoleValue,
@@ -574,7 +575,7 @@ async function saveSetupDraft(draft: SetupDraft): Promise<void> {
       role_id: null,
       start_time: template.startTime,
       end_time: template.endTime,
-      is_overnight: template.isOvernight,
+      is_overnight: isNextDayTimeRange(template.startTime, template.endTime),
       color: template.color,
       notes: optionalText(template.notes),
       is_active: true

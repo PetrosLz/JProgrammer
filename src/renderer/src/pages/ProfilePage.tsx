@@ -31,6 +31,7 @@ import {
 import { getErrorMessage } from "../utils/errors";
 import type { UiLanguage } from "../utils/localization";
 import { formatCompactDateRange } from "../utils/scheduleDisplay";
+import { formatTimeRange } from "../../services/scheduler/model/workingTime";
 
 export function BusinessSettingsEditor({
   settings,
@@ -279,6 +280,45 @@ export function OpeningHoursPage({
     );
   }
 
+  function updateOpeningMode(
+    dayOfWeek: DayOfWeek,
+    mode: "closed" | "custom" | "24_hours"
+  ) {
+    updateDay(dayOfWeek, {
+      isOpen: mode !== "closed",
+      is24Hours: mode === "24_hours",
+      isOvernight: false
+    });
+  }
+
+  function modeForDay(day: OpeningHoursFormRow): "closed" | "custom" | "24_hours" {
+    if (!day.isOpen) {
+      return "closed";
+    }
+
+    return day.is24Hours ? "24_hours" : "custom";
+  }
+
+  function summaryForDay(day: OpeningHoursFormRow): string {
+    if (!day.isOpen) {
+      return language === "en" ? "Closed" : "Κλειστά";
+    }
+
+    if (day.is24Hours) {
+      return language === "en" ? "Open 24 hours" : "Ανοιχτά 24 ώρες";
+    }
+
+    if (!day.openTime || !day.closeTime) {
+      return "-";
+    }
+
+    return formatTimeRange({
+      startTime: day.openTime,
+      endTime: day.closeTime,
+      language
+    });
+  }
+
   async function saveHours() {
     const nextErrors = validateOpeningHoursForm(form, language);
 
@@ -329,78 +369,76 @@ export function OpeningHoursPage({
       ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1.2fr_0.8fr_1fr_1fr_0.9fr_1.4fr] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="grid grid-cols-[1.1fr_1.2fr_1fr_1fr_1.3fr_1.4fr] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <span>{language === "en" ? "Day" : "Ημέρα"}</span>
-          <span>{language === "en" ? "Open" : "Ανοιχτά"}</span>
+          <span>{language === "en" ? "Mode" : "Λειτουργία"}</span>
           <span>{language === "en" ? "Opens" : "Άνοιγμα"}</span>
           <span>{language === "en" ? "Closes" : "Κλείσιμο"}</span>
-          <span>{language === "en" ? "Overnight" : "Μεσάνυχτα"}</span>
+          <span>{language === "en" ? "Summary" : "Σύνοψη"}</span>
           <span>{language === "en" ? "Notes" : "Σημειώσεις"}</span>
         </div>
 
-        {form.map((day) => (
-          <div
-            key={day.dayOfWeek}
-            className="grid grid-cols-[1.2fr_0.8fr_1fr_1fr_0.9fr_1.4fr] items-center gap-4 border-t border-slate-200 px-5 py-4"
-          >
-            <p className="text-sm font-semibold text-slate-900">{day.label}</p>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={day.isOpen}
+        {form.map((day) => {
+          const isCustom = day.isOpen && !day.is24Hours;
+
+          return (
+            <div
+              key={day.dayOfWeek}
+              className="grid grid-cols-[1.1fr_1.2fr_1fr_1fr_1.3fr_1.4fr] items-center gap-4 border-t border-slate-200 px-5 py-4"
+            >
+              <p className="text-sm font-semibold text-slate-900">{day.label}</p>
+              <select
+                value={modeForDay(day)}
                 onChange={(event) =>
-                  updateDay(day.dayOfWeek, { isOpen: event.target.checked })
+                  updateOpeningMode(
+                    day.dayOfWeek,
+                    event.target.value as "closed" | "custom" | "24_hours"
+                  )
                 }
-              />
-              {day.isOpen
-                ? language === "en"
-                  ? "Open"
-                  : "Ανοιχτά"
-                : language === "en"
-                  ? "Closed"
-                  : "Κλειστά"}
-            </label>
-            <input
-              type="time"
-              value={day.openTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { openTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <input
-              type="time"
-              value={day.closeTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { closeTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+                className={inputClassName}
+              >
+                <option value="closed">
+                  {language === "en" ? "Closed" : "Κλειστά"}
+                </option>
+                <option value="custom">
+                  {language === "en" ? "Custom hours" : "Ωράριο"}
+                </option>
+                <option value="24_hours">
+                  {language === "en" ? "Open 24 hours" : "24 ώρες"}
+                </option>
+              </select>
               <input
-                type="checkbox"
-                checked={day.isOvernight}
-                disabled={!day.isOpen}
+                type="time"
+                value={day.openTime}
+                disabled={!isCustom}
                 onChange={(event) =>
-                  updateDay(day.dayOfWeek, {
-                    isOvernight: event.target.checked
-                  })
+                  updateDay(day.dayOfWeek, { openTime: event.target.value })
                 }
+                className={inputClassName}
               />
-              {language === "en" ? "Overnight" : "Περνάει"}
-            </label>
-            <input
-              value={day.notes}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { notes: event.target.value })
-              }
-              className={inputClassName}
-              placeholder={language === "en" ? "Optional" : "Προαιρετικά"}
-            />
-          </div>
-        ))}
+              <input
+                type="time"
+                value={day.closeTime}
+                disabled={!isCustom}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, { closeTime: event.target.value })
+                }
+                className={inputClassName}
+              />
+              <p className="text-sm font-medium text-slate-700">
+                {summaryForDay(day)}
+              </p>
+              <input
+                value={day.notes}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, { notes: event.target.value })
+                }
+                className={inputClassName}
+                placeholder={language === "en" ? "Optional" : "Προαιρετικά"}
+              />
+            </div>
+          );
+        })}
       </div>
 
       <button

@@ -24,6 +24,7 @@ type TestCase = {
 const tests: TestCase[] = [
   { name: "fresh database creates newest scheduler schema", run: testFreshDatabase },
   { name: "existing v1 database migrates to v2 safely", run: testV1Migration },
+  { name: "existing v3 opening-hours schema migrates to explicit 24-hour mode", run: testV3OpeningHoursMigration },
   { name: "forced migration failure rolls back schema and data", run: testRollback },
   { name: "running migrations twice is idempotent", run: testIdempotence },
   { name: "schema version is not reset on startup", run: testSchemaVersionNotReset },
@@ -63,6 +64,7 @@ function testFreshDatabase(): void {
   assert(!hasColumn(db, "shift_templates", "break_minutes"), "fresh schema removed break_minutes");
   assertV2WorkRuleSchema(db);
   assertSchedulerRuleCleanupSchema(db);
+  assertOpeningHours24HourSchema(db);
   db.close();
 }
 
@@ -74,8 +76,10 @@ function testV1Migration(): void {
   assert(!hasColumn(db, "shift_templates", "break_minutes"), "break_minutes no longer exists");
   assertV2WorkRuleSchema(db);
   assertSchedulerRuleCleanupSchema(db);
+  assertOpeningHours24HourSchema(db);
 
   assertEqual(countRows(db, "employees"), 2, "employees preserved");
+  assertEqual(countRows(db, "opening_hours"), 2, "opening hours preserved");
   assertEqual(countRows(db, "employee_roles"), 1, "employee roles preserved");
   assertEqual(countRows(db, "employee_day_constraints"), 1, "day constraints preserved");
   assertEqual(countRows(db, "employee_shift_availability"), 1, "shift availability preserved");
@@ -124,6 +128,12 @@ function testV1Migration(): void {
   assertEqual(slotSnapshot.minimum_experience_level, "no_experience", "slot minimum experience backfilled");
   assertEqual(slotSnapshot.experienced_required_count, 0, "slot experienced required backfilled");
   assertEqual(slotSnapshot.slot_number, 1, "slot number backfilled");
+  const saturdayHours = getRow<{
+    is_24_hours: number;
+    is_overnight: number;
+  }>(db, "SELECT is_24_hours, is_overnight FROM opening_hours WHERE id = 'hours-saturday'");
+  assertEqual(saturdayHours.is_24_hours, 0, "legacy opening hour defaults to non-24-hour");
+  assertEqual(saturdayHours.is_overnight, 1, "legacy opening overnight flag derived from times");
   assertEqual(
     getValue<string>(
       db,
@@ -132,6 +142,62 @@ function testV1Migration(): void {
     "true",
     "migration review setting created"
   );
+
+  db.close();
+}
+
+function testV3OpeningHoursMigration(): void {
+  const db = createV3OpeningHoursDatabase();
+  applyVersionedMigrations(db);
+
+  assertEqual(readUserVersion(db), latestSchemaVersion, "migrated v3 user_version");
+  assertOpeningHours24HourSchema(db);
+  assertEqual(countRows(db, "opening_hours"), 4, "v3 opening-hour rows preserved");
+  assertEqual(countRows(db, "shift_templates"), 3, "v3 shift-template rows preserved");
+
+  const sameDay = getRow<{
+    is_24_hours: number;
+    is_overnight: number;
+  }>(db, "SELECT is_24_hours, is_overnight FROM opening_hours WHERE id = 'hours-same-day'");
+  assertEqual(sameDay.is_24_hours, 0, "same-day opening is not 24-hour");
+  assertEqual(sameDay.is_overnight, 0, "same-day opening overnight flag normalized off");
+
+  const overnight = getRow<{
+    is_24_hours: number;
+    is_overnight: number;
+  }>(db, "SELECT is_24_hours, is_overnight FROM opening_hours WHERE id = 'hours-cross-midnight'");
+  assertEqual(overnight.is_24_hours, 0, "cross-midnight opening remains non-24-hour");
+  assertEqual(overnight.is_overnight, 1, "cross-midnight opening overnight flag normalized on");
+
+  const equalTimes = getRow<{
+    is_24_hours: number;
+    is_overnight: number;
+  }>(db, "SELECT is_24_hours, is_overnight FROM opening_hours WHERE id = 'hours-equal'");
+  assertEqual(equalTimes.is_24_hours, 0, "equal opening times are not inferred as 24-hour");
+  assertEqual(equalTimes.is_overnight, 0, "equal opening times are not overnight");
+
+  const closedDay = getRow<{
+    is_24_hours: number;
+    is_overnight: number;
+  }>(db, "SELECT is_24_hours, is_overnight FROM opening_hours WHERE id = 'hours-closed'");
+  assertEqual(closedDay.is_24_hours, 0, "closed day remains non-24-hour");
+  assertEqual(closedDay.is_overnight, 0, "closed day overnight flag normalized off");
+
+  const sameDayShift = getValue<number>(
+    db,
+    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-same-day'"
+  );
+  assertEqual(sameDayShift, 0, "same-day shift overnight flag normalized off");
+  const nightShift = getValue<number>(
+    db,
+    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-night'"
+  );
+  assertEqual(nightShift, 1, "cross-midnight shift overnight flag normalized on");
+  const equalShift = getValue<number>(
+    db,
+    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-equal'"
+  );
+  assertEqual(equalShift, 0, "equal shift times are not overnight");
 
   db.close();
 }
@@ -458,6 +524,60 @@ function createRollbackDatabase(): SqliteDatabase {
   return db;
 }
 
+function createV3OpeningHoursDatabase(): SqliteDatabase {
+  const db = createMemoryDatabase();
+  db.exec(`
+    CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE opening_hours (
+      id TEXT PRIMARY KEY,
+      day_of_week INTEGER NOT NULL,
+      is_open INTEGER NOT NULL DEFAULT 1,
+      open_time TEXT,
+      close_time TEXT,
+      is_overnight INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE shift_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      is_overnight INTEGER NOT NULL DEFAULT 0,
+      color TEXT,
+      notes TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO opening_hours (id, day_of_week, is_open, open_time, close_time, is_overnight)
+      VALUES
+        ('hours-same-day', 1, 1, '08:00', '20:00', 1),
+        ('hours-cross-midnight', 2, 1, '18:00', '02:00', 0),
+        ('hours-equal', 3, 1, '00:00', '00:00', 1),
+        ('hours-closed', 4, 0, '08:00', '20:00', 1);
+
+    INSERT INTO shift_templates (id, name, start_time, end_time, is_overnight)
+      VALUES
+        ('shift-same-day', 'Same day', '09:00', '17:00', 1),
+        ('shift-night', 'Night', '22:00', '06:00', 0),
+        ('shift-equal', 'Equal', '00:00', '00:00', 1);
+
+    INSERT INTO settings (key, value, updated_at)
+      VALUES ('schema_version', '3', datetime('now'));
+  `);
+  db.pragma("user_version = 3");
+  return db;
+}
+
 function createLegacySchema(db: SqliteDatabase): void {
   db.exec(`
     CREATE TABLE settings (
@@ -472,6 +592,18 @@ function createLegacySchema(db: SqliteDatabase): void {
       color TEXT,
       description TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE opening_hours (
+      id TEXT PRIMARY KEY,
+      day_of_week INTEGER NOT NULL,
+      is_open INTEGER NOT NULL DEFAULT 1,
+      open_time TEXT,
+      close_time TEXT,
+      is_overnight INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -688,6 +820,10 @@ function createLegacySchema(db: SqliteDatabase): void {
 function seedLegacyData(db: SqliteDatabase): void {
   db.exec(`
     INSERT INTO roles (id, name) VALUES ('role-service', 'Service');
+    INSERT INTO opening_hours (id, day_of_week, is_open, open_time, close_time, is_overnight)
+      VALUES
+        ('hours-monday', 1, 1, '08:00', '22:00', 0),
+        ('hours-saturday', 6, 1, '08:00', '00:00', 0);
     INSERT INTO shift_templates (id, name, start_time, end_time, is_overnight, break_minutes)
       VALUES ('shift-night', 'Night', '20:00', '04:00', 1, 30);
     INSERT INTO employees (id, first_name, last_name) VALUES
@@ -788,6 +924,13 @@ function assertSchedulerRuleCleanupSchema(db: SqliteDatabase): void {
   ]) {
     assert(hasColumn(db, "schedule_slots", column), `slot snapshot column exists: ${column}`);
   }
+}
+
+function assertOpeningHours24HourSchema(db: SqliteDatabase): void {
+  assert(
+    hasColumn(db, "opening_hours", "is_24_hours"),
+    "opening_hours supports explicit 24-hour mode"
+  );
 }
 
 function hasColumn(

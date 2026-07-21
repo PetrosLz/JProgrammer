@@ -26,6 +26,11 @@ import {
   type ShiftTemplateDraft
 } from "../setupData";
 import type { UiLanguage } from "../utils/localization";
+import {
+  formatDurationMinutes,
+  formatTimeRange,
+  getShiftDurationMinutes
+} from "../../services/scheduler/model/workingTime";
 
 export function SetupWizard({
   activeStep,
@@ -423,6 +428,45 @@ function OpeningHoursGrid({
     );
   }
 
+  function updateMode(
+    dayOfWeek: number,
+    mode: "closed" | "custom" | "24_hours"
+  ) {
+    updateDay(dayOfWeek, {
+      isOpen: mode !== "closed",
+      is24Hours: mode === "24_hours",
+      isOvernight: false
+    });
+  }
+
+  function modeForDay(day: OpeningHoursDraft): "closed" | "custom" | "24_hours" {
+    if (!day.isOpen) {
+      return "closed";
+    }
+
+    return day.is24Hours ? "24_hours" : "custom";
+  }
+
+  function summaryForDay(day: OpeningHoursDraft): string {
+    if (!day.isOpen) {
+      return "Κλειστά";
+    }
+
+    if (day.is24Hours) {
+      return "24 ώρες";
+    }
+
+    if (!day.openTime || !day.closeTime) {
+      return "-";
+    }
+
+    return formatTimeRange({
+      startTime: day.openTime,
+      endTime: day.closeTime,
+      language: "el"
+    });
+  }
+
   return (
     <div>
       <SectionHeading
@@ -431,66 +475,67 @@ function OpeningHoursGrid({
       />
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200">
-        <div className="grid grid-cols-[1.2fr_0.7fr_1fr_1fr_0.8fr] bg-slate-100 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="grid grid-cols-[1.1fr_1.2fr_1fr_1fr_1.3fr] bg-slate-100 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <span>Ημέρα</span>
-          <span>Ανοικτά</span>
+          <span>Λειτουργία</span>
           <span>Άνοιγμα</span>
           <span>Κλείσιμο</span>
-          <span>Overnight</span>
+          <span>Σύνοψη</span>
         </div>
 
-        {value.map((day) => (
-          <div
-            key={day.dayOfWeek}
-            className="grid grid-cols-[1.2fr_0.7fr_1fr_1fr_0.8fr] items-center gap-3 border-t border-slate-200 px-4 py-3"
-          >
-            <span className="text-sm font-medium text-slate-800">
-              {day.label}
-            </span>
-            <input
-              type="checkbox"
-              checked={day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { isOpen: event.target.checked })
-              }
-              className="h-4 w-4"
-            />
-            <input
-              type="time"
-              value={day.openTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { openTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <input
-              type="time"
-              value={day.closeTime}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, { closeTime: event.target.value })
-              }
-              className={inputClassName}
-            />
-            <input
-              type="checkbox"
-              checked={day.isOvernight}
-              disabled={!day.isOpen}
-              onChange={(event) =>
-                updateDay(day.dayOfWeek, {
-                  isOvernight: event.target.checked
-                })
-              }
-              className="h-4 w-4"
-            />
-          </div>
-        ))}
+        {value.map((day) => {
+          const isCustom = day.isOpen && !day.is24Hours;
+
+          return (
+            <div
+              key={day.dayOfWeek}
+              className="grid grid-cols-[1.1fr_1.2fr_1fr_1fr_1.3fr] items-center gap-3 border-t border-slate-200 px-4 py-3"
+            >
+              <span className="text-sm font-medium text-slate-800">
+                {day.label}
+              </span>
+              <select
+                value={modeForDay(day)}
+                onChange={(event) =>
+                  updateMode(
+                    day.dayOfWeek,
+                    event.target.value as "closed" | "custom" | "24_hours"
+                  )
+                }
+                className={inputClassName}
+              >
+                <option value="closed">Κλειστά</option>
+                <option value="custom">Ωράριο</option>
+                <option value="24_hours">24 ώρες</option>
+              </select>
+              <input
+                type="time"
+                value={day.openTime}
+                disabled={!isCustom}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, { openTime: event.target.value })
+                }
+                className={inputClassName}
+              />
+              <input
+                type="time"
+                value={day.closeTime}
+                disabled={!isCustom}
+                onChange={(event) =>
+                  updateDay(day.dayOfWeek, { closeTime: event.target.value })
+                }
+                className={inputClassName}
+              />
+              <span className="text-sm font-medium text-slate-700">
+                {summaryForDay(day)}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
-
 function RolesEditor({
   value,
   onChange
@@ -625,17 +670,20 @@ function ShiftTemplatesEditor({
                 className={inputClassName}
               />
             </Field>
-            <Field label="Overnight">
-              <input
-                type="checkbox"
-                checked={template.isOvernight}
-                onChange={(event) =>
-                  updateTemplate(index, {
-                    isOvernight: event.target.checked
-                  })
-                }
-                className="mt-3 h-4 w-4"
-              />
+            <Field label="Διάρκεια">
+              <p className="flex h-10 items-center text-sm text-slate-600">
+                {template.startTime &&
+                template.endTime &&
+                template.startTime !== template.endTime
+                  ? formatDurationMinutes(
+                      getShiftDurationMinutes({
+                        date: "2026-01-05",
+                        startTime: template.startTime,
+                        endTime: template.endTime
+                      })
+                    )
+                  : "-"}
+              </p>
             </Field>
             <Field label="Χρώμα">
               <ColorSelect
@@ -666,3 +714,4 @@ function ShiftTemplatesEditor({
     </div>
   );
 }
+

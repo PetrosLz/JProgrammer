@@ -11,6 +11,7 @@ import { dayLabels, roleColors } from "../setupData";
 import { getErrorMessage } from "../utils/errors";
 import type { UiLanguage } from "../utils/localization";
 import { roleLabel } from "../utils/scheduleDisplay";
+import { formatTimeRange } from "../../services/scheduler/model/workingTime";
 
 type StaffingRequirementForm = {
   dayOfWeek: DayOfWeek;
@@ -363,7 +364,13 @@ export function StaffingRequirementsPage({
               <option value="">Επιλέξτε βάρδια</option>
               {activeShiftTemplates.map((template) => (
                 <option key={template.id} value={template.id}>
-                  {template.name} ({template.start_time}-{template.end_time})
+                  {template.name} (
+                  {formatTimeRange({
+                    startTime: template.start_time,
+                    endTime: template.end_time,
+                    language
+                  })}
+                  )
                 </option>
               ))}
             </select>
@@ -375,7 +382,11 @@ export function StaffingRequirementsPage({
             <p className="text-sm font-semibold text-slate-900">
               Άτομα που χρειάζονται
               {selectedShiftTemplate
-                ? ` για ${selectedShiftTemplate.name} ${selectedShiftTemplate.start_time}-${selectedShiftTemplate.end_time}`
+                ? ` για ${selectedShiftTemplate.name} ${formatTimeRange({
+                    startTime: selectedShiftTemplate.start_time,
+                    endTime: selectedShiftTemplate.end_time,
+                    language
+                  })}`
                 : ""}
             </p>
             <p className="mt-1 text-xs text-slate-500">
@@ -523,7 +534,11 @@ export function StaffingRequirementsPage({
                               {group.label}
                             </span>
                             <span className="text-sm text-slate-500">
-                              {group.startTime} - {group.endTime}
+                              {formatTimeRange({
+                                startTime: group.startTime,
+                                endTime: group.endTime,
+                                language
+                              })}
                             </span>
                             <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
                               Σύνολο {group.totalCount}

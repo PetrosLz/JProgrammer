@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS opening_hours (
   id TEXT PRIMARY KEY,
   day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
   is_open INTEGER NOT NULL DEFAULT 1 CHECK (is_open IN (0, 1)),
+  is_24_hours INTEGER NOT NULL DEFAULT 0 CHECK (is_24_hours IN (0, 1)),
   open_time TEXT,
   close_time TEXT,
   is_overnight INTEGER NOT NULL DEFAULT 0 CHECK (is_overnight IN (0, 1)),

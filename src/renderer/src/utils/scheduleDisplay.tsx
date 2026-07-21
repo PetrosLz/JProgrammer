@@ -11,6 +11,7 @@ import type {
   StaffingRequirement
 } from "../../types";
 import { getDayOfWeek, getSlotDurationHours } from "../../services/scheduler";
+import { formatTimeRange } from "../../services/scheduler/model/workingTime";
 import { dayLabels } from "../setupData";
 import type { UiLanguage } from "./localization";
 
@@ -32,6 +33,14 @@ function roleCoverageSummary(slots: ScheduleSlot[], roles: Role[]): string {
   return [...counts.entries()]
     .map(([roleId, count]) => `${roleLabel(roleId, roles)}: ${count}`)
     .join(", ");
+}
+
+function formatSlotTime(slot: ScheduleSlot, language: UiLanguage = "en"): string {
+  return formatTimeRange({
+    startTime: slot.start_time,
+    endTime: slot.end_time,
+    language
+  });
 }
 
 type ScheduleRow = {
@@ -516,7 +525,8 @@ function groupUnfilledSlotsByDate({
 function buildScheduleRows(
   slots: ScheduleSlot[],
   requirements: StaffingRequirement[],
-  shiftTemplates: ShiftTemplate[]
+  shiftTemplates: ShiftTemplate[],
+  language: UiLanguage = "en"
 ): ScheduleRow[] {
   const rows = new Map<string, ScheduleRow>();
 
@@ -534,7 +544,7 @@ function buildScheduleRows(
 
     rows.set(key, {
       key,
-      label: shiftTemplate?.name ?? `${slot.start_time} - ${slot.end_time}`,
+      label: shiftTemplate?.name ?? formatSlotTime(slot, language),
       startTime: slot.start_time,
       endTime: slot.end_time
     });
@@ -558,7 +568,7 @@ function shiftNameForSlot(
     ? shiftTemplates.find((item) => item.id === requirement.shift_template_id)
     : null;
 
-  return shiftTemplate?.name ?? `${slot.start_time}-${slot.end_time}`;
+  return shiftTemplate?.name ?? formatSlotTime(slot);
 }
 
 function shortEmployeeName(employee: Employee): string {
@@ -847,8 +857,8 @@ function buildTeamSchedulePdfHtml({
                       )};">
                         <div class="shift-name">${escapeHtml(item.shiftName)}</div>
                         <div class="shift-time">${escapeHtml(
-                          item.slot.start_time
-                        )}-${escapeHtml(item.slot.end_time)}</div>
+                          formatSlotTime(item.slot, "el")
+                        )}</div>
                         <div class="shift-role">${escapeHtml(
                           item.role?.name ?? "Ρόλος"
                         )}</div>
@@ -1327,8 +1337,8 @@ function buildManagerReportPdfHtml({
                             : ""
                         }</div>
                         <div class="shift-time">${escapeHtml(
-                          item.slot.start_time
-                        )}-${escapeHtml(item.slot.end_time)}</div>
+                          formatSlotTime(item.slot, language)
+                        )}</div>
                         <div class="shift-role">${escapeHtml(
                           item.role?.name ?? text.role
                         )}</div>
@@ -1542,6 +1552,7 @@ export {
   formatDateEu,
   formatDateRangeEu,
   formatHours,
+  formatSlotTime,
   formatOptionalHours,
   formatWeekRangeWithDays,
   getEmployeeDifficultShiftCount,

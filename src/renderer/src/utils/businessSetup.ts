@@ -4,6 +4,7 @@ import type { BusinessInfoDraft, OpeningHoursDraft } from "../setupData";
 import { optionalText } from "../setupData";
 import { localizedDayLabels } from "./scheduleDisplay";
 import type { UiLanguage } from "./localization";
+import { isNextDayTimeRange } from "../../services/scheduler/model/workingTime";
 
 export type OpeningHoursFormRow = OpeningHoursDraft & {
   label: string;
@@ -51,9 +52,13 @@ export async function saveOpeningHours(
     const payload = {
       day_of_week: day.dayOfWeek,
       is_open: day.isOpen,
-      open_time: day.isOpen ? day.openTime : null,
-      close_time: day.isOpen ? day.closeTime : null,
-      is_overnight: day.isOpen ? day.isOvernight : false,
+      is_24_hours: day.isOpen && day.is24Hours,
+      open_time: day.isOpen && !day.is24Hours ? day.openTime : null,
+      close_time: day.isOpen && !day.is24Hours ? day.closeTime : null,
+      is_overnight:
+        day.isOpen && !day.is24Hours
+          ? isNextDayTimeRange(day.openTime, day.closeTime)
+          : false,
       notes: optionalText(day.notes ?? "")
     };
 
@@ -117,9 +122,13 @@ export function openingHoursToDraft(
       dayOfWeek: day.dayOfWeek,
       label: day.label,
       isOpen: row ? Boolean(row.is_open) : false,
+      is24Hours: Boolean(row?.is_24_hours),
       openTime: row?.open_time ?? "08:00",
       closeTime: row?.close_time ?? "17:00",
-      isOvernight: Boolean(row?.is_overnight),
+      isOvernight:
+        row?.open_time && row?.close_time
+          ? isNextDayTimeRange(row.open_time, row.close_time)
+          : Boolean(row?.is_overnight),
       notes: row?.notes ?? ""
     };
   });
@@ -132,7 +141,7 @@ export function validateOpeningHoursForm(
   const errors: string[] = [];
 
   for (const day of openingHours) {
-    if (!day.isOpen) {
+    if (!day.isOpen || day.is24Hours) {
       continue;
     }
 
@@ -141,6 +150,14 @@ export function validateOpeningHoursForm(
         language === "en"
           ? `${day.label}: opening and closing times are required.`
           : `${day.label}: χρειάζεται ώρα ανοίγματος και κλεισίματος.`
+      );
+    }
+
+    if (day.openTime && day.closeTime && day.openTime === day.closeTime) {
+      errors.push(
+        language === "en"
+          ? `${day.label}: equal opening and closing times are only valid for 24-hour operation.`
+          : `${day.label}: ίδιες ώρες ανοίγματος και κλεισίματος επιτρέπονται μόνο με 24ωρη λειτουργία.`
       );
     }
   }

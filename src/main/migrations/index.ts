@@ -3,6 +3,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import { applyV1CompatibilityMigration } from "./v1Compatibility";
 import { applyV2SchedulerModelMigration } from "./v2SchedulerModel";
 import { applyV3SchedulerRuleCleanupMigration } from "./v3SchedulerRuleCleanup";
+import { applyV4OpeningHours24HourModeMigration } from "./v4OpeningHours24HourMode";
 
 export type DatabaseMigration = {
   version: number;
@@ -11,7 +12,7 @@ export type DatabaseMigration = {
   disableForeignKeys?: boolean;
 };
 
-export const latestSchemaVersion = 3;
+export const latestSchemaVersion = 4;
 
 const migrations: DatabaseMigration[] = [
   {
@@ -30,6 +31,11 @@ const migrations: DatabaseMigration[] = [
     name: "v3 scheduler rule cleanup",
     up: applyV3SchedulerRuleCleanupMigration,
     disableForeignKeys: true
+  },
+  {
+    version: 4,
+    name: "v4 opening hours 24-hour mode",
+    up: applyV4OpeningHours24HourModeMigration
   }
 ];
 

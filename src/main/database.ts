@@ -52,6 +52,7 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
     writableColumns: [
       "day_of_week",
       "is_open",
+      "is_24_hours",
       "open_time",
       "close_time",
       "is_overnight",

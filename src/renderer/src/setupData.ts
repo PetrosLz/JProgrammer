@@ -15,6 +15,7 @@ export type OpeningHoursDraft = {
   dayOfWeek: DayOfWeek;
   label: string;
   isOpen: boolean;
+  is24Hours: boolean;
   openTime: string;
   closeTime: string;
   isOvernight: boolean;
@@ -95,6 +96,7 @@ export function createInitialSetupDraft(): SetupDraft {
       dayOfWeek,
       label,
       isOpen: dayOfWeek !== 0,
+      is24Hours: false,
       openTime: "09:00",
       closeTime: "17:00",
       isOvernight: false
@@ -164,7 +166,7 @@ export function validateOpeningHours(openingHours: OpeningHoursDraft[]): string[
   const errors: string[] = [];
 
   for (const day of openingHours) {
-    if (!day.isOpen) {
+    if (!day.isOpen || day.is24Hours) {
       continue;
     }
 
@@ -173,7 +175,7 @@ export function validateOpeningHours(openingHours: OpeningHoursDraft[]): string[
       continue;
     }
 
-    if (!day.isOvernight && day.closeTime <= day.openTime) {
+    if (day.closeTime === day.openTime) {
       errors.push(`${day.label}: η ώρα κλεισίματος πρέπει να είναι μετά το άνοιγμα.`);
     }
   }
@@ -223,7 +225,7 @@ export function validateShiftTemplates(
       continue;
     }
 
-    if (!template.isOvernight && template.endTime <= template.startTime) {
+    if (template.endTime === template.startTime) {
       errors.push(
         `Η βάρδια "${template.name || "χωρίς όνομα"}" πρέπει να τελειώνει μετά την έναρξη.`
       );

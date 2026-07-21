@@ -54,6 +54,7 @@ import {
   formatCompactDateRange,
   formatDateEu,
   formatHours,
+  formatSlotTime,
   groupUnfilledSlotsByDate,
   groupWarningsBySlot,
   localizedDayName,
@@ -169,7 +170,8 @@ export function ScheduleViewPage({
   const shiftRows = buildScheduleRows(
     runSlots,
     staffingRequirements,
-    shiftTemplates
+    shiftTemplates,
+    language
   );
   const managerCoverageIssues = buildManagerCoverageIssues({
     runSlots,
@@ -779,7 +781,7 @@ export function ScheduleViewPage({
                                   {item.shiftName}
                                 </p>
                                 <p className="whitespace-nowrap text-xs text-slate-600">
-                                  {item.slot.start_time}–{item.slot.end_time}
+                                  {formatSlotTime(item.slot, language)}
                                 </p>
                                 <p className="truncate text-xs text-slate-500">
                                   {item.role?.name ?? (language === "en" ? "Role" : "Ρόλος")}
@@ -828,7 +830,30 @@ export function ScheduleViewPage({
                         {row.label}
                       </p>
                       <p className="mt-1 whitespace-nowrap text-xs text-slate-500">
-                        {row.startTime} - {row.endTime}
+                        {row.startTime === row.endTime
+                          ? `${row.startTime} - ${row.endTime}`
+                          : formatSlotTime(
+                              {
+                                id: row.key,
+                                schedule_run_id: selectedRun.id,
+                                date: selectedRun.start_date,
+                                role_id: "",
+                                start_time: row.startTime,
+                                end_time: row.endTime,
+                                required_count: 1,
+                                requirement_group_id: null,
+                                minimum_experience_level: "no_experience",
+                                experienced_required_count: 0,
+                                status: "unfilled",
+                                source_type: "weekly_requirement",
+                                source_id: null,
+                                slot_number: null,
+                                notes: null,
+                                created_at: selectedRun.created_at,
+                                updated_at: selectedRun.updated_at
+                              },
+                              language
+                            )}
                       </p>
                     </div>
                     {dates.map((date) => {
@@ -1219,7 +1244,7 @@ function AssignmentEditorModal({
                 {formatDateEu(editor.slot.date)}
               </p>
               <p>
-                {shiftName} · {editor.slot.start_time}–{editor.slot.end_time}
+                {shiftName} · {formatSlotTime(editor.slot, language)}
               </p>
               <p>
                 {language === "en" ? "Role" : "Ρόλος"}:{" "}

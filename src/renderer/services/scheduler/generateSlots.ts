@@ -10,6 +10,8 @@ import type {
 import { normalizeExperienceLevel } from "../../types";
 import {
   addDays as addBusinessDays,
+  buildShiftInterval,
+  formatTimeRange,
   getDayOfWeekFromDate
 } from "./model/workingTime";
 
@@ -115,15 +117,9 @@ export function buildScheduleGenerationPlan({
         )
       : [];
 
-    if (!specialDay) {
-      const openingHour = openingHours.find(
-        (item) => item.day_of_week === dayOfWeek
-      );
-
-      if (openingHour && !openingHour.is_open) {
-        continue;
-      }
-    }
+    const openingHour = openingHours.find(
+      (item) => item.day_of_week === dayOfWeek
+    );
 
     const dayRequirements: Array<
       | { type: "weekly_requirement"; requirement: StaffingRequirement }
@@ -162,6 +158,22 @@ export function buildScheduleGenerationPlan({
               startTime: item.requirement.start_time,
               endTime: item.requirement.end_time
             };
+      const containment = validateSlotWithinOpeningHours({
+        date,
+        openingHour,
+        startTime: shiftSnapshot.startTime,
+        endTime: shiftSnapshot.endTime
+      });
+
+      if (!containment.allowed) {
+        warnings.push({
+          severity: "warning",
+          warningType: containment.warningType,
+          message: containment.message
+        });
+        continue;
+      }
+
       const requirementGroupId = `${date}|${item.type}|${requirement.id}`;
 
       for (let index = 1; index <= requirement.required_count; index += 1) {
@@ -203,6 +215,94 @@ export function buildScheduleGenerationPlan({
     slots,
     warnings
   };
+}
+
+function validateSlotWithinOpeningHours({
+  date,
+  openingHour,
+  startTime,
+  endTime
+}: {
+  date: string;
+  openingHour: OpeningHours | undefined;
+  startTime: string;
+  endTime: string;
+}): { allowed: true } | { allowed: false; warningType: string; message: string } {
+  let slotInterval: ReturnType<typeof buildShiftInterval>;
+
+  try {
+    slotInterval = buildShiftInterval({ date, startTime, endTime });
+  } catch (error) {
+    return {
+      allowed: false,
+      warningType: "invalid_slot_time_range",
+      message: `${date} ${formatTimeRange({ startTime, endTime })} was not generated because the time range is invalid: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    };
+  }
+
+  if (!openingHour) {
+    return { allowed: true };
+  }
+
+  if (!openingHour.is_open) {
+    return {
+      allowed: false,
+      warningType: "closed_day_requirement",
+      message: `${date} ${formatTimeRange({ startTime, endTime })} was not generated because the business is closed.`
+    };
+  }
+
+  if (openingHour.is_24_hours) {
+    return { allowed: true };
+  }
+
+  if (!openingHour.open_time || !openingHour.close_time) {
+    return {
+      allowed: false,
+      warningType: "invalid_opening_hours",
+      message: `${date} has custom opening hours without both opening and closing time.`
+    };
+  }
+
+  let openingInterval: ReturnType<typeof buildShiftInterval>;
+
+  try {
+    openingInterval = buildShiftInterval({
+      date,
+      startTime: openingHour.open_time,
+      endTime: openingHour.close_time
+    });
+  } catch (error) {
+    return {
+      allowed: false,
+      warningType: "invalid_opening_hours",
+      message: `${date} opening interval ${formatTimeRange({
+        startTime: openingHour.open_time,
+        endTime: openingHour.close_time
+      })} is invalid: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+
+  if (
+    slotInterval.startMs < openingInterval.startMs ||
+    slotInterval.endMs > openingInterval.endMs
+  ) {
+    return {
+      allowed: false,
+      warningType: "slot_outside_opening_hours",
+      message: `${date} ${formatTimeRange({
+        startTime,
+        endTime
+      })} was not generated because it is outside opening hours ${formatTimeRange({
+        startTime: openingHour.open_time,
+        endTime: openingHour.close_time
+      })}.`
+    };
+  }
+
+  return { allowed: true };
 }
 
 function getRequirementShiftSnapshot(

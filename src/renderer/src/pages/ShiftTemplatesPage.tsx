@@ -11,6 +11,12 @@ import { inputClassName, secondaryButtonClassName } from "../components/styles";
 import { optionalText, roleColors } from "../setupData";
 import { getErrorMessage } from "../utils/errors";
 import type { UiLanguage } from "../utils/localization";
+import {
+  formatDurationMinutes,
+  formatTimeRange,
+  getShiftDurationMinutes,
+  isNextDayTimeRange
+} from "../../services/scheduler/model/workingTime";
 
 type ShiftTemplateCrudForm = {
   name: string;
@@ -49,7 +55,7 @@ export function ShiftTemplatesCrudPage({
           name: "Name",
           start: "Start",
           end: "End",
-          overnight: "Overnight",
+          duration: "Duration",
           color: "Color",
           status: "Status",
           notes: "Notes",
@@ -82,7 +88,7 @@ export function ShiftTemplatesCrudPage({
           name: "Όνομα",
           start: "Έναρξη",
           end: "Λήξη",
-          overnight: "Περνάει τα μεσάνυχτα",
+          duration: "Διάρκεια",
           color: "Χρώμα",
           status: "Κατάσταση",
           notes: "Σημειώσεις",
@@ -123,7 +129,7 @@ export function ShiftTemplatesCrudPage({
         role_id: null,
         start_time: form.startTime,
         end_time: form.endTime,
-        is_overnight: form.isOvernight,
+        is_overnight: isNextDayTimeRange(form.startTime, form.endTime),
         color: form.color,
         notes: optionalText(form.notes),
         is_active: form.isActive
@@ -178,7 +184,7 @@ export function ShiftTemplatesCrudPage({
       name: template.name,
       startTime: template.start_time,
       endTime: template.end_time,
-      isOvernight: Boolean(template.is_overnight),
+      isOvernight: isNextDayTimeRange(template.start_time, template.end_time),
       color: template.color ?? roleColors[1],
       notes: template.notes ?? "",
       isActive: Boolean(template.is_active)
@@ -263,18 +269,18 @@ export function ShiftTemplatesCrudPage({
               className={inputClassName}
             />
           </Field>
-          <Field label={text.overnight}>
-            <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={form.isOvernight}
-                onChange={(event) =>
-                  setForm({ ...form, isOvernight: event.target.checked })
-                }
-                className="h-4 w-4"
-              />
-              {text.yes}
-            </label>
+          <Field label={text.duration}>
+            <p className="flex h-10 items-center text-sm text-slate-600">
+              {form.startTime && form.endTime && form.startTime !== form.endTime
+                ? formatDurationMinutes(
+                    getShiftDurationMinutes({
+                      date: "2026-01-05",
+                      startTime: form.startTime,
+                      endTime: form.endTime
+                    })
+                  )
+                : "-"}
+            </p>
           </Field>
           <Field label={text.color}>
             <ColorSelect
@@ -324,10 +330,10 @@ export function ShiftTemplatesCrudPage({
       ) : null}
 
       <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1.1fr_140px_110px_1.3fr_120px_210px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="grid grid-cols-[1.1fr_190px_90px_1.3fr_120px_210px] bg-slate-100 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <span>{text.template}</span>
           <span>{text.time}</span>
-          <span>{text.overnight}</span>
+          <span>{text.duration}</span>
           <span>{text.notes}</span>
           <span>{text.status}</span>
           <span>{text.actions}</span>
@@ -341,7 +347,7 @@ export function ShiftTemplatesCrudPage({
           shiftTemplates.map((template) => (
             <div
               key={template.id}
-              className="grid grid-cols-[1.1fr_140px_110px_1.3fr_120px_210px] items-center gap-4 border-t border-slate-200 px-5 py-4"
+              className="grid grid-cols-[1.1fr_190px_90px_1.3fr_120px_210px] items-center gap-4 border-t border-slate-200 px-5 py-4"
             >
               <div className="flex items-center gap-3">
                 <span
@@ -353,10 +359,20 @@ export function ShiftTemplatesCrudPage({
                 </span>
               </div>
               <p className="text-sm text-slate-600">
-                {template.start_time} - {template.end_time}
+                {formatTimeRange({
+                  startTime: template.start_time,
+                  endTime: template.end_time,
+                  language
+                })}
               </p>
               <p className="text-sm text-slate-600">
-                {template.is_overnight ? text.yes : text.no}
+                {formatDurationMinutes(
+                  getShiftDurationMinutes({
+                    date: "2026-01-05",
+                    startTime: template.start_time,
+                    endTime: template.end_time
+                  })
+                )}
               </p>
               <p className="text-sm text-slate-600">
                 {template.notes || text.noNotes}
@@ -431,16 +447,13 @@ function validateShiftTemplateCrudForm(
     );
   }
 
-  if (form.startTime && form.endTime && !form.isOvernight) {
-    if (form.endTime <= form.startTime) {
-      errors.push(
-        language === "en"
-          ? "End time must be after start time unless overnight is enabled."
-          : "Η λήξη πρέπει να είναι μετά την έναρξη, εκτός αν η βάρδια περνάει τα μεσάνυχτα."
-      );
-    }
+  if (form.startTime && form.endTime && form.endTime === form.startTime) {
+    errors.push(
+      language === "en"
+        ? "Start and end time cannot be the same for a shift."
+        : "Η έναρξη και η λήξη δεν μπορούν να είναι ίδιες για μια βάρδια."
+    );
   }
-
   if (!form.color) {
     errors.push(
       language === "en" ? "Choose a shift color." : "Επιλέξτε χρώμα βάρδιας."
@@ -449,3 +462,4 @@ function validateShiftTemplateCrudForm(
 
   return errors;
 }
+

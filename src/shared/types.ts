@@ -142,6 +142,7 @@ export interface BusinessSettings extends EntityBase {
 export interface OpeningHours extends EntityBase {
   day_of_week: DayOfWeek;
   is_open: SqlBoolean;
+  is_24_hours: SqlBoolean;
   open_time: string | null;
   close_time: string | null;
   is_overnight: SqlBoolean;
