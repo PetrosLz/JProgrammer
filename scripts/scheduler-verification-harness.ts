@@ -275,8 +275,6 @@ export function buildScheduleAssignmentsFromCpSat({
 }
 
 export function resolveTestPythonCommand(): PythonCommand | null {
-  configureTestPythonRuntime();
-
   const root = process.cwd();
   const configuredTestPython = process.env.JPROGRAMMER_TEST_PYTHON?.trim();
   const configuredPython = process.env.JPROGRAMMER_PYTHON?.trim();
@@ -424,31 +422,6 @@ function assertLockedAssignmentsPreserved({
       );
     }
   }
-}
-
-function configureTestPythonRuntime(): void {
-  if (process.env.JPROGRAMMER_TEST_PYTHON || process.env.JPROGRAMMER_PYTHON) {
-    return;
-  }
-
-  const root = process.cwd();
-  const localSitePackages = path.join(root, ".venv-solver", "Lib", "site-packages");
-  const bundledPython = path.join(
-    process.env.USERPROFILE ?? "",
-    ".cache",
-    "codex-runtimes",
-    "codex-primary-runtime",
-    "dependencies",
-    "python",
-    "python.exe"
-  );
-
-  if (!existsSync(bundledPython) || !existsSync(localSitePackages)) {
-    return;
-  }
-
-  process.env.JPROGRAMMER_TEST_PYTHON = bundledPython;
-  process.env.JPROGRAMMER_TEST_PYTHONPATH = localSitePackages;
 }
 
 function hydratePythonCommand(command: PythonCommand): PythonCommand | null {

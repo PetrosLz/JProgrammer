@@ -183,21 +183,32 @@ function testV3OpeningHoursMigration(): void {
   assertEqual(closedDay.is_24_hours, 0, "closed day remains non-24-hour");
   assertEqual(closedDay.is_overnight, 0, "closed day overnight flag normalized off");
 
-  const sameDayShift = getValue<number>(
+  const sameDayShift = getRow<{ is_overnight: number; is_active: number }>(
     db,
-    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-same-day'"
+    "SELECT is_overnight, is_active FROM shift_templates WHERE id = 'shift-same-day'"
   );
-  assertEqual(sameDayShift, 0, "same-day shift overnight flag normalized off");
-  const nightShift = getValue<number>(
+  assertEqual(sameDayShift.is_overnight, 0, "same-day shift overnight flag normalized off");
+  assertEqual(sameDayShift.is_active, 1, "same-day shift remains active");
+  const nightShift = getRow<{ is_overnight: number; is_active: number }>(
     db,
-    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-night'"
+    "SELECT is_overnight, is_active FROM shift_templates WHERE id = 'shift-night'"
   );
-  assertEqual(nightShift, 1, "cross-midnight shift overnight flag normalized on");
-  const equalShift = getValue<number>(
+  assertEqual(nightShift.is_overnight, 1, "cross-midnight shift overnight flag normalized on");
+  assertEqual(nightShift.is_active, 1, "cross-midnight shift remains active");
+  const equalShift = getRow<{ is_overnight: number; is_active: number }>(
     db,
-    "SELECT is_overnight FROM shift_templates WHERE id = 'shift-equal'"
+    "SELECT is_overnight, is_active FROM shift_templates WHERE id = 'shift-equal'"
   );
-  assertEqual(equalShift, 0, "equal shift times are not overnight");
+  assertEqual(equalShift.is_overnight, 0, "equal shift times are not overnight");
+  assertEqual(equalShift.is_active, 0, "equal shift is deactivated for review");
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT value FROM settings WHERE key = 'scheduler_v4_invalid_equal_time_shifts_need_review'"
+    ),
+    "true",
+    "equal-time shift review setting created"
+  );
 
   db.close();
 }

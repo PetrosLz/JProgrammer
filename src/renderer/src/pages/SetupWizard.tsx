@@ -26,6 +26,7 @@ import {
   type ShiftTemplateDraft
 } from "../setupData";
 import type { UiLanguage } from "../utils/localization";
+import { formatOpeningHoursSummary } from "../../services/scheduler/model/openingIntervals";
 import {
   formatDurationMinutes,
   formatTimeRange,
@@ -448,6 +449,14 @@ function OpeningHoursGrid({
   }
 
   function summaryForDay(day: OpeningHoursDraft): string {
+    return formatOpeningHoursSummary({
+      isOpen: day.isOpen,
+      is24Hours: day.is24Hours,
+      openTime: day.openTime,
+      closeTime: day.closeTime,
+      language: "el"
+    });
+
     if (!day.isOpen) {
       return "Κλειστά";
     }

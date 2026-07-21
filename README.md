@@ -28,15 +28,15 @@ npm run build
 
 `test:scheduler` checks evaluator behavior and hard-constraint guarantees with small focused fixtures.
 
-`test:time-model` checks the Scheduler V2 time model: automatic next-day shifts, invalid equal start/end shifts, non-overlapping split shifts on the same date, real overnight overlaps, owning-date daily hours, opening-hours containment, and explicit 24-hour opening mode.
+`test:time-model` checks the Scheduler V2 time model: automatic next-day shifts, invalid equal start/end shifts, non-overlapping split shifts on the same date, real overnight overlaps, owning-date daily hours, continuous opening-hours containment, special-day opening fallback/override behavior, and explicit 24-hour opening mode.
 
 `test:randomized` runs 150 deterministic randomized CP-SAT scenarios (100 small and 50 medium) with real generated slots, sparse eligibility, final TypeScript validation, locked-assignment cases, availability, time off, 24-hour openings, and daily/weekly limits.
 
 `audit:scheduler` scans active scheduler/schema/UI surfaces for deprecated work-rule fields, `break_minutes`, manual overnight controls, staffing priority in the fresh schema, role-name-based criticality, and Demo Cafe business-data drift beyond 24-hour schema compatibility.
 
-`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode and normalizes stored overnight flags without inferring 24-hour operation from equal times.
+`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode, normalizes stored overnight flags without inferring 24-hour operation from equal opening times, and deactivates legacy equal-time shift templates for manager review.
 
-`test:solver` runs the Python CP-SAT solver protocol/model tests when Python is installed. If Python is missing, it reports a skip instead of pretending the solver was tested. For local CP-SAT development, install the runtime with:
+`test:solver` runs the Python CP-SAT solver protocol/model tests and fails clearly when no Python runtime with OR-Tools is available. For local CP-SAT development, install the runtime with:
 
 ```bash
 python -m pip install -r solver/requirements.txt
@@ -45,6 +45,10 @@ python -m pip install -r solver/requirements.txt
 The CP-SAT optimizer lives outside the Electron renderer. The main process launches `solver/scheduler_solver.py` through a narrow JSON stdin/stdout protocol, while Python logs go to stderr. TypeScript still owns product semantics: it preprocesses sparse eligible employee-slot pairs using the existing hard-rule checker, then independently validates any CP-SAT output with `validateScheduleHardConstraints` before assignments can be saved. Production generation is CP-SAT-first: the full heuristic optimizer runs only as a labelled `HEURISTIC_FALLBACK` when Python, OR-Tools, the process, protocol, solver status, or final validation is unusable. Accepted automatic assignments use the existing atomic `persistValidatedScheduleBatch` path.
 
 Runtime discovery checks `JPROGRAMMER_PYTHON`, project-local `.venv-solver`, `py -3.12`, `py -3.11`, `python`, and `python3`. Test harnesses may opt into `JPROGRAMMER_TEST_PYTHON`, but production discovery does not include Codex-specific runtime paths. The local `.venv-solver` folder remains ignored by Git. Packaging a Python/OR-Tools runtime into the Windows installer is still a later task.
+
+Opening hours are modeled as continuous absolute local business intervals. A 24-hour day runs from local `00:00` of that business date to local `00:00` of the next date; it does not automatically cover the next morning if the next day is closed or opens later. Cross-midnight custom openings may carry into the following date, closed days prevent new intervals from starting, and adjacent intervals merge only when there is no gap. Slot generation validates the whole shift interval against those merged openings, not just the shift start time.
+
+Scheduler V2 stores the business timezone, but duration and daily-limit math intentionally use the manager-entered wall-clock schedule minutes. DST clock changes do not alter scheduled shift duration, and the model does not yet represent repeated/nonexistent local-time disambiguation or real elapsed UTC duration.
 
 The Phase 4.2 CP-SAT model implements sparse Boolean employee-slot variables, one employee per slot, locked existing assignments, true overlap blocking, owning-date daily-hour limits, weekly shift-block limits, and hard requirement-group prior-experience composition. It solves staged lexicographic objectives with one shared deadline:
 
@@ -61,11 +65,12 @@ A lower stage runs only after the previous stage is proven optimal and then froz
 
 `benchmark:scheduler` runs end-to-end optimized generation scenarios. Each scenario defines opening hours, roles, shift templates, staffing requirements, employees, work rules, availability, and time off; the benchmark then generates slots, runs the real in-memory heuristic assignment optimizer, and evaluates the final schedule. When CP-SAT is available, the benchmark also runs the CP-SAT engine for the same generated slots, validates the result in TypeScript, and compares coverage/status/runtime. If CP-SAT is unavailable, it prints an explicit skip. The command also runs a 20-scenario differential CP-SAT-vs-heuristic matrix covering 24-hour, overnight, sparse eligibility, locked assignment, no-worker, no-slot, weekend, time-off, split-shift, and daily-limit cases. The benchmark still prints generated slots, assigned/unfilled counts, estimated feasible max coverage, coverage gap, coverage diagnosis, hard violations, warnings, reward, reward per slot, normalized score, grade, manager-facing status, repair iterations, runtime, stop reason, and grouped top notes for the heuristic baseline. The feasible max estimate helps explain whether low coverage is true understaffing or a likely scheduler gap. Manager-facing diagnostics group repeated warnings into high-signal causes and suggested fixes, while detailed warnings remain available internally. Reward per slot and normalized score are benchmark readability metrics for comparing scenarios; absolute evaluator reward remains the internal optimization score. The benchmark also fails on obvious regressions, such as hard violations in normal scenarios, easy cafe not reaching full feasible coverage, excellent easy schedules consuming the full time budget, excellent schedules showing noisy warning-like notes, impossible schedules pretending to be fully covered, uncovered risky scenarios producing no grouped diagnostics, assigned coverage falling meaningfully below the feasible max estimate, or an accepted CP-SAT result failing the TypeScript validator.
 
-`benchmark:scheduler:stress` runs bounded CP-SAT stress tiers (small, medium, and large by default, with an opt-in very-large tier) and reports preprocessing, warm-start hint generation, solver, validation, total runtime, status, coverage, and proof flags. UNKNOWN large-tier results are reported explicitly instead of being converted into invented objective values.
+`benchmark:scheduler:stress` runs bounded CP-SAT stress tiers (small, medium, and large by default, with an opt-in very-large tier) and reports preprocessing, warm-start hint generation, solver, validation, total runtime, status, coverage, proof flags, and a classification such as `solved_optimal`, `solved_feasible`, or `bounded_unknown`. UNKNOWN large-tier results are reported explicitly as degraded performance instead of being converted into invented objective values or called passed.
 
 The evaluator reward is the final source of truth for full-schedule quality.
 Per-slot candidate scoring can still guide construction, but full schedule
 selection and repair decisions compare evaluator reward.
 
-GitHub Actions runs `npm ci`, `npm run build`, `npm run test:scheduler`, and
-`npm run benchmark:scheduler` on push and pull request.
+GitHub Actions uses Node 22 and Python 3.12, installs `solver/requirements.txt`, runs `npm ci`, and then runs build, solver tests, scheduler tests, migration tests, time-model tests, randomized tests, scheduler audit, the scheduler benchmark, and small/medium stress tiers on push and pull request. A manual workflow dispatch option can run the full stress benchmark.
+
+Packaging note: the current Windows electron-builder configuration packages the Electron output and `package.json`; it does not bundle `solver/scheduler_solver.py`, Python, or OR-Tools. The installed app is therefore not yet a fully self-contained CP-SAT distribution. A future packaging task should add an explicit Windows solver runtime bundle or installer prerequisite flow.

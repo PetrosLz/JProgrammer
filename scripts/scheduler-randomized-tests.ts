@@ -34,6 +34,30 @@ type RandomizedBatch = {
   count: number;
 };
 
+type SolverStatus =
+  | "OPTIMAL"
+  | "FEASIBLE"
+  | "UNKNOWN"
+  | "INFEASIBLE"
+  | "MODEL_INVALID"
+  | "HEURISTIC_FALLBACK";
+
+type RandomizedStats = Record<SolverStatus, number> & {
+  acceptedValidated: number;
+  acceptedInvalid: number;
+  rejectedUnaccepted: number;
+  processFailures: number;
+};
+
+type UnknownScenarioDetail = {
+  seed: number;
+  employeeCount: number;
+  slotCount: number;
+  eligibilityPairCount: number;
+  timeoutSeconds: number;
+  message: string;
+};
+
 const batches: RandomizedBatch[] = [
   { label: "small", seed: 4101, count: 100 },
   { label: "medium", seed: 9101, count: 50 }
@@ -51,9 +75,12 @@ async function main(): Promise<void> {
   }
 
   let executed = 0;
+  const totalStats = createStats();
+  const unknownDetails: Array<UnknownScenarioDetail & { batch: string; index: number }> = [];
 
   for (const batch of batches) {
     const rng = createRng(batch.seed);
+    const batchStats = createStats();
 
     for (let index = 0; index < batch.count; index += 1) {
       const scenarioSeed = Math.floor(rng() * 1_000_000_000);
@@ -68,23 +95,52 @@ async function main(): Promise<void> {
           `${batch.label}-${index}-${scenarioSeed}`
         );
         maybeAddLockedAssignment({ scenario, slots: generated.slots });
+        const timeoutSeconds = batch.label === "small" ? 2 : 3;
 
         const cpSat = await solveAndValidateCpSat({
           python,
           scenario,
           slots: generated.slots,
           requestId: `random-${batch.label}-${index}-${scenarioSeed}`,
-          timeoutSeconds: batch.label === "small" ? 1.5 : 2.5
+          timeoutSeconds
         });
 
         assert(cpSat.result.objectiveValues.coveredSlots <= generated.slots.length);
-        if (cpSat.result.status === "OPTIMAL" || cpSat.result.status === "FEASIBLE") {
-          assert.equal(cpSat.hardViolationCount, 0);
-          assert.equal(cpSat.validated, true);
+        incrementStatus(batchStats, cpSat.result.status);
+        incrementStatus(totalStats, cpSat.result.status);
+
+        const accepted = cpSat.result.status === "OPTIMAL" || cpSat.result.status === "FEASIBLE";
+        if (accepted) {
+          if (cpSat.hardViolationCount !== 0 || !cpSat.validated) {
+            batchStats.acceptedInvalid += 1;
+            totalStats.acceptedInvalid += 1;
+            throw new Error(
+              `${batch.label} random scenario ${index}: accepted result failed validation with ${cpSat.hardViolationCount} hard violation(s).`
+            );
+          }
+          batchStats.acceptedValidated += 1;
+          totalStats.acceptedValidated += 1;
+        } else {
+          batchStats.rejectedUnaccepted += 1;
+          totalStats.rejectedUnaccepted += 1;
+          if (cpSat.result.status === "UNKNOWN") {
+            unknownDetails.push({
+              batch: batch.label,
+              index,
+              seed: scenarioSeed,
+              employeeCount: scenario.employees.length,
+              slotCount: generated.slots.length,
+              eligibilityPairCount: cpSat.request.eligibility.length,
+              timeoutSeconds,
+              message: cpSat.result.message ?? "No solver message."
+            });
+          }
         }
 
         executed += 1;
       } catch (error) {
+        batchStats.processFailures += 1;
+        totalStats.processFailures += 1;
         console.error(
           JSON.stringify(
             {
@@ -101,12 +157,69 @@ async function main(): Promise<void> {
       }
     }
 
+    printBatchStats(batch, batchStats);
+    assertBatchThreshold(batch, batchStats);
+  }
+
+  for (const detail of unknownDetails) {
     console.log(
-      `ok - randomized ${batch.label} batch seed=${batch.seed} scenarios=${batch.count}`
+      `UNKNOWN random scenario | batch=${detail.batch} | index=${detail.index} | seed=${detail.seed} | employees=${detail.employeeCount} | slots=${detail.slotCount} | eligibility=${detail.eligibilityPairCount} | timeout=${detail.timeoutSeconds}s | message=${detail.message}`
     );
   }
 
-  console.log(`\n${executed} randomized CP-SAT scenarios passed.`);
+  console.log(`\n${executed} randomized CP-SAT scenarios completed:`);
+  printStats(totalStats);
+}
+
+function createStats(): RandomizedStats {
+  return {
+    OPTIMAL: 0,
+    FEASIBLE: 0,
+    UNKNOWN: 0,
+    INFEASIBLE: 0,
+    MODEL_INVALID: 0,
+    HEURISTIC_FALLBACK: 0,
+    acceptedValidated: 0,
+    acceptedInvalid: 0,
+    rejectedUnaccepted: 0,
+    processFailures: 0
+  };
+}
+
+function incrementStatus(stats: RandomizedStats, status: SolverStatus): void {
+  stats[status] += 1;
+}
+
+function assertBatchThreshold(batch: RandomizedBatch, stats: RandomizedStats): void {
+  const accepted = stats.OPTIMAL + stats.FEASIBLE;
+  const acceptedRate = accepted / batch.count;
+  const minimumAcceptedRate = batch.label === "small" ? 0.98 : 0.9;
+
+  assert.equal(stats.acceptedInvalid, 0, `${batch.label}: accepted invalid results`);
+  assert.equal(stats.MODEL_INVALID, 0, `${batch.label}: MODEL_INVALID results`);
+  assert.equal(stats.processFailures, 0, `${batch.label}: process/runtime failures`);
+  assert(
+    acceptedRate >= minimumAcceptedRate,
+    `${batch.label}: expected at least ${minimumAcceptedRate * 100}% OPTIMAL/FEASIBLE, got ${Math.round(acceptedRate * 100)}%`
+  );
+}
+
+function printBatchStats(batch: RandomizedBatch, stats: RandomizedStats): void {
+  console.log(`ok - randomized ${batch.label} batch seed=${batch.seed} scenarios=${batch.count}`);
+  printStats(stats);
+}
+
+function printStats(stats: RandomizedStats): void {
+  console.log(`- ${stats.OPTIMAL} OPTIMAL`);
+  console.log(`- ${stats.FEASIBLE} FEASIBLE`);
+  console.log(`- ${stats.UNKNOWN} UNKNOWN`);
+  console.log(`- ${stats.INFEASIBLE} INFEASIBLE`);
+  console.log(`- ${stats.MODEL_INVALID} MODEL_INVALID`);
+  console.log(`- ${stats.HEURISTIC_FALLBACK} HEURISTIC_FALLBACK`);
+  console.log(`- ${stats.processFailures} process/runtime failures`);
+  console.log(`- ${stats.acceptedValidated} accepted and validated`);
+  console.log(`- ${stats.acceptedInvalid} invalid accepted results`);
+  console.log(`- ${stats.rejectedUnaccepted} rejected/unaccepted`);
 }
 
 function createRandomScenario({
@@ -297,7 +410,22 @@ function maybeAddLockedAssignment({
     requestId: `lock-seed-${scenario.run.id}`,
     timeoutSeconds: 1
   });
-  const pair = request.eligibility[0];
+  const pair = request.eligibility.find((candidate) => {
+    const slot = request.slots.find((item) => item.id === candidate.slotId);
+    if (!slot) {
+      return false;
+    }
+
+    if (slot.experiencedRequiredCount <= 0) {
+      return true;
+    }
+
+    return employeeHasPriorExperience({
+      employeeRoles: scenario.employeeRoles,
+      employeeId: candidate.employeeId,
+      roleId: slot.roleId
+    });
+  });
   if (!pair) {
     return;
   }
@@ -310,6 +438,23 @@ function maybeAddLockedAssignment({
       pair.employeeId
     )
   ];
+}
+
+function employeeHasPriorExperience({
+  employeeRoles,
+  employeeId,
+  roleId
+}: {
+  employeeRoles: EmployeeRole[];
+  employeeId: string;
+  roleId: string;
+}): boolean {
+  return employeeRoles.some(
+    (employeeRole) =>
+      employeeRole.employee_id === employeeId &&
+      employeeRole.role_id === roleId &&
+      employeeRole.experience_level !== "no_experience"
+  );
 }
 
 function chooseShiftPair(rng: () => number): [string, string] {

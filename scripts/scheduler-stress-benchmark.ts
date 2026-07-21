@@ -56,6 +56,7 @@ async function main(): Promise<void> {
   console.log("Scheduler stress benchmark");
   console.log([
     "Tier",
+    "Classification",
     "Employees",
     "Slots",
     "Eligibility",
@@ -71,8 +72,14 @@ async function main(): Promise<void> {
   ].join(" | "));
 
   let executed = 0;
+  const tierFilter = parseTierFilter();
 
   for (const tier of tiers) {
+    if (tierFilter && !tierFilter.has(tier.name)) {
+      console.log(`${tier.name} | skipped by JPROGRAMMER_STRESS_TIERS`);
+      continue;
+    }
+
     if (tier.optional && process.env.JPROGRAMMER_RUN_VERY_LARGE_BENCHMARK !== "1") {
       console.log(`${tier.name} | skipped optional tier; set JPROGRAMMER_RUN_VERY_LARGE_BENCHMARK=1`);
       continue;
@@ -121,6 +128,7 @@ async function main(): Promise<void> {
     });
     const validationMs = performance.now() - validationStartedAt;
     const accepted = result.status === "OPTIMAL" || result.status === "FEASIBLE";
+    const classification = classifyStressResult(result.status);
 
     if (accepted && !validation.valid) {
       throw new Error(
@@ -128,8 +136,13 @@ async function main(): Promise<void> {
       );
     }
 
+    if ((tier.name === "small" || tier.name === "medium") && !accepted) {
+      throw new Error(`${tier.name}: required stress tier must solve, got ${result.status}.`);
+    }
+
     console.log([
       tier.name,
+      classification,
       scenario.employees.length,
       generated.slots.length,
       request.eligibility.length,
@@ -143,10 +156,50 @@ async function main(): Promise<void> {
       result.coverageProvenOptimal ? "yes" : "no",
       result.fullLexicographicOptimality ? "yes" : "no"
     ].join(" | "));
+
+    if (tier.name === "large" && result.status === "UNKNOWN") {
+      console.warn(
+        `${tier.name} | bounded_unknown | ${result.objectiveValues.coveredSlots}/${result.objectiveValues.totalSlots} | no feasible solution found within ${tier.timeoutSeconds}s; performance assessment is degraded`
+      );
+    }
     executed += 1;
   }
 
-  console.log(`Stress benchmark passed (${executed} required tier(s) executed).`);
+  console.log(`Stress benchmark completed (${executed} required tier(s) executed).`);
+}
+
+function classifyStressResult(status: string): string {
+  if (status === "OPTIMAL") {
+    return "solved_optimal";
+  }
+
+  if (status === "FEASIBLE") {
+    return "solved_feasible";
+  }
+
+  if (status === "UNKNOWN") {
+    return "bounded_unknown";
+  }
+
+  if (status === "MODEL_INVALID" || status === "INFEASIBLE") {
+    return "failed_invalid";
+  }
+
+  return "failed_runtime";
+}
+
+function parseTierFilter(): Set<string> | null {
+  const raw = process.env.JPROGRAMMER_STRESS_TIERS;
+  if (!raw) {
+    return null;
+  }
+
+  return new Set(
+    raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
 }
 
 function createStressScenario(tier: StressTier): SchedulerBenchmarkScenario {

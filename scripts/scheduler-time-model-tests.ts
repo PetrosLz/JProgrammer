@@ -29,6 +29,8 @@ import {
   createRole,
   createRun,
   createShiftTemplate,
+  createSpecialDay,
+  createSpecialDayStaffingRequirement,
   createSlot,
   createStaffingRequirement,
   createTimeOff,
@@ -43,6 +45,10 @@ import {
   resolveTestPythonCommand,
   solveAndValidateCpSat
 } from "./scheduler-verification-harness";
+import {
+  formatOpeningHoursSummary,
+  isShiftContainedWithinOpeningIntervals
+} from "../src/renderer/services/scheduler/model/openingIntervals";
 
 type TestCase = {
   name: string;
@@ -55,6 +61,11 @@ const tests: TestCase[] = [
     name: "opening-hours generation matrix",
     scenarios: 15,
     run: testOpeningHoursMatrix
+  },
+  {
+    name: "continuous opening containment matrix",
+    scenarios: 18,
+    run: testContinuousOpeningContainmentMatrix
   },
   {
     name: "shift interval matrix",
@@ -77,7 +88,12 @@ const tests: TestCase[] = [
     run: testUiPdfFormattingConsistency
   },
   {
-    name: "Europe/Athens DST wall-clock policy",
+    name: "opening-hours display helper",
+    scenarios: 7,
+    run: testOpeningHoursDisplayHelper
+  },
+  {
+    name: "DST policy regression: scheduled wall-clock duration remains stable",
     scenarios: 2,
     run: testDstWallClockPolicy
   },
@@ -132,10 +148,10 @@ function testOpeningHoursMatrix(): void {
     { name: "standard same-day opening", mode: "custom", open: "08:00", close: "20:00", shift: ["09:00", "17:00"], slots: 1 },
     { name: "opening ending at midnight", mode: "custom", open: "16:00", close: "00:00", shift: ["18:00", "00:00"], slots: 1 },
     { name: "opening crossing midnight", mode: "custom", open: "20:00", close: "04:00", shift: ["22:00", "02:00"], slots: 1 },
-    { name: "explicit 24-hour day", mode: "24", open: null, close: null, shift: ["22:00", "06:00"], slots: 1 },
+    { name: "explicit 24-hour day", mode: "24", open: null, close: null, shift: ["09:00", "17:00"], slots: 1 },
     { name: "seven consecutive 24-hour days", mode: "all-24", open: null, close: null, shift: ["22:00", "06:00"], slots: 7 },
-    { name: "24-hour day followed by closed day", mode: "24-next-closed", open: null, close: null, shift: ["23:00", "07:00"], slots: 1 },
-    { name: "24-hour day followed by custom day", mode: "24-next-custom", open: null, close: null, shift: ["23:00", "07:00"], slots: 1 },
+    { name: "24-hour day followed by closed day", mode: "24-next-closed", open: null, close: null, shift: ["23:00", "07:00"], slots: 0, warning: "slot_outside_opening_hours" },
+    { name: "24-hour day followed by custom day", mode: "24-next-custom", open: null, close: null, shift: ["23:00", "07:00"], slots: 0, warning: "slot_outside_opening_hours" },
     { name: "equal-time custom opening rejected", mode: "custom", open: "08:00", close: "08:00", shift: ["09:00", "10:00"], slots: 0, warning: "invalid_opening_hours" },
     { name: "one minute before opening rejected", mode: "custom", open: "08:00", close: "20:00", shift: ["07:59", "09:00"], slots: 0, warning: "slot_outside_opening_hours" },
     { name: "one minute after closing rejected", mode: "custom", open: "08:00", close: "20:00", shift: ["19:00", "20:01"], slots: 0, warning: "slot_outside_opening_hours" },
@@ -183,6 +199,175 @@ function testOpeningHoursMatrix(): void {
   }
 }
 
+function testContinuousOpeningContainmentMatrix(): void {
+  const monday = "2026-05-18";
+  const tuesday = "2026-05-19";
+  const cases = [
+    {
+      name: "24h to closed accepts exact midnight boundary",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "closed" } }),
+      date: monday,
+      shift: ["23:00", "00:00"] as const,
+      expectedSlots: 1
+    },
+    {
+      name: "24h to closed rejects one minute after midnight",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "closed" } }),
+      date: monday,
+      shift: ["23:00", "00:01"] as const,
+      expectedSlots: 0
+    },
+    {
+      name: "24h to closed rejects overnight continuation",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "closed" } }),
+      date: monday,
+      shift: ["23:00", "07:00"] as const,
+      expectedSlots: 0
+    },
+    {
+      name: "24h to midnight custom accepts merged continuation",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "custom", open: "00:00", close: "08:00" } }),
+      date: monday,
+      shift: ["23:00", "07:00"] as const,
+      expectedSlots: 1
+    },
+    {
+      name: "24h to midnight custom rejects beyond close",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "custom", open: "00:00", close: "08:00" } }),
+      date: monday,
+      shift: ["23:00", "09:00"] as const,
+      expectedSlots: 0
+    },
+    {
+      name: "24h to late custom rejects closed early morning",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "custom", open: "10:00", close: "18:00" } }),
+      date: monday,
+      shift: ["23:00", "07:00"] as const,
+      expectedSlots: 0
+    },
+    {
+      name: "late custom Tuesday-owned shift is valid",
+      openingHours: openingHoursFromRows({ 1: { mode: "24" }, 2: { mode: "custom", open: "10:00", close: "18:00" } }),
+      date: tuesday,
+      shift: ["10:00", "12:00"] as const,
+      expectedSlots: 1
+    },
+    {
+      name: "previous-day carryover accepts early next-day shift",
+      openingHours: openingHoursFromRows({ 1: { mode: "custom", open: "20:00", close: "04:00" }, 2: { mode: "closed" } }),
+      date: tuesday,
+      shift: ["01:00", "03:00"] as const,
+      expectedSlots: 1
+    },
+    {
+      name: "previous-day carryover rejects beyond close",
+      openingHours: openingHoursFromRows({ 1: { mode: "custom", open: "20:00", close: "04:00" }, 2: { mode: "closed" } }),
+      date: tuesday,
+      shift: ["03:00", "05:00"] as const,
+      expectedSlots: 0
+    },
+    {
+      name: "adjacent custom openings merge",
+      openingHours: openingHoursFromRows({ 1: { mode: "custom", open: "20:00", close: "04:00" }, 2: { mode: "custom", open: "04:00", close: "12:00" } }),
+      date: monday,
+      shift: ["23:00", "08:00"] as const,
+      expectedSlots: 1
+    },
+    {
+      name: "one-minute gap breaks continuous opening",
+      openingHours: openingHoursFromRows({ 1: { mode: "custom", open: "20:00", close: "04:00" }, 2: { mode: "custom", open: "04:01", close: "12:00" } }),
+      date: monday,
+      shift: ["23:00", "08:00"] as const,
+      expectedSlots: 0
+    }
+  ];
+
+  for (const item of cases) {
+    const plan = buildPlanForSingleRequirement({
+      date: item.date,
+      openingHours: item.openingHours,
+      startTime: item.shift[0],
+      endTime: item.shift[1]
+    });
+    assert.equal(plan.slots.length, item.expectedSlots, item.name);
+  }
+
+  const carryoverOpeningHours = openingHoursFromRows({
+    1: { mode: "custom", open: "20:00", close: "04:00" },
+    2: { mode: "closed" }
+  });
+  const closedSpecialDay = createSpecialDay({
+    id: "special-closed-tuesday",
+    date: tuesday,
+    isClosed: 1
+  });
+  const carryoverContainment = isShiftContainedWithinOpeningIntervals({
+    date: tuesday,
+    startTime: "01:00",
+    endTime: "03:00",
+    openingHours: carryoverOpeningHours,
+    specialDays: [closedSpecialDay]
+  });
+  assert.equal(carryoverContainment.allowed, true, "special closed date preserves previous-day opening carryover");
+
+  const closedSpecialGeneration = buildPlanForSingleRequirement({
+    date: tuesday,
+    openingHours: carryoverOpeningHours,
+    startTime: "01:00",
+    endTime: "03:00",
+    specialDays: [closedSpecialDay]
+  });
+  assert.equal(closedSpecialGeneration.slots.length, 0, "closed special date prevents new requirement starts");
+
+  const openSpecialDay = createSpecialDay({
+    id: "special-open-tuesday",
+    date: tuesday,
+    isClosed: 0
+  });
+  assert.equal(
+    buildPlanForSpecialRequirement({
+      date: tuesday,
+      openingHours: carryoverOpeningHours,
+      specialDay: openSpecialDay,
+      startTime: "01:00",
+      endTime: "03:00"
+    }).slots.length,
+    1,
+    "special-day staffing override inside carryover is generated"
+  );
+  const outsideSpecial = buildPlanForSpecialRequirement({
+    date: tuesday,
+    openingHours: carryoverOpeningHours,
+    specialDay: openSpecialDay,
+    startTime: "03:00",
+    endTime: "05:00"
+  });
+  assert.equal(outsideSpecial.slots.length, 0, "special-day staffing override outside carryover is skipped");
+  assert.equal(
+    outsideSpecial.warnings.some((warning) => warning.warningType === "slot_outside_opening_hours"),
+    true
+  );
+
+  const invalidWeekly = buildPlanForSingleRequirement({
+    date: monday,
+    openingHours: openingHoursFromRows({ 1: { mode: "24" } }),
+    startTime: "09:00",
+    endTime: "09:00"
+  });
+  assert.equal(invalidWeekly.slots.length, 0);
+  assert.equal(invalidWeekly.warnings.some((warning) => warning.warningType === "invalid_slot_time_range"), true);
+
+  const invalidSpecial = buildPlanForSpecialRequirement({
+    date: tuesday,
+    openingHours: openingHoursFromRows({ 2: { mode: "24" } }),
+    specialDay: openSpecialDay,
+    startTime: "09:00",
+    endTime: "09:00"
+  });
+  assert.equal(invalidSpecial.slots.length, 0);
+  assert.equal(invalidSpecial.warnings.some((warning) => warning.warningType === "invalid_slot_time_range"), true);
+}
+
 function testShiftIntervalMatrix(): void {
   const cases = [
     ["09:00", "17:00", 480, "09:00–17:00"],
@@ -220,7 +405,7 @@ function testShiftIntervalMatrix(): void {
     shiftEnd: "01:00",
     requiredCount: 1,
     employeeCount: 1,
-    openingMode: "24"
+    openingMode: "all-24"
   });
   const { slots } = buildGeneratedScenarioRun(scenario, "duration-adapter");
   const request = buildRequestForScenario({
@@ -396,8 +581,79 @@ function testUiPdfFormattingConsistency(): void {
 
   assert.equal(teamPdf.includes(expectedNight), true);
   assert.equal(managerPdf.includes(expectedNight), true);
-  assert.equal("24 ώρες", "24 ώρες");
-  assert.equal("Κλειστά", "Κλειστά");
+}
+
+function testOpeningHoursDisplayHelper(): void {
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: false,
+      is24Hours: false,
+      openTime: null,
+      closeTime: null,
+      language: "el"
+    }),
+    "Κλειστά"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: false,
+      is24Hours: false,
+      openTime: null,
+      closeTime: null,
+      language: "en"
+    }),
+    "Closed"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: true,
+      openTime: null,
+      closeTime: null,
+      language: "el"
+    }),
+    "24 Ώρες"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: true,
+      openTime: null,
+      closeTime: null,
+      language: "en"
+    }),
+    "Open 24 hours"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: false,
+      openTime: "08:00",
+      closeTime: "16:00",
+      language: "en"
+    }),
+    "08:00–16:00"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: false,
+      openTime: "20:00",
+      closeTime: "04:00",
+      language: "en"
+    }),
+    "20:00–04:00 (+1 day)"
+  );
+  assert.equal(
+    formatOpeningHoursSummary({
+      isOpen: true,
+      is24Hours: false,
+      openTime: "08:00",
+      closeTime: "08:00",
+      language: "el"
+    }),
+    "Μη έγκυρο"
+  );
 }
 
 function testDstWallClockPolicy(): void {
@@ -489,12 +745,12 @@ function createTwentyFourHourScenarios(): Array<{
       expectedCoverage: 7
     },
     {
-      scenario: createCoverableScenario({ name: "night-only staffing requirement", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "24" }),
+      scenario: createCoverableScenario({ name: "night-only staffing requirement", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24" }),
       expectedSlots: 1,
       expectedCoverage: 1
     },
     {
-      scenario: createCoverableScenario({ name: "23 to 07 shift", shiftStart: "23:00", shiftEnd: "07:00", requiredCount: 1, employeeCount: 1, openingMode: "24" }),
+      scenario: createCoverableScenario({ name: "23 to 07 shift", shiftStart: "23:00", shiftEnd: "07:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24" }),
       expectedSlots: 1,
       expectedCoverage: 1
     },
@@ -504,42 +760,42 @@ function createTwentyFourHourScenarios(): Array<{
       expectedCoverage: 3
     },
     {
-      scenario: createCoverableScenario({ name: "24-hour weekend forbidden employee", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "24", day: 6, canWorkWeekends: false }),
+      scenario: createCoverableScenario({ name: "24-hour weekend forbidden employee", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24", day: 6, canWorkWeekends: false }),
       expectedSlots: 1,
       expectedCoverage: 0
     },
     {
-      scenario: createCoverableScenario({ name: "24-hour time off crossing midnight", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "24", timeOff: true }),
+      scenario: createCoverableScenario({ name: "24-hour time off crossing midnight", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24", timeOff: true }),
       expectedSlots: 1,
       expectedCoverage: 0
     },
     {
-      scenario: createCoverableScenario({ name: "sparse night-role eligibility", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 2, employeeCount: 2, openingMode: "24", sparseRoles: true }),
+      scenario: createCoverableScenario({ name: "sparse night-role eligibility", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 2, employeeCount: 2, openingMode: "all-24", sparseRoles: true }),
       expectedSlots: 2,
       expectedCoverage: 1
     },
     {
-      scenario: createCoverableScenario({ name: "experienced night shift required", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "24", minimumExperience: "some_experience" }),
+      scenario: createCoverableScenario({ name: "experienced night shift required", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24", minimumExperience: "some_experience" }),
       expectedSlots: 1,
       expectedCoverage: 1
     },
     {
-      scenario: createCoverableScenario({ name: "locked overnight assignment", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "24", locked: true }),
+      scenario: createCoverableScenario({ name: "locked overnight assignment", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 1, openingMode: "all-24", locked: true }),
       expectedSlots: 1,
       expectedCoverage: 1
     },
     {
-      scenario: createCoverableScenario({ name: "understaffed 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 3, employeeCount: 1, openingMode: "24" }),
+      scenario: createCoverableScenario({ name: "understaffed 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 3, employeeCount: 1, openingMode: "all-24" }),
       expectedSlots: 3,
       expectedCoverage: 1
     },
     {
-      scenario: createCoverableScenario({ name: "zero-worker 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 0, openingMode: "24" }),
+      scenario: createCoverableScenario({ name: "zero-worker 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 1, employeeCount: 0, openingMode: "all-24" }),
       expectedSlots: 1,
       expectedCoverage: 0
     },
     {
-      scenario: createCoverableScenario({ name: "fully coverable 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 2, employeeCount: 2, openingMode: "24" }),
+      scenario: createCoverableScenario({ name: "fully coverable 24-hour business", shiftStart: "22:00", shiftEnd: "06:00", requiredCount: 2, employeeCount: 2, openingMode: "all-24" }),
       expectedSlots: 2,
       expectedCoverage: 2
     }
@@ -692,6 +948,120 @@ function openingHoursForCase(
       is_overnight: openTime && closeTime && closeTime < openTime ? 1 as const : 0 as const
     };
   });
+}
+
+function buildPlanForSingleRequirement({
+  date,
+  openingHours,
+  startTime,
+  endTime,
+  specialDays = []
+}: {
+  date: string;
+  openingHours: OpeningHours[];
+  startTime: string;
+  endTime: string;
+  specialDays?: ReturnType<typeof createSpecialDay>[];
+}) {
+  const role = createRole(`role-${slug(date)}-${startTime}-${endTime}`, "Service");
+  const shift = createShiftTemplate(`shift-${slug(date)}-${startTime}-${endTime}`, "Shift", startTime, endTime);
+  const dayOfWeek = getDayOfWeekFromDateForTest(date);
+  return buildScheduleGenerationPlan({
+    weekStartDate: "2026-05-18",
+    openingHours,
+    staffingRequirements: [
+      createStaffingRequirement({
+        id: `req-${slug(date)}-${startTime}-${endTime}`,
+        roleId: role.id,
+        shiftTemplateId: shift.id,
+        startTime,
+        endTime,
+        dayOfWeek
+      })
+    ],
+    specialDayStaffingRequirements: [],
+    shiftTemplates: [shift],
+    specialDays
+  });
+}
+
+function buildPlanForSpecialRequirement({
+  date,
+  openingHours,
+  specialDay,
+  startTime,
+  endTime
+}: {
+  date: string;
+  openingHours: OpeningHours[];
+  specialDay: ReturnType<typeof createSpecialDay>;
+  startTime: string;
+  endTime: string;
+}) {
+  const role = createRole(`role-special-${slug(date)}-${startTime}-${endTime}`, "Service");
+  return buildScheduleGenerationPlan({
+    weekStartDate: "2026-05-18",
+    openingHours,
+    staffingRequirements: [],
+    specialDayStaffingRequirements: [
+      createSpecialDayStaffingRequirement({
+        id: `special-req-${slug(date)}-${startTime}-${endTime}`,
+        specialDayId: specialDay.id,
+        roleId: role.id,
+        startTime,
+        endTime
+      })
+    ],
+    shiftTemplates: [],
+    specialDays: [specialDay]
+  });
+}
+
+type OpeningRowMode =
+  | { mode: "closed" }
+  | { mode: "24" }
+  | { mode: "custom"; open: string; close: string };
+
+function openingHoursFromRows(rows: Partial<Record<DayOfWeek, OpeningRowMode>>): OpeningHours[] {
+  return createOpeningHours().map((row) => {
+    const next = rows[row.day_of_week] ?? { mode: "closed" as const };
+
+    if (next.mode === "closed") {
+      return {
+        ...row,
+        is_open: 0 as const,
+        is_24_hours: 0 as const,
+        open_time: null,
+        close_time: null,
+        is_overnight: 0 as const
+      };
+    }
+
+    if (next.mode === "24") {
+      return {
+        ...row,
+        is_open: 1 as const,
+        is_24_hours: 1 as const,
+        open_time: null,
+        close_time: null,
+        is_overnight: 0 as const
+      };
+    }
+
+    return {
+      ...row,
+      is_open: 1 as const,
+      is_24_hours: 0 as const,
+      open_time: next.open,
+      close_time: next.close,
+      is_overnight: next.close < next.open ? 1 as const : 0 as const
+    };
+  });
+}
+
+function getDayOfWeekFromDateForTest(date: string): DayOfWeek {
+  const parsed = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  return parsed as DayOfWeek;
 }
 
 function openingHoursForScenarioDays(

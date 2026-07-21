@@ -112,6 +112,10 @@ export function ShiftTemplatesCrudPage({
           optionalNotes: "Προαιρετικές σημειώσεις"
         };
 
+  const invalidLegacyTimeRange =
+    language === "en" ? "Invalid legacy time range" : "Μη έγκυρη παλιά ώρα";
+  const invalidDurationLabel = language === "en" ? "Invalid" : "Μη έγκυρη";
+
   async function saveShiftTemplate() {
     const nextErrors = validateShiftTemplateCrudForm(form, language);
 
@@ -157,10 +161,19 @@ export function ShiftTemplatesCrudPage({
 
   async function toggleShiftTemplateActive(template: ShiftTemplate) {
     setErrors([]);
+    const nextIsActive = !template.is_active;
+    if (nextIsActive && isInvalidShiftTimeRange(template.start_time, template.end_time)) {
+      setErrors([
+        language === "en"
+          ? "Fix the start/end time before reactivating this shift."
+          : "Διορθώστε την ώρα έναρξης/λήξης πριν ενεργοποιήσετε ξανά τη βάρδια."
+      ]);
+      return;
+    }
+
     setIsSaving(true);
 
     try {
-      const nextIsActive = !template.is_active;
       await databaseApi.updateRecord("shift_templates", template.id, {
         is_active: nextIsActive
       });
@@ -354,25 +367,31 @@ export function ShiftTemplatesCrudPage({
                   className="h-3 w-3 rounded-full"
                   style={{ backgroundColor: template.color ?? roleColors[1] }}
                 />
-                <span className="text-sm font-semibold text-slate-900">
-                  {template.name}
-                </span>
+                <div>
+                  <span className="text-sm font-semibold text-slate-900">
+                    {template.name}
+                  </span>
+                  {isInvalidShiftTimeRange(template.start_time, template.end_time) ? (
+                    <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                      {invalidLegacyTimeRange}
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <p className="text-sm text-slate-600">
-                {formatTimeRange({
+                {safeShiftTimeLabel({
                   startTime: template.start_time,
                   endTime: template.end_time,
-                  language
+                  language,
+                  invalidLabel: invalidDurationLabel
                 })}
               </p>
               <p className="text-sm text-slate-600">
-                {formatDurationMinutes(
-                  getShiftDurationMinutes({
-                    date: "2026-01-05",
-                    startTime: template.start_time,
-                    endTime: template.end_time
-                  })
-                )}
+                {safeShiftDurationLabel({
+                  startTime: template.start_time,
+                  endTime: template.end_time,
+                  invalidLabel: invalidDurationLabel
+                })}
               </p>
               <p className="text-sm text-slate-600">
                 {template.notes || text.noNotes}
@@ -447,10 +466,10 @@ function validateShiftTemplateCrudForm(
     );
   }
 
-  if (form.startTime && form.endTime && form.endTime === form.startTime) {
+  if (form.isActive && form.startTime && form.endTime && form.endTime === form.startTime) {
     errors.push(
       language === "en"
-        ? "Start and end time cannot be the same for a shift."
+        ? "Start and end time cannot be the same for an active shift."
         : "Η έναρξη και η λήξη δεν μπορούν να είναι ίδιες για μια βάρδια."
     );
   }
@@ -461,5 +480,49 @@ function validateShiftTemplateCrudForm(
   }
 
   return errors;
+}
+
+function isInvalidShiftTimeRange(startTime: string, endTime: string): boolean {
+  return startTime === endTime;
+}
+
+function safeShiftTimeLabel({
+  startTime,
+  endTime,
+  language,
+  invalidLabel
+}: {
+  startTime: string;
+  endTime: string;
+  language: "en" | "el";
+  invalidLabel: string;
+}): string {
+  if (isInvalidShiftTimeRange(startTime, endTime)) {
+    return invalidLabel;
+  }
+
+  return formatTimeRange({ startTime, endTime, language });
+}
+
+function safeShiftDurationLabel({
+  startTime,
+  endTime,
+  invalidLabel
+}: {
+  startTime: string;
+  endTime: string;
+  invalidLabel: string;
+}): string {
+  if (isInvalidShiftTimeRange(startTime, endTime)) {
+    return invalidLabel;
+  }
+
+  return formatDurationMinutes(
+    getShiftDurationMinutes({
+      date: "2026-01-05",
+      startTime,
+      endTime
+    })
+  );
 }
 

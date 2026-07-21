@@ -87,7 +87,8 @@ async function main(): Promise<void> {
     "Heuristic coverage",
     "Difference",
     "Hard violations",
-    "Validated",
+    "Accepted",
+    "Validation",
     "Coverage proof",
     "Lex proof",
     "CP-SAT time",
@@ -110,8 +111,21 @@ async function main(): Promise<void> {
       cpSat.result.objectiveValues.coveredSlots,
       cpSat.result.objectiveValues.totalSlots
     );
+    const accepted = cpSat.result.status === "OPTIMAL" || cpSat.result.status === "FEASIBLE";
     const validHeuristicCoverage =
       heuristic.hardViolationCount === 0 ? heuristic.coverage : Number.NaN;
+
+    if (accepted && !cpSat.validated) {
+      throw new Error(`${spec.name}: accepted CP-SAT result did not validate.`);
+    }
+
+    if (!accepted && cpSat.validated) {
+      throw new Error(`${spec.name}: unaccepted CP-SAT result was labelled validated.`);
+    }
+
+    if (cpSat.result.status === "UNKNOWN" && cpSat.result.assignments.length > 0) {
+      throw new Error(`${spec.name}: UNKNOWN CP-SAT result returned accepted-looking assignments.`);
+    }
 
     if (
       cpSat.result.status === "OPTIMAL" &&
@@ -133,7 +147,8 @@ async function main(): Promise<void> {
         ? pct(cpSatCoverage - validHeuristicCoverage)
         : "n/a",
       cpSat.hardViolationCount,
-      cpSat.validated || cpSat.result.status === "UNKNOWN" ? "yes" : "no",
+      accepted ? "yes" : "no",
+      accepted ? (cpSat.validated ? "pass" : "fail") : "n/a",
       cpSat.result.coverageProvenOptimal ? "yes" : "no",
       cpSat.result.fullLexicographicOptimality ? "yes" : "no",
       `${cpSat.result.runtimeMs}ms`,

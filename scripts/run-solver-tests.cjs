@@ -1,38 +1,17 @@
-const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const root = process.cwd();
-const localSitePackages = path.join(root, ".venv-solver", "Lib", "site-packages");
-const bundledPython = path.join(
-  process.env.USERPROFILE || "",
-  ".cache",
-  "codex-runtimes",
-  "codex-primary-runtime",
-  "dependencies",
-  "python",
-  "python.exe"
-);
 
 const candidates = [
+  { command: process.env.JPROGRAMMER_TEST_PYTHON, args: [] },
   { command: process.env.JPROGRAMMER_PYTHON, args: [] },
   { command: path.join(root, ".venv-solver", "Scripts", "python.exe"), args: [] },
   { command: path.join(root, ".venv-solver", "bin", "python"), args: [] },
   { command: "py", args: ["-3.12"] },
   { command: "py", args: ["-3.11"] },
   { command: "python", args: [] },
-  { command: "python3", args: [] },
-  ...(existsSync(bundledPython) && existsSync(localSitePackages)
-    ? [
-        {
-          command: bundledPython,
-          args: [],
-          env: {
-            PYTHONPATH: localSitePackages
-          }
-        }
-      ]
-    : [])
+  { command: "python3", args: [] }
 ].filter((candidate) => Boolean(candidate.command));
 
 const python = candidates.find((candidate) => {

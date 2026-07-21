@@ -75,6 +75,16 @@ export {
   type DailyMinuteContribution
 } from "./model/workingTime";
 export {
+  buildContinuousOpeningIntervals,
+  buildOpeningIntervalForBusinessDate,
+  formatOpeningHoursSummary,
+  isShiftContainedWithinOpeningIntervals,
+  mergeAdjacentIntervals,
+  type ContinuousOpeningInterval,
+  type OpeningContainmentResult,
+  type OpeningIntervalReasonCode
+} from "./model/openingIntervals";
+export {
   buildAssignmentExplanation,
   buildUnfilledSlotMessage
 } from "./explanations";

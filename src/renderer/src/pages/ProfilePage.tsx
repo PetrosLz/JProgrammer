@@ -31,6 +31,7 @@ import {
 import { getErrorMessage } from "../utils/errors";
 import type { UiLanguage } from "../utils/localization";
 import { formatCompactDateRange } from "../utils/scheduleDisplay";
+import { formatOpeningHoursSummary } from "../../services/scheduler/model/openingIntervals";
 import { formatTimeRange } from "../../services/scheduler/model/workingTime";
 
 export function BusinessSettingsEditor({
@@ -300,6 +301,14 @@ export function OpeningHoursPage({
   }
 
   function summaryForDay(day: OpeningHoursFormRow): string {
+    return formatOpeningHoursSummary({
+      isOpen: day.isOpen,
+      is24Hours: day.is24Hours,
+      openTime: day.openTime,
+      closeTime: day.closeTime,
+      language
+    });
+
     if (!day.isOpen) {
       return language === "en" ? "Closed" : "Κλειστά";
     }

@@ -10,10 +10,12 @@ import type {
 import { normalizeExperienceLevel } from "../../types";
 import {
   addDays as addBusinessDays,
-  buildShiftInterval,
-  formatTimeRange,
   getDayOfWeekFromDate
 } from "./model/workingTime";
+import {
+  isShiftContainedWithinOpeningIntervals,
+  type OpeningIntervalReasonCode
+} from "./model/openingIntervals";
 
 export type SlotDraft = {
   date: string;
@@ -117,10 +119,6 @@ export function buildScheduleGenerationPlan({
         )
       : [];
 
-    const openingHour = openingHours.find(
-      (item) => item.day_of_week === dayOfWeek
-    );
-
     const dayRequirements: Array<
       | { type: "weekly_requirement"; requirement: StaffingRequirement }
       | {
@@ -160,7 +158,8 @@ export function buildScheduleGenerationPlan({
             };
       const containment = validateSlotWithinOpeningHours({
         date,
-        openingHour,
+        openingHours,
+        specialDays,
         startTime: shiftSnapshot.startTime,
         endTime: shiftSnapshot.endTime
       });
@@ -219,90 +218,51 @@ export function buildScheduleGenerationPlan({
 
 function validateSlotWithinOpeningHours({
   date,
-  openingHour,
+  openingHours,
+  specialDays,
   startTime,
   endTime
 }: {
   date: string;
-  openingHour: OpeningHours | undefined;
+  openingHours: OpeningHours[];
+  specialDays: SpecialDay[];
   startTime: string;
   endTime: string;
 }): { allowed: true } | { allowed: false; warningType: string; message: string } {
-  let slotInterval: ReturnType<typeof buildShiftInterval>;
+  const containment = isShiftContainedWithinOpeningIntervals({
+    date,
+    startTime,
+    endTime,
+    openingHours,
+    specialDays
+  });
 
-  try {
-    slotInterval = buildShiftInterval({ date, startTime, endTime });
-  } catch (error) {
-    return {
-      allowed: false,
-      warningType: "invalid_slot_time_range",
-      message: `${date} ${formatTimeRange({ startTime, endTime })} was not generated because the time range is invalid: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    };
-  }
-
-  if (!openingHour) {
+  if (containment.allowed) {
     return { allowed: true };
   }
 
-  if (!openingHour.is_open) {
-    return {
-      allowed: false,
-      warningType: "closed_day_requirement",
-      message: `${date} ${formatTimeRange({ startTime, endTime })} was not generated because the business is closed.`
-    };
+  return {
+    allowed: false,
+    warningType: warningTypeForOpeningReason(containment.reasonCode),
+    message: containment.message
+  };
+}
+
+function warningTypeForOpeningReason(reasonCode: OpeningIntervalReasonCode): string {
+  switch (reasonCode) {
+    case "INVALID_SLOT_INTERVAL":
+      return "invalid_slot_time_range";
+    case "INVALID_OPENING_HOURS":
+      return "invalid_opening_hours";
+    case "BUSINESS_CLOSED":
+      return "closed_day_requirement";
+    case "SLOT_BEFORE_OPENING":
+    case "SLOT_AFTER_CLOSING":
+    case "SLOT_CROSSES_CLOSED_PERIOD":
+      return "slot_outside_opening_hours";
+    case "ALLOWED":
+      return "slot_allowed";
   }
-
-  if (openingHour.is_24_hours) {
-    return { allowed: true };
-  }
-
-  if (!openingHour.open_time || !openingHour.close_time) {
-    return {
-      allowed: false,
-      warningType: "invalid_opening_hours",
-      message: `${date} has custom opening hours without both opening and closing time.`
-    };
-  }
-
-  let openingInterval: ReturnType<typeof buildShiftInterval>;
-
-  try {
-    openingInterval = buildShiftInterval({
-      date,
-      startTime: openingHour.open_time,
-      endTime: openingHour.close_time
-    });
-  } catch (error) {
-    return {
-      allowed: false,
-      warningType: "invalid_opening_hours",
-      message: `${date} opening interval ${formatTimeRange({
-        startTime: openingHour.open_time,
-        endTime: openingHour.close_time
-      })} is invalid: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-
-  if (
-    slotInterval.startMs < openingInterval.startMs ||
-    slotInterval.endMs > openingInterval.endMs
-  ) {
-    return {
-      allowed: false,
-      warningType: "slot_outside_opening_hours",
-      message: `${date} ${formatTimeRange({
-        startTime,
-        endTime
-      })} was not generated because it is outside opening hours ${formatTimeRange({
-        startTime: openingHour.open_time,
-        endTime: openingHour.close_time
-      })}.`
-    };
-  }
-
-  return { allowed: true };
 }
 
 function getRequirementShiftSnapshot(

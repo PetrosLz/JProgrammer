@@ -9,6 +9,7 @@ export function applyV4OpeningHours24HourModeMigration(
 ): void {
   ensureOpeningHours24HourColumn(db);
   normalizeOpeningHoursOvernightFlags(db);
+  deactivateInvalidEqualTimeShiftTemplates(db);
   normalizeShiftTemplateOvernightFlags(db);
 }
 
@@ -61,6 +62,39 @@ function normalizeShiftTemplateOvernightFlags(db: SqliteDatabase): void {
        ELSE 0
      END`
   );
+}
+
+function deactivateInvalidEqualTimeShiftTemplates(db: SqliteDatabase): void {
+  if (!tableExists(db, "shift_templates")) {
+    return;
+  }
+
+  const invalidCount = Number(
+    (
+      db
+        .prepare("SELECT COUNT(*) AS count FROM shift_templates WHERE start_time = end_time")
+        .get() as { count: number }
+    ).count
+  );
+
+  if (invalidCount === 0) {
+    return;
+  }
+
+  db.exec(
+    `UPDATE shift_templates
+     SET
+       is_overnight = 0,
+       is_active = 0
+     WHERE start_time = end_time`
+  );
+  db.prepare(
+    `INSERT INTO settings (key, value, updated_at)
+     VALUES ('scheduler_v4_invalid_equal_time_shifts_need_review', 'true', datetime('now'))
+     ON CONFLICT (key) DO UPDATE SET
+       value = excluded.value,
+       updated_at = datetime('now')`
+  ).run();
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {

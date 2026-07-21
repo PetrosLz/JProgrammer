@@ -3,6 +3,13 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_full_stress:
+        description: "Run the full scheduler stress benchmark"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-test-benchmark:
@@ -18,14 +25,70 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install solver dependencies
+        run: python -m pip install -r solver/requirements.txt
+
       - name: Install dependencies
         run: npm ci
 
       - name: Build
         run: npm run build
 
+      - name: Solver tests
+        run: npm run test:solver
+
       - name: Scheduler tests
         run: npm run test:scheduler
 
+      - name: Migration tests
+        run: npm run test:migrations
+
+      - name: Time-model tests
+        run: npm run test:time-model
+
+      - name: Randomized scheduler tests
+        run: npm run test:randomized
+
+      - name: Scheduler audit
+        run: npm run audit:scheduler
+
       - name: Scheduler benchmark
         run: npm run benchmark:scheduler
+
+      - name: Scheduler stress benchmark (small/medium)
+        env:
+          JPROGRAMMER_STRESS_TIERS: small,medium
+        run: npm run benchmark:scheduler:stress
+
+  full-stress:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_full_stress == true
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install solver dependencies
+        run: python -m pip install -r solver/requirements.txt
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full scheduler stress benchmark
+        run: npm run benchmark:scheduler:stress
