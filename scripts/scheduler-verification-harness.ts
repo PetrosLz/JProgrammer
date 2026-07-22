@@ -415,7 +415,9 @@ function assertLockedAssignmentsPreserved({
     )
   );
 
-  for (const assignment of scenario.existingAssignments) {
+  for (const assignment of scenario.existingAssignments.filter(
+    (item) => item.is_locked === 1
+  )) {
     if (!resultKeys.has(`${assignment.employee_id}|${assignment.schedule_slot_id}`)) {
       throw new Error(
         `${scenario.name}: locked assignment ${assignment.id} was not preserved.`

@@ -2,10 +2,13 @@ import { ipcMain } from "electron";
 import {
   createRecord,
   deleteRecord,
+  deleteScheduleRunGraph,
   getDatabaseStatus,
   getRecord,
   getSetting,
   listRecords,
+  persistCompleteGeneratedSchedule,
+  persistManualAssignmentChange,
   persistValidatedScheduleBatch,
   resetLocalData,
   setSetting,
@@ -18,7 +21,10 @@ import type {
   DatabaseRecordInput,
   DatabaseRecordUpdate,
   DatabaseResult,
+  DeleteScheduleRunGraphRequest,
   ListRecordsOptions,
+  PersistCompleteGeneratedScheduleRequest,
+  PersistManualAssignmentChangeRequest,
   PersistValidatedScheduleBatchRequest
 } from "../../shared/types";
 
@@ -32,7 +38,10 @@ const databaseChannels = [
   "database:resetLocalData",
   "database:getSetting",
   "database:setSetting",
-  "database:persistValidatedScheduleBatch"
+  "database:persistValidatedScheduleBatch",
+  "database:persistCompleteGeneratedSchedule",
+  "database:persistManualAssignmentChange",
+  "database:deleteScheduleRunGraph"
 ] as const;
 
 export function registerDatabaseIpc(): void {
@@ -94,6 +103,24 @@ export function registerDatabaseIpc(): void {
     "database:persistValidatedScheduleBatch",
     (_event, request: PersistValidatedScheduleBatchRequest) =>
       handleDatabaseOperation(() => persistValidatedScheduleBatch(request))
+  );
+
+  ipcMain.handle(
+    "database:persistCompleteGeneratedSchedule",
+    (_event, request: PersistCompleteGeneratedScheduleRequest) =>
+      handleDatabaseOperation(() => persistCompleteGeneratedSchedule(request))
+  );
+
+  ipcMain.handle(
+    "database:persistManualAssignmentChange",
+    (_event, request: PersistManualAssignmentChangeRequest) =>
+      handleDatabaseOperation(() => persistManualAssignmentChange(request))
+  );
+
+  ipcMain.handle(
+    "database:deleteScheduleRunGraph",
+    (_event, request: DeleteScheduleRunGraphRequest) =>
+      handleDatabaseOperation(() => deleteScheduleRunGraph(request))
   );
 }
 

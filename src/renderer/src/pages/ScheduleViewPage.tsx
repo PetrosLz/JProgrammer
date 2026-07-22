@@ -7,8 +7,11 @@ import {
   getDayOfWeek,
   getSlotDurationHours,
   evaluateSchedule,
+  optimizeScheduleInMemory,
   saveManualAssignmentChange,
+  setManualAssignmentLock,
   splitManualAssignmentViolations,
+  validateScheduleHardConstraints,
   validateManualAssignmentChange,
   type AssignmentResult,
   type ManualAssignmentValidation,
@@ -26,6 +29,8 @@ import type {
   EmployeeWorkRules,
   Role,
   ScheduleAssignment,
+  ScheduleAssignmentOrigin,
+  ScheduleAssignmentSource,
   ScheduleRun,
   ScheduleSlot,
   ScheduleWarning,
@@ -33,7 +38,10 @@ import type {
   StaffingRequirement,
   TimeOff
 } from "../../types";
-import { DeleteProgramConfirmModal } from "../components/ConfirmActionModal";
+import {
+  ConfirmActionModal,
+  DeleteProgramConfirmModal
+} from "../components/ConfirmActionModal";
 import { ErrorList } from "../components/ErrorList";
 import { Field } from "../components/Field";
 import { SectionHeading } from "../components/SectionHeading";
@@ -125,6 +133,8 @@ export function ScheduleViewPage({
   >(null);
   const [isDeletingProgram, setIsDeletingProgram] = useState(false);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [isRerunConfirmOpen, setIsRerunConfirmOpen] = useState(false);
+  const [isRerunningProgram, setIsRerunningProgram] = useState(false);
   const language = appLanguage(businessSettings);
   const selectedRun =
     scheduleRuns.find((run) => run.id === selectedRunId) ??
@@ -347,6 +357,243 @@ export function ScheduleViewPage({
     }
   }
 
+  async function toggleAssignmentLock(assignment: ScheduleAssignment) {
+    setIsSaving(true);
+
+    try {
+      await setManualAssignmentLock({
+        assignment,
+        locked: assignment.is_locked !== 1
+      });
+      setEditor((current) =>
+        current?.assignment?.id === assignment.id
+          ? {
+              ...current,
+              assignment: {
+                ...assignment,
+                is_locked: assignment.is_locked === 1 ? 0 : 1
+              }
+            }
+          : current
+      );
+      await onChanged(
+        assignment.is_locked === 1
+          ? language === "en"
+            ? "Assignment unlocked."
+            : "Ξ— Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ· ΞΎΞµΞΊΞ»ΞµΞΉΞ΄ΟΞΈΞ·ΞΊΞµ."
+          : language === "en"
+            ? "Assignment locked."
+            : "Ξ— Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ· ΞΊΞ»ΞµΞΉΞ΄ΟΞΈΞ·ΞΊΞµ."
+      );
+    } catch (error) {
+      setEditor((current) =>
+        current ? { ...current, error: getErrorMessage(error) } : current
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function rerunCurrentProgram() {
+    setExportError("");
+    setExportNotice("");
+    setIsRerunningProgram(true);
+
+    try {
+      const generatedAt = new Date().toISOString();
+      const newRunId = createClientId("schedule-run");
+      const slotIdBySourceSlotId = new Map<string, string>();
+      const clonedSlots: ScheduleSlot[] = runSlots.map((slot) => {
+        const nextSlotId = createClientId("schedule-slot");
+        slotIdBySourceSlotId.set(slot.id, nextSlotId);
+        return {
+          ...slot,
+          id: nextSlotId,
+          schedule_run_id: newRunId,
+          status: "unfilled",
+          created_at: generatedAt,
+          updated_at: generatedAt
+        };
+      });
+      const lockedAssignments = runAssignments.filter(
+        (assignment) => assignment.is_locked === 1
+      );
+      const unlockedAssignments = runAssignments.filter(
+        (assignment) => assignment.is_locked !== 1
+      );
+      const clonedLockedAssignments: ScheduleAssignment[] =
+        lockedAssignments.map((assignment) => ({
+          ...assignment,
+          id: createClientId("locked-assignment"),
+          schedule_run_id: newRunId,
+          schedule_slot_id:
+            slotIdBySourceSlotId.get(assignment.schedule_slot_id) ??
+            assignment.schedule_slot_id,
+          is_locked: 1,
+          source:
+            assignment.source === "locked_manual" ? "manual" : assignment.source,
+          created_at: generatedAt,
+          updated_at: generatedAt
+        }));
+      const rerun: ScheduleRun = {
+        id: newRunId,
+        name: `${selectedRun.name} rerun`,
+        start_date: selectedRun.start_date,
+        end_date: selectedRun.end_date,
+        status: "generating",
+        parameters_json: JSON.stringify({
+          stage: "rerun_candidate",
+          type: "weekly",
+          rerunFromRunId: selectedRun.id,
+          generatedAt
+        }),
+        completed_at: null,
+        created_at: generatedAt,
+        updated_at: generatedAt
+      };
+      const lockValidation = validateScheduleHardConstraints({
+        runSlots: clonedSlots,
+        assignments: clonedLockedAssignments,
+        employees,
+        data: {
+          employeeRoles,
+          employeeWorkRules,
+          employeeDayConstraints,
+          employeeShiftAvailability,
+          employeeTimeConstraints,
+          timeOff,
+          staffingRequirements,
+          weekStartsOn: businessSettings?.week_starts_on ?? 1
+        }
+      });
+
+      if (!lockValidation.valid) {
+        throw new Error(
+          `Locked assignments are no longer valid: ${lockValidation.violations
+            .map((violation) => violation.message)
+            .slice(0, 3)
+            .join(" ")}`
+        );
+      }
+
+      const assignmentResult = optimizeScheduleInMemory({
+        run: rerun,
+        slots: [...scheduleSlots, ...clonedSlots],
+        employees,
+        employeeRoles,
+        employeeWorkRules,
+        employeeDayConstraints,
+        employeeShiftAvailability,
+        employeeTimeConstraints,
+        timeOff,
+        roles,
+        shiftTemplates,
+        staffingRequirements,
+        weekStartsOn: businessSettings?.week_starts_on ?? 1,
+        assignments: [...scheduleAssignments, ...clonedLockedAssignments]
+      });
+      const finalAssignments = [
+        ...clonedLockedAssignments,
+        ...assignmentResult.generatedAssignments
+      ];
+      const assignedSlotIds = new Set(
+        finalAssignments.map((assignment) => assignment.schedule_slot_id)
+      );
+      const finalStatus = buildGeneratedRunStatus({
+        totalSlots: clonedSlots.length,
+        assignedSlots: finalAssignments.length
+      });
+      const finalParameters = JSON.stringify({
+        stage: "employee_assignment",
+        type: "weekly",
+        rerunFromRunId: selectedRun.id,
+        preservedLockedAssignmentCount: clonedLockedAssignments.length,
+        stabilityHintCount: unlockedAssignments.length,
+        engine: "heuristic_fallback",
+        solverStatus: "HEURISTIC_FALLBACK",
+        validationStatus:
+          assignmentResult.evaluation.metrics.hardViolationCount === 0
+            ? "valid"
+            : "needs_review",
+        generatedAt,
+        evaluation: {
+          grade: assignmentResult.evaluation.grade,
+          reward: assignmentResult.evaluation.reward,
+          metrics: assignmentResult.evaluation.metrics
+        },
+        optimization: {
+          selectedProfile: assignmentResult.selectedProfile,
+          selectedScore: assignmentResult.selectedScore,
+          repairIterations: assignmentResult.repairIterations,
+          stopReason: assignmentResult.stopReason
+        }
+      });
+
+      await databaseApi.persistCompleteGeneratedSchedule({
+        run: {
+          id: rerun.id,
+          name: rerun.name,
+          startDate: rerun.start_date,
+          endDate: rerun.end_date,
+          status: rerun.status,
+          parametersJson: rerun.parameters_json,
+          completedAt: rerun.completed_at
+        },
+        slots: clonedSlots.map((slot) => ({
+          id: slot.id,
+          date: slot.date,
+          roleId: slot.role_id,
+          startTime: slot.start_time,
+          endTime: slot.end_time,
+          requiredCount: slot.required_count,
+          requirementGroupId: slot.requirement_group_id,
+          minimumExperienceLevel: slot.minimum_experience_level,
+          experiencedRequiredCount: slot.experienced_required_count,
+          status: assignedSlotIds.has(slot.id) ? "filled" : "unfilled",
+          sourceType: slot.source_type,
+          sourceId: slot.source_id,
+          slotNumber: slot.slot_number,
+          notes: slot.notes
+        })),
+        assignments: finalAssignments.map((assignment) => ({
+          id: assignment.id,
+          scheduleSlotId: assignment.schedule_slot_id,
+          employeeId: assignment.employee_id,
+          status: assignment.status,
+          isManualOverride: assignment.is_manual_override,
+          isLocked: assignment.is_locked,
+          source: assignmentOriginForWrite(assignment.source),
+          notes: assignment.notes
+        })),
+        warnings: assignmentResult.warnings.map((warning) => ({
+          id: createClientId("schedule-warning"),
+          scheduleSlotId: warning.scheduleSlotId,
+          scheduleAssignmentId: warning.scheduleAssignmentId,
+          severity: warning.severity,
+          warningType: warning.warningType,
+          message: warning.message
+        })),
+        runUpdate: {
+          status: finalStatus,
+          parametersJson: finalParameters,
+          completedAt: generatedAt
+        }
+      });
+
+      setIsRerunConfirmOpen(false);
+      onSelectRun(rerun.id);
+      await onChanged(
+        language === "en"
+          ? "Rerun complete. The previous schedule remains available."
+          : "Ξ— ΞµΟ€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· ΞΏΞ»ΞΏΞΊΞ»Ξ·ΟΟΞΈΞ·ΞΊΞµ. Ξ¤ΞΏ Ο€ΟΞΏΞ·Ξ³ΞΏΟΞΌΞµΞ½ΞΏ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ± Ο€Ξ±ΟΞ±ΞΌΞ­Ξ½ΞµΞΉ Ξ΄ΞΉΞ±ΞΈΞ­ΟƒΞΉΞΌΞΏ."
+      );
+    } catch (error) {
+      setExportError(getErrorMessage(error));
+    } finally {
+      setIsRerunningProgram(false);
+    }
+  }
+
   async function exportSchedulePdf(exportType: "team" | "manager") {
     setExportError("");
     setExportNotice("");
@@ -425,10 +672,7 @@ export function ScheduleViewPage({
 
     try {
       await deleteGeneratedProgram({
-        runId: selectedRun.id,
-        scheduleSlots,
-        scheduleAssignments,
-        scheduleWarnings
+        runId: selectedRun.id
       });
       setIsDeleteConfirmOpen(false);
       await onDeleted(
@@ -498,6 +742,20 @@ export function ScheduleViewPage({
               Περιέχει ώρες, κενές βάρδιες και προειδοποιήσεις.
             </span>
           </div>
+          <button
+            type="button"
+            onClick={() => setIsRerunConfirmOpen(true)}
+            disabled={isRerunningProgram}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            {isRerunningProgram
+              ? language === "en"
+                ? "Rerunning..."
+                : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ·..."
+              : language === "en"
+                ? "Rerun scheduling"
+                : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· Ο€ΟΞΏΞ³ΟΞ±ΞΌΞΌΞ±Ο„ΞΏΟ‚"}
+          </button>
           <button
             type="button"
             onClick={() => setIsDeleteConfirmOpen(true)}
@@ -776,6 +1034,11 @@ export function ScheduleViewPage({
                                   {item.warningCount > 0 ? (
                                     <WarningBadge messages={item.warningMessages} />
                                   ) : null}
+                                  {item.assignment.is_locked === 1 ? (
+                                    <span className="ml-auto rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                      L
+                                    </span>
+                                  ) : null}
                                 </div>
                                 <p className="mt-1 truncate text-xs font-semibold text-slate-900">
                                   {item.shiftName}
@@ -928,6 +1191,11 @@ export function ScheduleViewPage({
                                         <WarningBadge messages={warningMessages} />
                                       </span>
                                     ) : null}
+                                    {assignment?.is_locked === 1 ? (
+                                      <span className="ml-auto rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                        L
+                                      </span>
+                                    ) : null}
                                   </button>
                                 );
                               })}
@@ -966,7 +1234,25 @@ export function ScheduleViewPage({
           onChange={(next) => setEditor(next)}
           onClose={() => setEditor(null)}
           onRemove={() => void removeAssignment()}
+          onToggleLock={(assignment) => void toggleAssignmentLock(assignment)}
           onSave={() => void saveEditor()}
+        />
+      ) : null}
+      {isRerunConfirmOpen ? (
+        <ConfirmActionModal
+          language={language}
+          title={language === "en" ? "Rerun scheduling" : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· Ο€ΟΞΏΞ³ΟΞ¬ΞΌΞΌΞ±Ο„ΞΏΟ‚"}
+          body={
+            language === "en"
+              ? `This will create a new schedule. ${runAssignments.filter((assignment) => assignment.is_locked === 1).length} locked assignment(s) will be preserved, and ${runAssignments.filter((assignment) => assignment.is_locked !== 1).length} unlocked assignment(s) may change. The old schedule will remain available.`
+              : `ΞΞ± Ξ΄Ξ·ΞΌΞΉΞΏΟ…ΟΞ³Ξ·ΞΈΞµΞ― Ξ½Ξ­ΞΏ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ±. ${runAssignments.filter((assignment) => assignment.is_locked === 1).length} ΞΊΞ»ΞµΞΉΞ΄Ο‰ΞΌΞ­Ξ½ΞµΟ‚ Ξ±Ξ½Ξ±ΞΈΞ­ΟƒΞµΞΉΟ‚ ΞΈΞ± Ξ΄ΞΉΞ±Ο„Ξ·ΟΞ·ΞΈΞΏΟΞ½, ΞΊΞ±ΞΉ ${runAssignments.filter((assignment) => assignment.is_locked !== 1).length} ΞΎΞµΞΊΞ»ΞµΞΉΞ΄ΟΟ„ΞµΟ‚ Ξ±Ξ½Ξ±ΞΈΞ­ΟƒΞµΞΉΟ‚ ΞΌΟ€ΞΏΟΞµΞ― Ξ½Ξ± Ξ±Ξ»Ξ»Ξ¬ΞΎΞΏΟ…Ξ½. Ξ¤ΞΏ Ο€Ξ±Ξ»ΞΉΟ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ± ΞΈΞ± Ο€Ξ±ΟΞ±ΞΌΞµΞ―Ξ½ΞµΞΉ Ξ΄ΞΉΞ±ΞΈΞ­ΟƒΞΉΞΌΞΏ.`
+          }
+          confirmLabel={language === "en" ? "Rerun" : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ·"}
+          cancelLabel={language === "en" ? "Cancel" : "Ξ‘ΞΊΟΟΟ‰ΟƒΞ·"}
+          variant="warning"
+          isWorking={isRerunningProgram}
+          onCancel={() => setIsRerunConfirmOpen(false)}
+          onConfirm={() => void rerunCurrentProgram()}
         />
       ) : null}
       {isDeleteConfirmOpen ? (
@@ -1001,6 +1287,34 @@ function QualityMetric({
       <p className="mt-1 text-base font-semibold text-slate-950">{value}</p>
     </div>
   );
+}
+
+function buildGeneratedRunStatus({
+  totalSlots,
+  assignedSlots
+}: {
+  totalSlots: number;
+  assignedSlots: number;
+}): string {
+  if (totalSlots === 0) {
+    return "generated";
+  }
+
+  if (assignedSlots === totalSlots) {
+    return "assigned";
+  }
+
+  return assignedSlots > 0 ? "partially_assigned" : "unfilled";
+}
+
+function createClientId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function assignmentOriginForWrite(
+  source: ScheduleAssignmentSource
+): ScheduleAssignmentOrigin {
+  return source === "locked_manual" ? "manual" : source;
 }
 
 function qualityGradeLabel(
@@ -1122,6 +1436,7 @@ function AssignmentEditorModal({
   onChange,
   onClose,
   onRemove,
+  onToggleLock,
   onSave
 }: {
   editor: AssignmentEditorState;
@@ -1144,6 +1459,7 @@ function AssignmentEditorModal({
   onChange: (editor: AssignmentEditorState) => void;
   onClose: () => void;
   onRemove: () => void;
+  onToggleLock: (assignment: ScheduleAssignment) => void;
   onSave: () => void;
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -1260,6 +1576,26 @@ function AssignmentEditorModal({
                       : "Κενή θέση"}
                 </span>
               </p>
+              {editor.assignment ? (
+                <p>
+                  {language === "en" ? "Lock status" : "Lock"}:{" "}
+                  <span
+                    className={
+                      editor.assignment.is_locked === 1
+                        ? "font-semibold text-amber-700"
+                        : "font-semibold text-slate-700"
+                    }
+                  >
+                    {editor.assignment.is_locked === 1
+                      ? language === "en"
+                        ? "Locked"
+                        : "ΞΞ»ΞµΞΉΞ΄Ο‰ΞΌΞ­Ξ½Ξ·"
+                      : language === "en"
+                        ? "Unlocked"
+                        : "ΞΞµΞΊΞ»ΞµΞΉΞ΄ΟΟ„Ξ·"}
+                  </span>
+                </p>
+              ) : null}
             </div>
           </div>
           <button
@@ -1452,6 +1788,7 @@ function AssignmentEditorModal({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
+          <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setConfirmRemove(true)}
@@ -1462,6 +1799,23 @@ function AssignmentEditorModal({
               ? "Remove employee from this slot"
               : "Αφαίρεση εργαζομένου"}
           </button>
+            {editor.assignment ? (
+              <button
+                type="button"
+                onClick={() => onToggleLock(editor.assignment as ScheduleAssignment)}
+                disabled={isSaving}
+                className="rounded-md border border-amber-200 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+              >
+                {editor.assignment.is_locked === 1
+                  ? language === "en"
+                    ? "Unlock assignment"
+                    : "ΞΞµΞΊΞ»ΞµΞ―Ξ΄Ο‰ΞΌΞ± Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ·Ο‚"
+                  : language === "en"
+                    ? "Lock assignment"
+                    : "ΞΞ»ΞµΞ―Ξ΄Ο‰ΞΌΞ± Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ·Ο‚"}
+              </button>
+            ) : null}
+          </div>
           <div className="flex gap-2">
             <button
               type="button"

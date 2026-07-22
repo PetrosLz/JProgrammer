@@ -10,7 +10,6 @@ import type {
   Role,
   ScheduleAssignment,
   ScheduleSlot,
-  ScheduleWarning,
   StaffingRequirement,
   TimeOff
 } from "../../types";
@@ -57,14 +56,7 @@ export async function setManualAssignmentLock({
   locked: boolean;
 }): Promise<void> {
   await databaseApi.updateRecord("schedule_assignments", assignment.id, {
-    is_locked: locked,
-    source: locked
-      ? "locked_manual"
-      : assignment.is_manual_override === 1
-        ? "manual"
-        : assignment.source === "locked_manual"
-          ? "manual"
-          : assignment.source
+    is_locked: locked
   });
 }
 
@@ -76,22 +68,16 @@ export async function saveManualAssignmentChange(
   const validation = validateManualAssignmentChange(input);
 
   if (!input.employeeId) {
-    if (input.currentAssignment) {
-      await databaseApi.updateRecord(
-        "schedule_assignments",
-        input.currentAssignment.id,
-        {
-          status: "removed",
-          is_manual_override: true,
-          is_locked: false,
-          source: "manual",
-          notes: "Manual override: assignment removed by manager."
-        }
-      );
-    }
-
-    await databaseApi.updateRecord("schedule_slots", input.slot.id, {
-      status: "unfilled"
+    await databaseApi.persistManualAssignmentChange({
+      scheduleRunId: input.slot.schedule_run_id,
+      scheduleSlotId: input.slot.id,
+      currentAssignmentId: input.currentAssignment?.id ?? null,
+      nextAssignmentId: null,
+      nextEmployeeId: null,
+      assignmentNotes: "Manual override: assignment removed by manager.",
+      softWarnings: [],
+      hardWarnings: [],
+      allowHardOverride: false
     });
     return;
   }
@@ -119,93 +105,39 @@ export async function saveManualAssignmentChange(
         }`
       : validation.explanation;
 
-  const reusableAssignment = input.scheduleAssignments.find(
-    (assignment) =>
-      assignment.schedule_slot_id === input.slot.id &&
-      assignment.employee_id === input.employeeId &&
-      assignment.id !== input.currentAssignment?.id
-  );
-
-  if (input.currentAssignment && reusableAssignment) {
-    await databaseApi.updateRecord(
-      "schedule_assignments",
-      input.currentAssignment.id,
-      {
-        status: "removed",
-        is_manual_override: true,
-        is_locked: false,
-        source: "manual",
-        notes: "Manual override: assignment replaced by manager."
-      }
-    );
-    await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
-      status: "assigned",
-      is_manual_override: true,
-      is_locked: false,
-      source: "manual",
-      notes: assignmentNotes
-    });
-  } else if (input.currentAssignment) {
-    await databaseApi.updateRecord(
-      "schedule_assignments",
-      input.currentAssignment.id,
-      {
-        employee_id: input.employeeId,
-        status: "assigned",
-        is_manual_override: true,
-        is_locked: false,
-        source: "manual",
-        notes: assignmentNotes
-      }
-    );
-  } else if (reusableAssignment) {
-    await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
-      status: "assigned",
-      is_manual_override: true,
-      is_locked: false,
-      source: "manual",
-      notes: assignmentNotes
-    });
-  } else {
-    await databaseApi.createRecord("schedule_assignments", {
-      schedule_run_id: input.slot.schedule_run_id,
-      schedule_slot_id: input.slot.id,
-      employee_id: input.employeeId,
-      status: "assigned",
-      is_manual_override: true,
-      is_locked: false,
-      source: "manual",
-      notes: assignmentNotes
-    });
-  }
-
-  await databaseApi.updateRecord("schedule_slots", input.slot.id, {
-    status: "filled"
-  });
-
-  for (const violation of splitViolations.soft) {
-    await databaseApi.createRecord("schedule_warnings", {
-      schedule_run_id: input.slot.schedule_run_id,
-      schedule_slot_id: input.slot.id,
-      schedule_assignment_id: null,
+  const nextAssignmentId = createClientId("manual-assignment");
+  await databaseApi.persistManualAssignmentChange({
+    scheduleRunId: input.slot.schedule_run_id,
+    scheduleSlotId: input.slot.id,
+    currentAssignmentId: input.currentAssignment?.id ?? null,
+    nextAssignmentId,
+    nextEmployeeId: input.employeeId,
+    assignmentNotes,
+    softWarnings: splitViolations.soft.map((violation) => ({
+      id: createClientId("manual-warning"),
+      scheduleSlotId: input.slot.id,
+      scheduleAssignmentId: null,
       severity: "warning",
-      warning_type: "manual_override_warning",
+      warningType: "manual_override_warning",
       message: `Manual override saved: ${violation}`
-    } satisfies Omit<ScheduleWarning, "id" | "created_at" | "updated_at">);
-  }
+    })),
+    hardWarnings:
+      options.allowHardOverride === true
+        ? splitViolations.hard.map((violation) => ({
+            id: createClientId("manual-warning"),
+            scheduleSlotId: input.slot.id,
+            scheduleAssignmentId: null,
+            severity: "critical",
+            warningType: "manual_hard_override_violation",
+            message: `Manual hard override saved: ${violation}`
+          }))
+        : [],
+    allowHardOverride: options.allowHardOverride
+  });
+}
 
-  if (options.allowHardOverride === true) {
-    for (const violation of splitViolations.hard) {
-      await databaseApi.createRecord("schedule_warnings", {
-        schedule_run_id: input.slot.schedule_run_id,
-        schedule_slot_id: input.slot.id,
-        schedule_assignment_id: null,
-        severity: "critical",
-        warning_type: "manual_hard_override_violation",
-        message: `Manual hard override saved: ${violation}`
-      } satisfies Omit<ScheduleWarning, "id" | "created_at" | "updated_at">);
-    }
-  }
+function createClientId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
 }
 
 export function splitManualAssignmentViolations(violations: string[]): {

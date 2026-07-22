@@ -132,6 +132,7 @@ export function buildCoverageCeilingAnalysis({
     (assignment) =>
       assignment.status !== "cancelled" &&
       assignment.status !== "removed" &&
+      assignment.is_locked === 1 &&
       slotById.has(assignment.schedule_slot_id)
   );
   const data: SchedulerData = {

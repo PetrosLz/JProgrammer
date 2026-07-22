@@ -32,11 +32,13 @@ export const scheduleAssignmentSourceValues = [
   "automatic_cp_sat",
   "automatic_heuristic",
   "manual",
-  "locked_manual",
   "imported"
 ] as const;
-export type ScheduleAssignmentSource =
+export type ScheduleAssignmentOrigin =
   (typeof scheduleAssignmentSourceValues)[number];
+export type ScheduleAssignmentSource =
+  | ScheduleAssignmentOrigin
+  | "locked_manual";
 export const experienceLevelValues = [
   "no_experience",
   "some_experience",
@@ -324,7 +326,7 @@ export type PersistValidatedScheduleAssignmentInput = {
   status: string;
   isManualOverride: SqlBoolean;
   isLocked?: SqlBoolean;
-  source?: ScheduleAssignmentSource;
+  source?: ScheduleAssignmentOrigin;
   notes: string | null;
 };
 
@@ -360,6 +362,79 @@ export type PersistValidatedScheduleBatchResult = {
   assignmentsInserted: number;
   slotsUpdated: number;
   warningsInserted: number;
+};
+
+export type PersistCompleteGeneratedScheduleRunInput = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+  parametersJson: string | null;
+  completedAt: string | null;
+};
+
+export type PersistCompleteGeneratedScheduleSlotInput = {
+  id: string;
+  date: string;
+  roleId: string;
+  startTime: string;
+  endTime: string;
+  requiredCount: number;
+  requirementGroupId: string | null;
+  minimumExperienceLevel: ExperienceLevel;
+  experiencedRequiredCount: number;
+  status: string;
+  sourceType: string | null;
+  sourceId: string | null;
+  slotNumber: number | null;
+  notes: string | null;
+};
+
+export type PersistCompleteGeneratedScheduleRequest = {
+  run: PersistCompleteGeneratedScheduleRunInput;
+  slots: PersistCompleteGeneratedScheduleSlotInput[];
+  assignments: PersistValidatedScheduleAssignmentInput[];
+  warnings: PersistValidatedScheduleWarningInput[];
+  runUpdate: PersistValidatedScheduleRunUpdate;
+};
+
+export type PersistCompleteGeneratedScheduleResult = {
+  runInserted: number;
+  slotsInserted: number;
+  assignmentsInserted: number;
+  warningsInserted: number;
+};
+
+export type PersistManualAssignmentChangeRequest = {
+  scheduleRunId: string;
+  scheduleSlotId: string;
+  currentAssignmentId: string | null;
+  nextAssignmentId: string | null;
+  nextEmployeeId: string | null;
+  assignmentNotes: string | null;
+  softWarnings: PersistValidatedScheduleWarningInput[];
+  hardWarnings: PersistValidatedScheduleWarningInput[];
+  allowHardOverride?: boolean;
+};
+
+export type PersistManualAssignmentChangeResult = {
+  assignmentInserted: boolean;
+  assignmentUpdated: boolean;
+  assignmentRemoved: boolean;
+  slotStatus: string;
+  warningsInserted: number;
+};
+
+export type DeleteScheduleRunGraphRequest = {
+  scheduleRunId: string;
+};
+
+export type DeleteScheduleRunGraphResult = {
+  runDeleted: boolean;
+  slotsDeleted: number;
+  assignmentsDeleted: number;
+  warningsDeleted: number;
 };
 
 export interface SettingRecord {

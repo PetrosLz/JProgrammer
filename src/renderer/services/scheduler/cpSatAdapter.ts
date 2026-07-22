@@ -59,12 +59,13 @@ export function buildCpSatSolveRequest({
     (assignment) =>
       assignment.status !== "cancelled" && assignment.status !== "removed"
   );
+  const lockedAssignments = activeAssignments.filter(isLockedAssignment);
   const assignedSlotIds = new Set(
-    activeAssignments.map((assignment) => assignment.schedule_slot_id)
+    lockedAssignments.map((assignment) => assignment.schedule_slot_id)
   );
   const initialAssignedShifts = buildExistingAssignedShifts({
     slots: runSlots,
-    assignments: activeAssignments,
+    assignments: lockedAssignments,
     data
   });
 
@@ -154,7 +155,7 @@ export function buildCpSatSolveRequest({
       .map((assignment) => ({
         employeeId: assignment.employee_id,
         slotId: assignment.schedule_slot_id,
-        locked: true
+        locked: isLockedAssignment(assignment)
       }))
       .sort(
         (left, right) =>
@@ -177,7 +178,9 @@ export function getCpSatGeneratedAssignments({
     activeRunAssignments
       .filter(
         (assignment) =>
-          assignment.status !== "cancelled" && assignment.status !== "removed"
+          assignment.status !== "cancelled" &&
+          assignment.status !== "removed" &&
+          isLockedAssignment(assignment)
       )
       .map((assignment) => assignment.schedule_slot_id)
   );
@@ -325,9 +328,12 @@ function buildEligibilityPairs({
 }) {
   const slotById = new Map(runSlots.map((slot) => [slot.id, slot]));
   const lockedPairs = new Set(
-    activeAssignments.map(
-      (assignment) => `${assignment.employee_id}|${assignment.schedule_slot_id}`
-    )
+    activeAssignments
+      .filter(isLockedAssignment)
+      .map(
+        (assignment) =>
+          `${assignment.employee_id}|${assignment.schedule_slot_id}`
+      )
   );
   const pairs: Array<{
     employeeId: string;
@@ -381,6 +387,10 @@ function buildEligibilityPairs({
       left.employeeId.localeCompare(right.employeeId) ||
       left.slotId.localeCompare(right.slotId)
   );
+}
+
+function isLockedAssignment(assignment: ScheduleAssignment): boolean {
+  return assignment.is_locked === 1;
 }
 
 function getPreferenceScore({

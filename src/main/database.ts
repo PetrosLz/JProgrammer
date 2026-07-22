@@ -8,6 +8,9 @@ import initSql from "./migrations/init.sql?raw";
 import { applyVersionedMigrations } from "./migrations";
 import {
   SchedulePersistenceError,
+  deleteScheduleRunGraphInTransaction,
+  persistCompleteGeneratedScheduleInTransaction,
+  persistManualAssignmentChangeInTransaction,
   persistValidatedScheduleBatchInTransaction
 } from "./schedulePersistence";
 import {
@@ -18,9 +21,15 @@ import {
   type DatabaseRecordUpdate,
   type DatabaseStatus,
   type DatabaseTableName,
+  type DeleteScheduleRunGraphRequest,
+  type DeleteScheduleRunGraphResult,
   type DbStoredValue,
   type DbValue,
   type ListRecordsOptions,
+  type PersistCompleteGeneratedScheduleRequest,
+  type PersistCompleteGeneratedScheduleResult,
+  type PersistManualAssignmentChangeRequest,
+  type PersistManualAssignmentChangeResult,
   type PersistValidatedScheduleBatchRequest,
   type PersistValidatedScheduleBatchResult,
   type SettingRecord
@@ -471,6 +480,48 @@ export function persistValidatedScheduleBatch(
 ): PersistValidatedScheduleBatchResult {
   try {
     return persistValidatedScheduleBatchInTransaction(getDatabase(), request);
+  } catch (error) {
+    if (error instanceof SchedulePersistenceError) {
+      throw new DatabaseOperationError(error.code, error.message, error);
+    }
+
+    throw error;
+  }
+}
+
+export function persistCompleteGeneratedSchedule(
+  request: PersistCompleteGeneratedScheduleRequest
+): PersistCompleteGeneratedScheduleResult {
+  try {
+    return persistCompleteGeneratedScheduleInTransaction(getDatabase(), request);
+  } catch (error) {
+    if (error instanceof SchedulePersistenceError) {
+      throw new DatabaseOperationError(error.code, error.message, error);
+    }
+
+    throw error;
+  }
+}
+
+export function persistManualAssignmentChange(
+  request: PersistManualAssignmentChangeRequest
+): PersistManualAssignmentChangeResult {
+  try {
+    return persistManualAssignmentChangeInTransaction(getDatabase(), request);
+  } catch (error) {
+    if (error instanceof SchedulePersistenceError) {
+      throw new DatabaseOperationError(error.code, error.message, error);
+    }
+
+    throw error;
+  }
+}
+
+export function deleteScheduleRunGraph(
+  request: DeleteScheduleRunGraphRequest
+): DeleteScheduleRunGraphResult {
+  try {
+    return deleteScheduleRunGraphInTransaction(getDatabase(), request);
   } catch (error) {
     if (error instanceof SchedulePersistenceError) {
       throw new DatabaseOperationError(error.code, error.message, error);

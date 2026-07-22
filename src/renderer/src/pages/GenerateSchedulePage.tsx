@@ -2,10 +2,10 @@ import { useState } from "react";
 
 import { databaseApi } from "../../services/databaseApi";
 import {
-  assignEmployeesToRun,
   buildScheduleGenerationPlan,
   getWeekRangeForDate,
   isDateInputValue,
+  optimizeScheduleInMemory,
   type ScheduleEvaluationGrade
 } from "../../services/scheduler";
 import type {
@@ -20,6 +20,8 @@ import type {
   OpeningHours,
   Role,
   ScheduleAssignment,
+  ScheduleAssignmentOrigin,
+  ScheduleAssignmentSource,
   ScheduleRun,
   ScheduleSlot,
   ScheduleWarning,
@@ -130,56 +132,47 @@ export function GenerateSchedulePage({
         shiftTemplates,
         specialDays
       });
-      const run = await databaseApi.createRecord("schedule_runs", {
+      const generatedAt = new Date().toISOString();
+      const initialParameters = {
+        stage: "slot_generation",
+        type: "weekly",
+        selectedDate: weekRange.selectedDate,
+        weekStartsOn: weekRange.weekStartsOn,
+        weekStartDate: plan.weekStartDate,
+        weekEndDate: plan.weekEndDate
+      };
+      const run: ScheduleRun = {
+        id: createClientId("schedule-run"),
         name: `Weekly schedule ${formatDateRangeEu(plan.weekStartDate, plan.weekEndDate)}`,
         start_date: plan.weekStartDate,
         end_date: plan.weekEndDate,
-        status: "generated",
-        parameters_json: JSON.stringify({
-          stage: "slot_generation",
-          type: "weekly",
-          selectedDate: weekRange.selectedDate,
-          weekStartsOn: weekRange.weekStartsOn,
-          weekStartDate: plan.weekStartDate,
-          weekEndDate: plan.weekEndDate
-        }),
-        completed_at: new Date().toISOString()
-      });
+        status: "generating",
+        parameters_json: JSON.stringify(initialParameters),
+        completed_at: null,
+        created_at: generatedAt,
+        updated_at: generatedAt
+      };
+      const createdSlots: ScheduleSlot[] = plan.slots.map((slot) => ({
+        id: createClientId("schedule-slot"),
+        schedule_run_id: run.id,
+        date: slot.date,
+        role_id: slot.roleId,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
+        required_count: 1,
+        requirement_group_id: slot.requirementGroupId,
+        minimum_experience_level: slot.minimumExperienceLevel,
+        experienced_required_count: slot.experiencedRequiredCount,
+        status: "unfilled",
+        source_type: slot.sourceType,
+        source_id: slot.sourceId,
+        slot_number: slot.slotNumber,
+        notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`,
+        created_at: generatedAt,
+        updated_at: generatedAt
+      }));
 
-      const createdSlots: ScheduleSlot[] = [];
-
-      for (const slot of plan.slots) {
-        const createdSlot = await databaseApi.createRecord("schedule_slots", {
-          schedule_run_id: run.id,
-          date: slot.date,
-          role_id: slot.roleId,
-          start_time: slot.startTime,
-          end_time: slot.endTime,
-          required_count: 1,
-          requirement_group_id: slot.requirementGroupId,
-          minimum_experience_level: slot.minimumExperienceLevel,
-          experienced_required_count: slot.experiencedRequiredCount,
-          status: "unfilled",
-          source_type: slot.sourceType,
-          source_id: slot.sourceId,
-          slot_number: slot.slotNumber,
-          notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`
-        });
-        createdSlots.push(createdSlot);
-      }
-
-      for (const warning of plan.warnings) {
-        await databaseApi.createRecord("schedule_warnings", {
-          schedule_run_id: run.id,
-          schedule_slot_id: null,
-          schedule_assignment_id: null,
-          severity: warning.severity,
-          warning_type: warning.warningType,
-          message: warning.message
-        });
-      }
-
-      const assignmentResult = await assignEmployeesToRun({
+      const assignmentResult = optimizeScheduleInMemory({
         run,
         slots: [...scheduleSlots, ...createdSlots],
         employees,
@@ -194,6 +187,100 @@ export function GenerateSchedulePage({
         staffingRequirements,
         weekStartsOn,
         assignments: scheduleAssignments
+      });
+      const assignedSlotIds = new Set(
+        assignmentResult.generatedAssignments.map(
+          (assignment) => assignment.schedule_slot_id
+        )
+      );
+      const finalParameters = JSON.stringify({
+        ...initialParameters,
+        stage: "employee_assignment",
+        algorithm: "multi_start_coverage_first_manager_policy",
+        optimizerEngine: "heuristic_fallback",
+        solverStatus: "HEURISTIC_FALLBACK",
+        validationStatus:
+          assignmentResult.evaluation.metrics.hardViolationCount === 0
+            ? "valid"
+            : "needs_review",
+        generatedAt,
+        optimization: {
+          selectedProfile: assignmentResult.selectedProfile,
+          selectedScore: assignmentResult.selectedScore,
+          repairIterations: assignmentResult.repairIterations,
+          stopReason: assignmentResult.stopReason,
+          attemptsCompleted: assignmentResult.attemptsCompleted,
+          noImprovementAttempts: assignmentResult.noImprovementAttempts
+        },
+        evaluation: {
+          grade: assignmentResult.evaluation.grade,
+          reward: assignmentResult.evaluation.reward,
+          metrics: assignmentResult.evaluation.metrics
+        }
+      });
+
+      await databaseApi.persistCompleteGeneratedSchedule({
+        run: {
+          id: run.id,
+          name: run.name,
+          startDate: run.start_date,
+          endDate: run.end_date,
+          status: run.status,
+          parametersJson: run.parameters_json,
+          completedAt: run.completed_at
+        },
+        slots: createdSlots.map((slot) => ({
+          id: slot.id,
+          date: slot.date,
+          roleId: slot.role_id,
+          startTime: slot.start_time,
+          endTime: slot.end_time,
+          requiredCount: slot.required_count,
+          requirementGroupId: slot.requirement_group_id,
+          minimumExperienceLevel: slot.minimum_experience_level,
+          experiencedRequiredCount: slot.experienced_required_count,
+          status: assignedSlotIds.has(slot.id) ? "filled" : "unfilled",
+          sourceType: slot.source_type,
+          sourceId: slot.source_id,
+          slotNumber: slot.slot_number,
+          notes: slot.notes
+        })),
+        assignments: assignmentResult.generatedAssignments.map((assignment) => ({
+          id: assignment.id,
+          scheduleSlotId: assignment.schedule_slot_id,
+          employeeId: assignment.employee_id,
+          status: assignment.status,
+          isManualOverride: assignment.is_manual_override,
+          isLocked: assignment.is_locked,
+          source: assignmentOriginForWrite(assignment.source),
+          notes: assignment.notes
+        })),
+        warnings: [
+          ...plan.warnings.map((warning) => ({
+            id: createClientId("schedule-warning"),
+            scheduleSlotId: null,
+            scheduleAssignmentId: null,
+            severity: warning.severity,
+            warningType: warning.warningType,
+            message: warning.message
+          })),
+          ...assignmentResult.warnings.map((warning) => ({
+            id: createClientId("schedule-warning"),
+            scheduleSlotId: warning.scheduleSlotId,
+            scheduleAssignmentId: warning.scheduleAssignmentId,
+            severity: warning.severity,
+            warningType: warning.warningType,
+            message: warning.message
+          }))
+        ],
+        runUpdate: {
+          status: buildGeneratedRunStatus({
+            totalSlots: createdSlots.length,
+            assignedSlots: assignmentResult.generatedAssignments.length
+          }),
+          parametersJson: finalParameters,
+          completedAt: generatedAt
+        }
       });
 
       await onProgramGenerated(
@@ -222,10 +309,7 @@ export function GenerateSchedulePage({
 
     try {
       await deleteGeneratedProgram({
-        runId: run.id,
-        scheduleSlots,
-        scheduleAssignments,
-        scheduleWarnings
+        runId: run.id
       });
       setProgramPendingDelete(null);
       await onProgramDeleted(
@@ -507,4 +591,32 @@ function qualityGradeLabel(
   };
 
   return labels[grade];
+}
+
+function buildGeneratedRunStatus({
+  totalSlots,
+  assignedSlots
+}: {
+  totalSlots: number;
+  assignedSlots: number;
+}): string {
+  if (totalSlots === 0) {
+    return "generated";
+  }
+
+  if (assignedSlots === totalSlots) {
+    return "assigned";
+  }
+
+  return assignedSlots > 0 ? "partially_assigned" : "unfilled";
+}
+
+function createClientId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function assignmentOriginForWrite(
+  source: ScheduleAssignmentSource
+): ScheduleAssignmentOrigin {
+  return source === "locked_manual" ? "manual" : source;
 }

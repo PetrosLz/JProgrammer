@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { runSolverProcess } from "../src/main/solver/solverProcess";
 import {
   buildCoverageCeilingAnalysis,
+  buildCpSatSolveRequest,
   buildManagerScheduleDiagnostics,
   buildScheduleGenerationPlan,
   assignEmployeesToRun,
   diagnoseCoverageCeiling,
   evaluateSchedule,
+  getCpSatGeneratedAssignments,
   optimizeScheduleInMemory,
   setManualAssignmentLock,
   validateScheduleHardConstraints
@@ -16,6 +18,7 @@ import { databaseApi } from "../src/renderer/services/databaseApi";
 import type {
   CpSatAssignment,
   CpSatSolveRequest,
+  CpSatSolveResult,
   SolverAvailability
 } from "../src/shared/solverTypes";
 import {
@@ -1278,12 +1281,21 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
     }
   },
   {
-    name: "manual assignment lock helper writes explicit lock source metadata",
+    name: "assignment lock helper preserves automatic and manual source origins",
     run: async () => {
       const fixture = createFixture({ assignments: [] });
-      const assignment = {
+      const automaticAssignment = {
         ...createAssignment(
-          "as-lock-source",
+          "as-lock-auto",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        source: "automatic_cp_sat" as const
+      };
+      const manualAssignment = {
+        ...createAssignment(
+          "as-lock-manual",
           fixture.run.id,
           fixture.slots[0].id,
           fixture.employees[0].id
@@ -1308,12 +1320,22 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       }) as typeof databaseApi.updateRecord;
 
       try {
-        await setManualAssignmentLock({ assignment, locked: true });
+        await setManualAssignmentLock({
+          assignment: automaticAssignment,
+          locked: true
+        });
         await setManualAssignmentLock({
           assignment: {
-            ...assignment,
-            is_locked: 1,
-            source: "locked_manual"
+            ...automaticAssignment,
+            is_locked: 1
+          },
+          locked: false
+        });
+        await setManualAssignmentLock({ assignment: manualAssignment, locked: true });
+        await setManualAssignmentLock({
+          assignment: {
+            ...manualAssignment,
+            is_locked: 1
           },
           locked: false
         });
@@ -1321,24 +1343,172 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         assert.deepEqual(updates, [
           {
             tableName: "schedule_assignments",
-            id: "as-lock-source",
+            id: "as-lock-auto",
             data: {
-              is_locked: true,
-              source: "locked_manual"
+              is_locked: true
             }
           },
           {
             tableName: "schedule_assignments",
-            id: "as-lock-source",
+            id: "as-lock-auto",
             data: {
-              is_locked: false,
-              source: "manual"
+              is_locked: false
+            }
+          },
+          {
+            tableName: "schedule_assignments",
+            id: "as-lock-manual",
+            data: {
+              is_locked: true
+            }
+          },
+          {
+            tableName: "schedule_assignments",
+            id: "as-lock-manual",
+            data: {
+              is_locked: false
             }
           }
         ]);
       } finally {
         databaseApi.updateRecord = originalUpdateRecord;
       }
+    }
+  },
+  {
+    name: "CP-SAT adapter fixes only persisted locked assignments",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      const runSlots = [
+        fixture.slots[0],
+        createSlot({
+          id: "slot-cp-unlocked",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "13:00",
+          endTime: "17:00",
+          status: "filled"
+        })
+      ];
+      const lockedAssignment = {
+        ...createAssignment(
+          "as-cp-lock",
+          fixture.run.id,
+          runSlots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 1 as const,
+        source: "automatic_cp_sat" as const
+      };
+      const unlockedAssignment = {
+        ...createAssignment(
+          "as-cp-unlocked",
+          fixture.run.id,
+          runSlots[1].id,
+          fixture.employees[1].id
+        ),
+        is_manual_override: 1 as const,
+        is_locked: 0 as const,
+        source: "manual" as const
+      };
+      const request = buildCpSatSolveRequest({
+        requestId: "cp-sat-lock-semantics",
+        run: fixture.run,
+        runSlots,
+        employees: fixture.employees,
+        employeeRoles: [
+          ...fixture.employeeRoles,
+          createEmployeeRole(
+            "er-cp-unlocked-candidate",
+            fixture.employees[1].id,
+            fixture.roles[0].id
+          )
+        ],
+        data: {
+          employeeRoles: [
+            ...fixture.employeeRoles,
+            createEmployeeRole(
+              "er-cp-unlocked-candidate",
+              fixture.employees[1].id,
+              fixture.roles[0].id
+            )
+          ],
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          staffingRequirements: fixture.staffingRequirements,
+          timeOff: fixture.timeOff,
+          weekStartsOn: 1
+        },
+        activeRunAssignments: [lockedAssignment, unlockedAssignment],
+        timeoutSeconds: 1
+      });
+      const fixedBySlot = new Map(
+        request.existingAssignments.map((assignment) => [
+          assignment.slotId,
+          assignment.locked
+        ])
+      );
+
+      assert.equal(fixedBySlot.get(runSlots[0].id), true);
+      assert.equal(fixedBySlot.get(runSlots[1].id), false);
+      assert(
+        request.eligibility.some(
+          (pair) => pair.slotId === runSlots[1].id
+        ),
+        "unlocked assignment slot remains eligible instead of being fixed"
+      );
+
+      const result: CpSatSolveResult = {
+        requestId: request.requestId,
+        assignments: [
+          {
+            scheduleSlotId: runSlots[0].id,
+            employeeId: lockedAssignment.employee_id
+          },
+          {
+            scheduleSlotId: runSlots[1].id,
+            employeeId: fixture.employees[0].id
+          }
+        ],
+        status: "FEASIBLE",
+        objectiveValues: {
+          coveredSlots: 2,
+          totalSlots: 2,
+          coverageRate: 1
+        },
+        coverageProvenOptimal: false,
+        fullLexicographicOptimality: false,
+        objectiveStages: {
+          coverage: {
+            value: 2,
+            status: "FEASIBLE",
+            provenOptimal: false
+          }
+        },
+        hintDiagnostics: {
+          received: 0,
+          accepted: 0,
+          ignored: 0
+        },
+        pythonVersion: null,
+        ortoolsVersion: null,
+        runtimeMs: 1,
+        message: null
+      };
+
+      assert.deepEqual(getCpSatGeneratedAssignments({
+        result,
+        activeRunAssignments: [lockedAssignment, unlockedAssignment]
+      }), [
+        {
+          scheduleSlotId: runSlots[1].id,
+          employeeId: fixture.employees[0].id
+        }
+      ]);
     }
   },
   {

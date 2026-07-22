@@ -263,12 +263,15 @@ function maybeLockFirstEligibleAssignment(
   }
 
   scenario.existingAssignments = [
-    createAssignment(
-      `locked-${slug(scenario.name)}`,
-      scenario.run.id,
-      pair.slotId,
-      pair.employeeId
-    )
+    {
+      ...createAssignment(
+        `locked-${slug(scenario.name)}`,
+        scenario.run.id,
+        pair.slotId,
+        pair.employeeId
+      ),
+      is_locked: 1 as const
+    }
   ];
 }
 

@@ -1001,7 +1001,10 @@ function createCoverableScenario({
   if (locked && employees[0]) {
     const { slots } = buildGeneratedScenarioRun(scenario, slug(name));
     scenario.existingAssignments = [
-      createAssignment(`locked-${slug(name)}`, run.id, slots[0].id, employees[0].id)
+      {
+        ...createAssignment(`locked-${slug(name)}`, run.id, slots[0].id, employees[0].id),
+        is_locked: 1 as const
+      }
     ];
   }
 

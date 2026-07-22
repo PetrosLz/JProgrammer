@@ -6,8 +6,16 @@ import {
   applyVersionedMigrations,
   latestSchemaVersion
 } from "../src/main/migrations";
-import { persistValidatedScheduleBatchInTransaction } from "../src/main/schedulePersistence";
-import type { PersistValidatedScheduleBatchRequest } from "../src/shared/types";
+import {
+  deleteScheduleRunGraphInTransaction,
+  persistCompleteGeneratedScheduleInTransaction,
+  persistManualAssignmentChangeInTransaction,
+  persistValidatedScheduleBatchInTransaction
+} from "../src/main/schedulePersistence";
+import type {
+  PersistCompleteGeneratedScheduleRequest,
+  PersistValidatedScheduleBatchRequest
+} from "../src/shared/types";
 
 type SqliteDatabase = Database.Database;
 
@@ -33,7 +41,11 @@ const tests: TestCase[] = [
   { name: "validated schedule batch commits all rows atomically", run: testValidatedScheduleBatchSuccess },
   { name: "validated schedule batch rolls back on mid-transaction failure", run: testValidatedScheduleBatchRollback },
   { name: "validated schedule batch preserves manual assignments and rejects wrong-run slots", run: testValidatedScheduleBatchExistingData },
-  { name: "validated schedule batch duplicate execution is idempotent", run: testValidatedScheduleBatchDuplicateExecution }
+  { name: "validated schedule batch duplicate execution is idempotent", run: testValidatedScheduleBatchDuplicateExecution },
+  { name: "complete generated schedule persists the full graph atomically", run: testCompleteGeneratedScheduleSuccess },
+  { name: "complete generated schedule rolls back on insertion and finalization failures", run: testCompleteGeneratedScheduleRollback },
+  { name: "manual assignment transaction commits and rolls back safely", run: testManualAssignmentChangeTransaction },
+  { name: "schedule graph deletion commits and rolls back safely", run: testDeleteScheduleRunGraphTransaction }
 ];
 
 let passed = 0;
@@ -568,6 +580,275 @@ function testValidatedScheduleBatchDuplicateExecution(): void {
   db.close();
 }
 
+function testCompleteGeneratedScheduleSuccess(): void {
+  const db = createScheduleBatchDatabase();
+  const request = createCompleteScheduleRequest();
+  const result = persistCompleteGeneratedScheduleInTransaction(db, request);
+
+  assertEqual(result.runInserted, 1, "complete schedule inserted run");
+  assertEqual(result.slotsInserted, 2, "complete schedule inserted slots");
+  assertEqual(result.assignmentsInserted, 1, "complete schedule inserted assignments");
+  assertEqual(result.warningsInserted, 1, "complete schedule inserted warnings");
+  assertEqual(
+    getValue<string>(db, "SELECT status FROM schedule_runs WHERE id = 'run-complete'"),
+    "partially_assigned",
+    "complete schedule finalized run status"
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      "SELECT COUNT(*) FROM schedule_slots WHERE schedule_run_id = 'run-complete'"
+    ),
+    2,
+    "complete schedule slots committed"
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      "SELECT COUNT(*) FROM schedule_slots WHERE schedule_run_id = 'run-complete' AND status = 'filled'"
+    ),
+    1,
+    "complete schedule filled slot committed"
+  );
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT source FROM schedule_assignments WHERE id = 'as-complete-1'"
+    ),
+    "automatic_heuristic",
+    "complete schedule assignment source committed"
+  );
+
+  db.close();
+}
+
+function testCompleteGeneratedScheduleRollback(): void {
+  const failureTriggers = [
+    {
+      name: "fail_complete_run_insert",
+      sql: `CREATE TRIGGER fail_complete_run_insert
+            BEFORE INSERT ON schedule_runs
+            WHEN NEW.id = 'run-complete'
+            BEGIN
+              SELECT RAISE(ABORT, 'forced run insert failure');
+            END`
+    },
+    {
+      name: "fail_complete_slot_insert",
+      sql: `CREATE TRIGGER fail_complete_slot_insert
+            BEFORE INSERT ON schedule_slots
+            WHEN NEW.id = 'slot-complete-2'
+            BEGIN
+              SELECT RAISE(ABORT, 'forced slot insert failure');
+            END`
+    },
+    {
+      name: "fail_complete_assignment_insert",
+      sql: `CREATE TRIGGER fail_complete_assignment_insert
+            BEFORE INSERT ON schedule_assignments
+            WHEN NEW.id = 'as-complete-1'
+            BEGIN
+              SELECT RAISE(ABORT, 'forced assignment insert failure');
+            END`
+    },
+    {
+      name: "fail_complete_warning_insert",
+      sql: `CREATE TRIGGER fail_complete_warning_insert
+            BEFORE INSERT ON schedule_warnings
+            WHEN NEW.id = 'warn-complete-1'
+            BEGIN
+              SELECT RAISE(ABORT, 'forced warning insert failure');
+            END`
+    },
+    {
+      name: "fail_complete_run_finalize",
+      sql: `CREATE TRIGGER fail_complete_run_finalize
+            BEFORE UPDATE ON schedule_runs
+            WHEN OLD.id = 'run-complete' AND NEW.status = 'partially_assigned'
+            BEGIN
+              SELECT RAISE(ABORT, 'forced run finalization failure');
+            END`
+    }
+  ];
+
+  for (const trigger of failureTriggers) {
+    const db = createScheduleBatchDatabase();
+    db.exec(trigger.sql);
+
+    assertThrows(
+      () =>
+        persistCompleteGeneratedScheduleInTransaction(
+          db,
+          createCompleteScheduleRequest()
+        ),
+      `${trigger.name} should roll back complete schedule transaction`
+    );
+    assertRunGraphCount(db, "run-complete", 0, 0, 0, 0, trigger.name);
+    db.close();
+  }
+}
+
+function testManualAssignmentChangeTransaction(): void {
+  const db = createScheduleBatchDatabase();
+  db.prepare(
+    `INSERT INTO schedule_assignments (
+      id,
+      schedule_run_id,
+      schedule_slot_id,
+      employee_id,
+      status,
+      is_manual_override,
+      is_locked,
+      source,
+      notes
+    ) VALUES ('as-manual-current', 'run-batch', 'slot-batch-1', 'emp-batch-1', 'assigned', 0, 0, 'automatic_cp_sat', 'auto')`
+  ).run();
+  db.prepare("UPDATE schedule_slots SET status = 'filled' WHERE id = 'slot-batch-1'").run();
+
+  const result = persistManualAssignmentChangeInTransaction(db, {
+    scheduleRunId: "run-batch",
+    scheduleSlotId: "slot-batch-1",
+    currentAssignmentId: "as-manual-current",
+    nextAssignmentId: "as-manual-next",
+    nextEmployeeId: "emp-batch-2",
+    assignmentNotes: "manual change",
+    softWarnings: [
+      {
+        id: "warn-manual-soft",
+        scheduleSlotId: "slot-batch-1",
+        scheduleAssignmentId: null,
+        severity: "warning",
+        warningType: "manual_override_warning",
+        message: "manual warning"
+      }
+    ],
+    hardWarnings: [],
+    allowHardOverride: false
+  });
+
+  assertEqual(result.assignmentUpdated, true, "manual reassignment updated assignment");
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT employee_id FROM schedule_assignments WHERE id = 'as-manual-current'"
+    ),
+    "emp-batch-2",
+    "manual reassignment committed employee"
+  );
+  assertEqual(
+    getValue<string>(
+      db,
+      "SELECT source FROM schedule_assignments WHERE id = 'as-manual-current'"
+    ),
+    "manual",
+    "manual reassignment source committed"
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      "SELECT COUNT(*) FROM schedule_warnings WHERE id = 'warn-manual-soft'"
+    ),
+    1,
+    "manual reassignment warning committed"
+  );
+  db.close();
+
+  const rollbackDb = createScheduleBatchDatabase();
+  rollbackDb.prepare(
+    `INSERT INTO schedule_assignments (
+      id,
+      schedule_run_id,
+      schedule_slot_id,
+      employee_id,
+      status,
+      is_manual_override,
+      is_locked,
+      source,
+      notes
+    ) VALUES ('as-manual-current', 'run-batch', 'slot-batch-1', 'emp-batch-1', 'assigned', 0, 0, 'automatic_cp_sat', 'auto')`
+  ).run();
+  rollbackDb.exec(
+    `CREATE TRIGGER fail_manual_assignment_update
+     BEFORE UPDATE ON schedule_assignments
+     WHEN OLD.id = 'as-manual-current'
+     BEGIN
+       SELECT RAISE(ABORT, 'forced manual assignment failure');
+     END`
+  );
+
+  assertThrows(
+    () =>
+      persistManualAssignmentChangeInTransaction(rollbackDb, {
+        scheduleRunId: "run-batch",
+        scheduleSlotId: "slot-batch-1",
+        currentAssignmentId: "as-manual-current",
+        nextAssignmentId: "as-manual-next",
+        nextEmployeeId: "emp-batch-2",
+        assignmentNotes: "manual change",
+        softWarnings: [],
+        hardWarnings: [],
+        allowHardOverride: false
+      }),
+    "manual assignment update failure should roll back"
+  );
+  assertEqual(
+    getValue<string>(
+      rollbackDb,
+      "SELECT employee_id FROM schedule_assignments WHERE id = 'as-manual-current'"
+    ),
+    "emp-batch-1",
+    "manual rollback preserved original employee"
+  );
+  assertEqual(
+    getValue<number>(
+      rollbackDb,
+      "SELECT COUNT(*) FROM schedule_warnings WHERE schedule_run_id = 'run-batch'"
+    ),
+    0,
+    "manual rollback inserted no warnings"
+  );
+  rollbackDb.close();
+}
+
+function testDeleteScheduleRunGraphTransaction(): void {
+  const db = createScheduleBatchDatabase();
+  persistCompleteGeneratedScheduleInTransaction(db, createCompleteScheduleRequest());
+  const result = deleteScheduleRunGraphInTransaction(db, {
+    scheduleRunId: "run-complete"
+  });
+
+  assertEqual(result.runDeleted, true, "delete transaction removed run");
+  assertEqual(result.slotsDeleted, 2, "delete transaction counted slots");
+  assertEqual(result.assignmentsDeleted, 1, "delete transaction counted assignments");
+  assertEqual(result.warningsDeleted, 1, "delete transaction counted warnings");
+  assertRunGraphCount(db, "run-complete", 0, 0, 0, 0, "delete success");
+  db.close();
+
+  const rollbackDb = createScheduleBatchDatabase();
+  persistCompleteGeneratedScheduleInTransaction(
+    rollbackDb,
+    createCompleteScheduleRequest()
+  );
+  rollbackDb.exec(
+    `CREATE TRIGGER fail_schedule_run_delete
+     BEFORE DELETE ON schedule_runs
+     WHEN OLD.id = 'run-complete'
+     BEGIN
+       SELECT RAISE(ABORT, 'forced delete failure');
+     END`
+  );
+
+  assertThrows(
+    () =>
+      deleteScheduleRunGraphInTransaction(rollbackDb, {
+        scheduleRunId: "run-complete"
+      }),
+    "schedule run delete failure should roll back"
+  );
+  assertRunGraphCount(rollbackDb, "run-complete", 1, 2, 1, 1, "delete rollback");
+  rollbackDb.close();
+}
+
 function createMemoryDatabase(): SqliteDatabase {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
@@ -671,6 +952,81 @@ function createScheduleBatchRequest(): PersistValidatedScheduleBatchRequest {
         message: "test warning two"
       }
     ]
+  };
+}
+
+function createCompleteScheduleRequest(): PersistCompleteGeneratedScheduleRequest {
+  return {
+    run: {
+      id: "run-complete",
+      name: "Complete run",
+      startDate: "2026-05-18",
+      endDate: "2026-05-24",
+      status: "generating",
+      parametersJson: "{\"stage\":\"slot_generation\"}",
+      completedAt: null
+    },
+    slots: [
+      {
+        id: "slot-complete-1",
+        date: "2026-05-18",
+        roleId: "role-service",
+        startTime: "08:00",
+        endTime: "12:00",
+        requiredCount: 1,
+        requirementGroupId: "group-complete-1",
+        minimumExperienceLevel: "no_experience",
+        experiencedRequiredCount: 0,
+        status: "filled",
+        sourceType: "staffing_requirement",
+        sourceId: "req-complete-1",
+        slotNumber: 1,
+        notes: "complete slot one"
+      },
+      {
+        id: "slot-complete-2",
+        date: "2026-05-18",
+        roleId: "role-service",
+        startTime: "12:00",
+        endTime: "16:00",
+        requiredCount: 1,
+        requirementGroupId: "group-complete-2",
+        minimumExperienceLevel: "no_experience",
+        experiencedRequiredCount: 0,
+        status: "unfilled",
+        sourceType: "staffing_requirement",
+        sourceId: "req-complete-2",
+        slotNumber: 1,
+        notes: "complete slot two"
+      }
+    ],
+    assignments: [
+      {
+        id: "as-complete-1",
+        scheduleSlotId: "slot-complete-1",
+        employeeId: "emp-batch-1",
+        status: "assigned",
+        isManualOverride: 0,
+        isLocked: 0,
+        source: "automatic_heuristic",
+        notes: "auto complete"
+      }
+    ],
+    warnings: [
+      {
+        id: "warn-complete-1",
+        scheduleSlotId: "slot-complete-2",
+        scheduleAssignmentId: null,
+        severity: "warning",
+        warningType: "slot_unfilled",
+        message: "slot unfilled"
+      }
+    ],
+    runUpdate: {
+      status: "partially_assigned",
+      parametersJson: "{\"stage\":\"employee_assignment\"}",
+      completedAt: "2026-05-18T12:00:00.000Z"
+    }
   };
 }
 
@@ -1210,6 +1566,46 @@ function readUserVersion(db: SqliteDatabase): number {
 
 function countRows(db: SqliteDatabase, tableName: string): number {
   return getValue<number>(db, `SELECT COUNT(*) FROM ${tableName}`);
+}
+
+function assertRunGraphCount(
+  db: SqliteDatabase,
+  runId: string,
+  expectedRuns: number,
+  expectedSlots: number,
+  expectedAssignments: number,
+  expectedWarnings: number,
+  label: string
+): void {
+  assertEqual(
+    getValue<number>(db, `SELECT COUNT(*) FROM schedule_runs WHERE id = '${runId}'`),
+    expectedRuns,
+    `${label}: run count`
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      `SELECT COUNT(*) FROM schedule_slots WHERE schedule_run_id = '${runId}'`
+    ),
+    expectedSlots,
+    `${label}: slot count`
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      `SELECT COUNT(*) FROM schedule_assignments WHERE schedule_run_id = '${runId}'`
+    ),
+    expectedAssignments,
+    `${label}: assignment count`
+  );
+  assertEqual(
+    getValue<number>(
+      db,
+      `SELECT COUNT(*) FROM schedule_warnings WHERE schedule_run_id = '${runId}'`
+    ),
+    expectedWarnings,
+    `${label}: warning count`
+  );
 }
 
 function getRow<T>(db: SqliteDatabase, sql: string): T {

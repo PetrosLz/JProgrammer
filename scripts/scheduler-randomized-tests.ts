@@ -431,12 +431,15 @@ function maybeAddLockedAssignment({
   }
 
   scenario.existingAssignments = [
-    createAssignment(
-      `locked-${scenario.run.id}`,
-      scenario.run.id,
-      pair.slotId,
-      pair.employeeId
-    )
+    {
+      ...createAssignment(
+        `locked-${scenario.run.id}`,
+        scenario.run.id,
+        pair.slotId,
+        pair.employeeId
+      ),
+      is_locked: 1 as const
+    }
   ];
 }
 

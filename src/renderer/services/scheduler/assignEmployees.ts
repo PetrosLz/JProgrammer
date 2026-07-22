@@ -13,6 +13,7 @@ import type {
   ScheduleAssignment,
   ScheduleRun,
   ScheduleSlot,
+  ScheduleAssignmentOrigin,
   ScheduleAssignmentSource,
   ShiftTemplate,
   StaffingRequirement,
@@ -270,8 +271,9 @@ export async function assignEmployeesToRun({
       assignment.status !== "cancelled" &&
       assignment.status !== "removed"
   );
+  const lockedRunAssignments = activeRunAssignments.filter(isLockedAssignment);
   const assignedSlotIds = new Set(
-    activeRunAssignments.map((assignment) => assignment.schedule_slot_id)
+    lockedRunAssignments.map((assignment) => assignment.schedule_slot_id)
   );
   const alreadyAssignedSlots = assignedSlotIds.size;
   const slotsToAssign = runSlots.filter(
@@ -290,7 +292,7 @@ export async function assignEmployeesToRun({
   const optimizationConfig = defaultSchedulerOptimizationConfig;
   const initialAssignedShifts: AssignedShift[] = buildExistingAssignedShifts({
     slots: runSlots,
-    assignments: activeRunAssignments
+    assignments: lockedRunAssignments
   });
   const activeEmployees = sortEmployees(employees).filter(
     (employee) => employee.is_active === 1
@@ -302,7 +304,6 @@ export async function assignEmployeesToRun({
     staffingRequirements
   });
   const pendingWarnings: SchedulerWarningDraft[] = [];
-  let warningsCreated = 0;
 
   if (slotsToAssign.length === 0) {
     const noSlotsWarning = createNoSlotsWarning(run.id);
@@ -394,6 +395,7 @@ export async function assignEmployeesToRun({
     data,
     initialAssignedShifts,
     activeRunAssignments,
+    lockedRunAssignments,
     rotationHistory,
     optimizationConfig,
     staffingRequirements,
@@ -407,7 +409,7 @@ export async function assignEmployeesToRun({
   );
   const candidateFinalAssignments = buildSyntheticAssignments({
     run,
-    fixedAssignments: activeRunAssignments,
+    fixedAssignments: lockedRunAssignments,
     plannedAssignments: sortedPlannedAssignments
   });
   const candidateValidation = validateScheduleHardConstraints({
@@ -419,31 +421,6 @@ export async function assignEmployeesToRun({
   });
 
   if (!candidateValidation.valid) {
-    for (const violation of candidateValidation.violations) {
-      await saveWarning({
-        scheduleRunId: run.id,
-        scheduleSlotId: violation.slotId,
-        scheduleAssignmentId: null,
-        severity: "critical",
-        warningType: "final_hard_constraint_violation",
-        message: `Critical validation issue: ${violation.message}`
-      });
-      warningsCreated += 1;
-    }
-
-    await databaseApi.updateRecord("schedule_runs", run.id, {
-      status: "needs_review",
-      parameters_json: mergeRunParameters(
-        run.parameters_json,
-        diagnostics,
-        optimizerPlan.selectedSchedule,
-        feasibility,
-        optimizationConfig,
-        optimizerPlan.selectedSchedule?.evaluation,
-        optimizerPlan.telemetry
-      )
-    });
-
     throw new Error(
       `Automatic schedule validation failed with ${candidateValidation.violations.length} hard-rule issue(s). No assignments were saved.`
     );
@@ -457,7 +434,7 @@ export async function assignEmployeesToRun({
         ? "automatic_cp_sat"
         : "automatic_heuristic"
   });
-  const finalAssignments = [...activeRunAssignments, ...automaticAssignments];
+  const finalAssignments = [...lockedRunAssignments, ...automaticAssignments];
   const finalAssignedSlotIds = new Set([
     ...assignedSlotIds,
     ...automaticAssignments.map((assignment) => assignment.schedule_slot_id)
@@ -601,8 +578,9 @@ export function optimizeScheduleInMemory({
       assignment.status !== "cancelled" &&
       assignment.status !== "removed"
   );
+  const lockedRunAssignments = activeRunAssignments.filter(isLockedAssignment);
   const assignedSlotIds = new Set(
-    activeRunAssignments.map((assignment) => assignment.schedule_slot_id)
+    lockedRunAssignments.map((assignment) => assignment.schedule_slot_id)
   );
   const alreadyAssignedSlots = assignedSlotIds.size;
   const slotsToAssign = runSlots.filter(
@@ -620,7 +598,7 @@ export function optimizeScheduleInMemory({
   };
   const initialAssignedShifts = buildExistingAssignedShifts({
     slots: runSlots,
-    assignments: activeRunAssignments
+    assignments: lockedRunAssignments
   });
   const activeEmployees = sortEmployees(employees).filter(
     (employee) => employee.is_active === 1
@@ -639,7 +617,7 @@ export function optimizeScheduleInMemory({
     const evaluation = evaluateSchedule({
       run,
       slots: runSlots,
-      assignments: activeRunAssignments,
+      assignments: lockedRunAssignments,
       employees,
       roles,
       employeeRoles,
@@ -661,7 +639,7 @@ export function optimizeScheduleInMemory({
       attemptedSlots: 0,
       assignedSlots: 0,
       unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
-      assignments: activeRunAssignments,
+      assignments: lockedRunAssignments,
       generatedAssignments: [],
       warnings,
       explanations: [],
@@ -719,7 +697,7 @@ export function optimizeScheduleInMemory({
     activeEmployees,
     data,
     initialAssignedShifts,
-    fixedAssignments: activeRunAssignments,
+    fixedAssignments: lockedRunAssignments,
     rotationHistory,
     manualOverrides,
     staffingRequirements,
@@ -743,7 +721,7 @@ export function optimizeScheduleInMemory({
           plannedAssignment.scheduleSlotId === assignment.schedule_slot_id
       )?.explanation ?? assignment.notes
   }));
-  const finalAssignments = [...activeRunAssignments, ...generatedAssignments];
+  const finalAssignments = [...lockedRunAssignments, ...generatedAssignments];
   const finalAssignedSlotIds = new Set([
     ...assignedSlotIds,
     ...generatedAssignments.map((assignment) => assignment.schedule_slot_id)
@@ -873,6 +851,16 @@ function buildAutomaticAssignmentRecords({
   }));
 }
 
+function isLockedAssignment(assignment: ScheduleAssignment): boolean {
+  return assignment.is_locked === 1;
+}
+
+function assignmentOriginForWrite(
+  source: ScheduleAssignmentSource
+): ScheduleAssignmentOrigin {
+  return source === "locked_manual" ? "manual" : source;
+}
+
 function buildPersistValidatedScheduleRequest({
   run,
   automaticAssignments,
@@ -913,7 +901,7 @@ function buildPersistValidatedScheduleRequest({
       status: assignment.status,
       isManualOverride: assignment.is_manual_override,
       isLocked: assignment.is_locked,
-      source: assignment.source,
+      source: assignmentOriginForWrite(assignment.source),
       notes: assignment.notes
     })),
     slotUpdates: runSlots
@@ -960,6 +948,7 @@ async function selectOptimizerPlan({
   data,
   initialAssignedShifts,
   activeRunAssignments,
+  lockedRunAssignments,
   rotationHistory,
   optimizationConfig,
   staffingRequirements,
@@ -977,6 +966,7 @@ async function selectOptimizerPlan({
   data: SchedulerData;
   initialAssignedShifts: AssignedShift[];
   activeRunAssignments: ScheduleAssignment[];
+  lockedRunAssignments: ScheduleAssignment[];
   rotationHistory: RotationHistoryMap;
   optimizationConfig: OptimizationConfig;
   staffingRequirements: StaffingRequirement[];
@@ -994,7 +984,7 @@ async function selectOptimizerPlan({
       activeEmployees,
       data,
       initialAssignedShifts,
-      fixedAssignments: activeRunAssignments,
+      fixedAssignments: lockedRunAssignments,
       rotationHistory,
       manualOverrides,
       staffingRequirements,
@@ -1082,7 +1072,7 @@ async function selectOptimizerPlan({
     );
     const syntheticAssignments = buildSyntheticAssignments({
       run,
-      fixedAssignments: activeRunAssignments,
+      fixedAssignments: lockedRunAssignments,
       plannedAssignments
     });
     const validation = validateScheduleHardConstraints({
@@ -4659,53 +4649,6 @@ function buildFeasibilityManagerSummary(
   }
 
   return fallbackMessage;
-}
-
-async function saveWarning(warning: SchedulerWarningDraft): Promise<void> {
-  await databaseApi.createRecord("schedule_warnings", {
-    schedule_run_id: warning.scheduleRunId,
-    schedule_slot_id: warning.scheduleSlotId,
-    schedule_assignment_id: warning.scheduleAssignmentId,
-    severity: warning.severity,
-    warning_type: warning.warningType,
-    message: warning.message
-  });
-}
-
-async function updateRunStatus(
-  run: ScheduleRun,
-  totalSlots: number,
-  assignedSlots: number,
-  diagnostics?: ReturnType<typeof buildSchedulerDiagnostics>,
-  selectedSchedule?: CandidateSchedule,
-  feasibility?: FeasibilityResult,
-  optimizationConfig: OptimizationConfig = defaultSchedulerOptimizationConfig,
-  evaluation?: ScheduleEvaluationResult
-): Promise<void> {
-  const status =
-    totalSlots === 0
-      ? "generated"
-      : assignedSlots === totalSlots
-        ? "assigned"
-        : assignedSlots > 0
-          ? "partially_assigned"
-          : "unfilled";
-  const runUpdate = buildRunUpdate(
-    run,
-    totalSlots,
-    assignedSlots,
-    diagnostics,
-    selectedSchedule,
-    feasibility,
-    optimizationConfig,
-    evaluation
-  );
-
-  await databaseApi.updateRecord("schedule_runs", run.id, {
-    status,
-    parameters_json: runUpdate.parametersJson,
-    completed_at: runUpdate.completedAt
-  });
 }
 
 function buildRunUpdate(

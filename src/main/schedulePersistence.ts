@@ -1,8 +1,16 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import type {
+  DeleteScheduleRunGraphRequest,
+  DeleteScheduleRunGraphResult,
+  PersistCompleteGeneratedScheduleRequest,
+  PersistCompleteGeneratedScheduleResult,
+  PersistCompleteGeneratedScheduleSlotInput,
+  PersistManualAssignmentChangeRequest,
+  PersistManualAssignmentChangeResult,
   PersistValidatedScheduleAssignmentInput,
   PersistValidatedScheduleBatchRequest,
   PersistValidatedScheduleBatchResult,
+  ScheduleAssignmentOrigin,
   ScheduleAssignmentSource,
   PersistValidatedScheduleWarningInput
 } from "../shared/types";
@@ -88,6 +96,177 @@ export function persistValidatedScheduleBatchInTransaction(
   })();
 }
 
+export function persistCompleteGeneratedScheduleInTransaction(
+  db: SqliteDatabase,
+  request: PersistCompleteGeneratedScheduleRequest
+): PersistCompleteGeneratedScheduleResult {
+  return db.transaction(() => {
+    validateCompleteGeneratedScheduleRequest(request);
+    verifyRunDoesNotExist(db, request.run.id);
+
+    const runInserted = insertGeneratedRun(db, request);
+    const slotsInserted = insertGeneratedSlots(db, request);
+    const batchRequest: PersistValidatedScheduleBatchRequest = {
+      scheduleRunId: request.run.id,
+      assignments: request.assignments,
+      slotUpdates: [],
+      runUpdate: request.runUpdate,
+      warnings: request.warnings
+    };
+    const assignmentIds = new Set(request.assignments.map((item) => item.id));
+
+    verifySlotsBelongToRun(
+      db,
+      request.run.id,
+      collectReferencedSlotIds(batchRequest)
+    );
+    verifyEmployeesExist(
+      db,
+      request.assignments.map((assignment) => assignment.employeeId)
+    );
+    verifyAssignmentsReferenceRunSlots(db, batchRequest);
+    verifyWarningAssignmentReferences(db, batchRequest, assignmentIds);
+    verifyNoDuplicateRequestAssignments(request.assignments);
+    verifyNoDuplicateWarnings(request.warnings);
+    verifyNoConflictingExistingAssignments(db, batchRequest);
+    verifyNoConflictingExistingWarnings(db, batchRequest);
+
+    const assignmentsInserted = insertNewAssignments(db, batchRequest);
+    const warningsInserted = insertNewWarnings(db, batchRequest);
+    updateRun(db, batchRequest);
+
+    return {
+      runInserted,
+      slotsInserted,
+      assignmentsInserted,
+      warningsInserted
+    };
+  })();
+}
+
+export function persistManualAssignmentChangeInTransaction(
+  db: SqliteDatabase,
+  request: PersistManualAssignmentChangeRequest
+): PersistManualAssignmentChangeResult {
+  return db.transaction(() => {
+    validateManualAssignmentChangeRequest(request);
+    verifyRunExists(db, request.scheduleRunId);
+    verifySlotsBelongToRun(db, request.scheduleRunId, [request.scheduleSlotId]);
+
+    if (request.nextEmployeeId) {
+      verifyEmployeesExist(db, [request.nextEmployeeId]);
+    }
+
+    const currentAssignment = request.currentAssignmentId
+      ? getAssignmentForManualChange(
+          db,
+          request.currentAssignmentId,
+          request.scheduleRunId,
+          request.scheduleSlotId
+        )
+      : null;
+    const reusableAssignment =
+      request.nextEmployeeId === null
+        ? null
+        : findReusableManualAssignment({
+            db,
+            request,
+            currentAssignmentId: currentAssignment?.id ?? null
+          });
+    let assignmentInserted = false;
+    let assignmentUpdated = false;
+    let assignmentRemoved = false;
+    let slotStatus = "unfilled";
+
+    deleteManualAssignmentWarningsForSlot(db, request);
+
+    if (request.nextEmployeeId === null) {
+      if (currentAssignment) {
+        markAssignmentRemoved(db, currentAssignment.id);
+        assignmentRemoved = true;
+      }
+      updateSingleSlotStatus(db, request.scheduleRunId, request.scheduleSlotId, "unfilled");
+    } else {
+      const notes = request.assignmentNotes;
+
+      if (currentAssignment && reusableAssignment) {
+        markAssignmentRemoved(db, currentAssignment.id);
+        activateManualAssignment(db, reusableAssignment.id, request.nextEmployeeId, notes);
+        assignmentRemoved = true;
+        assignmentUpdated = true;
+      } else if (currentAssignment) {
+        updateManualAssignmentEmployee({
+          db,
+          assignmentId: currentAssignment.id,
+          employeeId: request.nextEmployeeId,
+          notes
+        });
+        assignmentUpdated = true;
+      } else if (reusableAssignment) {
+        activateManualAssignment(db, reusableAssignment.id, request.nextEmployeeId, notes);
+        assignmentUpdated = true;
+      } else {
+        if (!request.nextAssignmentId) {
+          throwPersistenceError(
+            "MANUAL_ASSIGNMENT_INVALID_REQUEST",
+            "nextAssignmentId is required when creating a manual assignment."
+          );
+        }
+        insertManualAssignment(db, request, notes);
+        assignmentInserted = true;
+      }
+
+      updateSingleSlotStatus(db, request.scheduleRunId, request.scheduleSlotId, "filled");
+      slotStatus = "filled";
+    }
+
+    const warningsInserted = insertManualAssignmentWarnings(db, request);
+
+    return {
+      assignmentInserted,
+      assignmentUpdated,
+      assignmentRemoved,
+      slotStatus,
+      warningsInserted
+    };
+  })();
+}
+
+export function deleteScheduleRunGraphInTransaction(
+  db: SqliteDatabase,
+  request: DeleteScheduleRunGraphRequest
+): DeleteScheduleRunGraphResult {
+  return db.transaction(() => {
+    requireNonEmptyString(request.scheduleRunId, "scheduleRunId");
+    verifyRunExists(db, request.scheduleRunId);
+
+    const slotsDeleted = countRunRows(db, "schedule_slots", request.scheduleRunId);
+    const assignmentsDeleted = countRunRows(
+      db,
+      "schedule_assignments",
+      request.scheduleRunId
+    );
+    const warningsDeleted = countRunRows(db, "schedule_warnings", request.scheduleRunId);
+    const result = db
+      .prepare("DELETE FROM schedule_runs WHERE id = ?")
+      .run(request.scheduleRunId);
+
+    if (result.changes !== 1) {
+      throwPersistenceError(
+        "SCHEDULE_DELETE_FAILED",
+        `Schedule run ${request.scheduleRunId} could not be deleted.`
+      );
+    }
+
+    return {
+      runDeleted: true,
+      slotsDeleted,
+      assignmentsDeleted,
+      warningsDeleted
+    };
+  })();
+}
+
 function validateRequestShape(request: PersistValidatedScheduleBatchRequest): void {
   requireNonEmptyString(request.scheduleRunId, "scheduleRunId");
 
@@ -155,6 +334,215 @@ function validateRequestShape(request: PersistValidatedScheduleBatchRequest): vo
     requireNonEmptyString(warning.warningType, "warning.warningType");
     requireNonEmptyString(warning.message, "warning.message");
   }
+}
+
+function validateCompleteGeneratedScheduleRequest(
+  request: PersistCompleteGeneratedScheduleRequest
+): void {
+  if (!request || typeof request !== "object") {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_INVALID_REQUEST",
+      "Complete schedule request is required."
+    );
+  }
+
+  requireNonEmptyString(request.run?.id, "run.id");
+  requireNonEmptyString(request.run?.name, "run.name");
+  requireNonEmptyString(request.run?.startDate, "run.startDate");
+  requireNonEmptyString(request.run?.endDate, "run.endDate");
+  requireNonEmptyString(request.run?.status, "run.status");
+
+  if (!Array.isArray(request.slots)) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_INVALID_REQUEST",
+      "Slots must be an array."
+    );
+  }
+
+  const slotIds = new Set<string>();
+  for (const slot of request.slots) {
+    validateCompleteGeneratedScheduleSlot(slot);
+    if (slotIds.has(slot.id)) {
+      throwPersistenceError(
+        "COMPLETE_SCHEDULE_DUPLICATE_SLOT_ID",
+        `Duplicate slot id ${slot.id} in complete schedule request.`
+      );
+    }
+    slotIds.add(slot.id);
+  }
+
+  validateRequestShape({
+    scheduleRunId: request.run.id,
+    assignments: request.assignments,
+    slotUpdates: [],
+    runUpdate: request.runUpdate,
+    warnings: request.warnings
+  });
+}
+
+function validateCompleteGeneratedScheduleSlot(
+  slot: PersistCompleteGeneratedScheduleSlotInput
+): void {
+  requireNonEmptyString(slot.id, "slot.id");
+  requireNonEmptyString(slot.date, "slot.date");
+  requireNonEmptyString(slot.roleId, "slot.roleId");
+  requireNonEmptyString(slot.startTime, "slot.startTime");
+  requireNonEmptyString(slot.endTime, "slot.endTime");
+  requireNonEmptyString(slot.status, "slot.status");
+
+  if (!Number.isInteger(slot.requiredCount) || slot.requiredCount < 0) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_INVALID_REQUEST",
+      `Slot ${slot.id} has invalid required count.`
+    );
+  }
+
+  if (
+    !Number.isInteger(slot.experiencedRequiredCount) ||
+    slot.experiencedRequiredCount < 0
+  ) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_INVALID_REQUEST",
+      `Slot ${slot.id} has invalid experienced required count.`
+    );
+  }
+
+  if (slot.slotNumber !== null && !Number.isInteger(slot.slotNumber)) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_INVALID_REQUEST",
+      `Slot ${slot.id} has invalid slot number.`
+    );
+  }
+}
+
+function validateManualAssignmentChangeRequest(
+  request: PersistManualAssignmentChangeRequest
+): void {
+  requireNonEmptyString(request.scheduleRunId, "scheduleRunId");
+  requireNonEmptyString(request.scheduleSlotId, "scheduleSlotId");
+
+  if (request.currentAssignmentId !== null) {
+    requireNonEmptyString(request.currentAssignmentId, "currentAssignmentId");
+  }
+
+  if (request.nextEmployeeId !== null) {
+    requireNonEmptyString(request.nextEmployeeId, "nextEmployeeId");
+    requireNonEmptyString(request.nextAssignmentId, "nextAssignmentId");
+  }
+
+  if (!Array.isArray(request.softWarnings) || !Array.isArray(request.hardWarnings)) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_INVALID_REQUEST",
+      "Manual assignment warnings must be arrays."
+    );
+  }
+
+  if (request.hardWarnings.length > 0 && request.allowHardOverride !== true) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_HARD_RULE_VIOLATION",
+      "Hard-rule manual assignment warnings require an explicit override."
+    );
+  }
+
+  verifyNoDuplicateWarnings([...request.softWarnings, ...request.hardWarnings]);
+}
+
+function verifyRunDoesNotExist(db: SqliteDatabase, scheduleRunId: string): void {
+  const run = db
+    .prepare("SELECT id FROM schedule_runs WHERE id = ?")
+    .get(scheduleRunId) as ScheduleRunRow | undefined;
+
+  if (run) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_RUN_ALREADY_EXISTS",
+      `Schedule run ${scheduleRunId} already exists.`
+    );
+  }
+}
+
+function insertGeneratedRun(
+  db: SqliteDatabase,
+  request: PersistCompleteGeneratedScheduleRequest
+): number {
+  const result = db
+    .prepare(
+      `INSERT INTO schedule_runs (
+        id,
+        name,
+        start_date,
+        end_date,
+        status,
+        parameters_json,
+        completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      request.run.id,
+      request.run.name,
+      request.run.startDate,
+      request.run.endDate,
+      request.run.status,
+      request.run.parametersJson,
+      request.run.completedAt
+    );
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "COMPLETE_SCHEDULE_RUN_INSERT_FAILED",
+      `Schedule run ${request.run.id} could not be inserted.`
+    );
+  }
+
+  return result.changes;
+}
+
+function insertGeneratedSlots(
+  db: SqliteDatabase,
+  request: PersistCompleteGeneratedScheduleRequest
+): number {
+  const insertSlot = db.prepare(
+    `INSERT INTO schedule_slots (
+      id,
+      schedule_run_id,
+      date,
+      role_id,
+      start_time,
+      end_time,
+      required_count,
+      requirement_group_id,
+      minimum_experience_level,
+      experienced_required_count,
+      status,
+      source_type,
+      source_id,
+      slot_number,
+      notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  let inserted = 0;
+
+  for (const slot of request.slots) {
+    insertSlot.run(
+      slot.id,
+      request.run.id,
+      slot.date,
+      slot.roleId,
+      slot.startTime,
+      slot.endTime,
+      slot.requiredCount,
+      slot.requirementGroupId,
+      slot.minimumExperienceLevel,
+      slot.experiencedRequiredCount,
+      slot.status,
+      slot.sourceType,
+      slot.sourceId,
+      slot.slotNumber,
+      slot.notes
+    );
+    inserted += 1;
+  }
+
+  return inserted;
 }
 
 function verifyRunExists(db: SqliteDatabase, scheduleRunId: string): void {
@@ -584,6 +972,285 @@ function updateRun(
   }
 }
 
+function getAssignmentForManualChange(
+  db: SqliteDatabase,
+  assignmentId: string,
+  scheduleRunId: string,
+  scheduleSlotId: string
+): ScheduleAssignmentRow {
+  const assignment = db
+    .prepare(
+      `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, is_locked, source, notes
+       FROM schedule_assignments
+       WHERE id = ?`
+    )
+    .get(assignmentId) as ScheduleAssignmentRow | undefined;
+
+  if (!assignment) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_NOT_FOUND",
+      `Assignment ${assignmentId} could not be found.`
+    );
+  }
+
+  if (
+    assignment.schedule_run_id !== scheduleRunId ||
+    assignment.schedule_slot_id !== scheduleSlotId
+  ) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_RUN_SLOT_MISMATCH",
+      `Assignment ${assignmentId} does not belong to the requested slot.`
+    );
+  }
+
+  return assignment;
+}
+
+function findReusableManualAssignment({
+  db,
+  request,
+  currentAssignmentId
+}: {
+  db: SqliteDatabase;
+  request: PersistManualAssignmentChangeRequest;
+  currentAssignmentId: string | null;
+}): ScheduleAssignmentRow | null {
+  const assignment = db
+    .prepare(
+      `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, is_locked, source, notes
+       FROM schedule_assignments
+       WHERE schedule_run_id = ?
+         AND schedule_slot_id = ?
+         AND employee_id = ?
+         AND (? IS NULL OR id <> ?)
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .get(
+      request.scheduleRunId,
+      request.scheduleSlotId,
+      request.nextEmployeeId,
+      currentAssignmentId,
+      currentAssignmentId
+    ) as ScheduleAssignmentRow | undefined;
+
+  return assignment ?? null;
+}
+
+function markAssignmentRemoved(
+  db: SqliteDatabase,
+  assignmentId: string
+): void {
+  const result = db
+    .prepare(
+      `UPDATE schedule_assignments
+       SET status = 'removed',
+           is_manual_override = 1,
+           is_locked = 0,
+           source = 'manual',
+           notes = 'Manual override: assignment removed by manager.',
+           updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(assignmentId);
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_REMOVE_FAILED",
+      `Assignment ${assignmentId} could not be removed.`
+    );
+  }
+}
+
+function activateManualAssignment(
+  db: SqliteDatabase,
+  assignmentId: string,
+  employeeId: string,
+  notes: string | null
+): void {
+  const result = db
+    .prepare(
+      `UPDATE schedule_assignments
+       SET employee_id = ?,
+           status = 'assigned',
+           is_manual_override = 1,
+           is_locked = 0,
+           source = 'manual',
+           notes = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(employeeId, notes, assignmentId);
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_UPDATE_FAILED",
+      `Assignment ${assignmentId} could not be activated.`
+    );
+  }
+}
+
+function updateManualAssignmentEmployee({
+  db,
+  assignmentId,
+  employeeId,
+  notes
+}: {
+  db: SqliteDatabase;
+  assignmentId: string;
+  employeeId: string;
+  notes: string | null;
+}): void {
+  const result = db
+    .prepare(
+      `UPDATE schedule_assignments
+       SET employee_id = ?,
+           status = 'assigned',
+           is_manual_override = 1,
+           is_locked = 0,
+           source = 'manual',
+           notes = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .run(employeeId, notes, assignmentId);
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_UPDATE_FAILED",
+      `Assignment ${assignmentId} could not be updated.`
+    );
+  }
+}
+
+function insertManualAssignment(
+  db: SqliteDatabase,
+  request: PersistManualAssignmentChangeRequest,
+  notes: string | null
+): void {
+  const result = db
+    .prepare(
+      `INSERT INTO schedule_assignments (
+        id,
+        schedule_run_id,
+        schedule_slot_id,
+        employee_id,
+        status,
+        is_manual_override,
+        is_locked,
+        source,
+        notes
+      ) VALUES (?, ?, ?, ?, 'assigned', 1, 0, 'manual', ?)`
+    )
+    .run(
+      request.nextAssignmentId,
+      request.scheduleRunId,
+      request.scheduleSlotId,
+      request.nextEmployeeId,
+      notes
+    );
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_INSERT_FAILED",
+      `Manual assignment ${request.nextAssignmentId} could not be inserted.`
+    );
+  }
+}
+
+function updateSingleSlotStatus(
+  db: SqliteDatabase,
+  scheduleRunId: string,
+  scheduleSlotId: string,
+  status: string
+): void {
+  const result = db
+    .prepare(
+      `UPDATE schedule_slots
+       SET status = ?,
+           updated_at = datetime('now')
+       WHERE id = ? AND schedule_run_id = ?`
+    )
+    .run(status, scheduleSlotId, scheduleRunId);
+
+  if (result.changes !== 1) {
+    throwPersistenceError(
+      "MANUAL_ASSIGNMENT_SLOT_UPDATE_FAILED",
+      `Schedule slot ${scheduleSlotId} could not be updated.`
+    );
+  }
+}
+
+function deleteManualAssignmentWarningsForSlot(
+  db: SqliteDatabase,
+  request: PersistManualAssignmentChangeRequest
+): void {
+  db.prepare(
+    `DELETE FROM schedule_warnings
+     WHERE schedule_run_id = ?
+       AND schedule_slot_id = ?
+       AND warning_type IN (
+         'manual_override_warning',
+         'manual_hard_override_violation'
+       )`
+  ).run(request.scheduleRunId, request.scheduleSlotId);
+}
+
+function insertManualAssignmentWarnings(
+  db: SqliteDatabase,
+  request: PersistManualAssignmentChangeRequest
+): number {
+  const warnings = [...request.softWarnings, ...request.hardWarnings];
+  const insertWarning = db.prepare(
+    `INSERT INTO schedule_warnings (
+      id,
+      schedule_run_id,
+      schedule_slot_id,
+      schedule_assignment_id,
+      severity,
+      warning_type,
+      message
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  let inserted = 0;
+
+  for (const warning of warnings) {
+    if (warning.scheduleSlotId && warning.scheduleSlotId !== request.scheduleSlotId) {
+      throwPersistenceError(
+        "MANUAL_ASSIGNMENT_WARNING_SLOT_MISMATCH",
+        `Warning ${warning.id} does not belong to slot ${request.scheduleSlotId}.`
+      );
+    }
+
+    insertWarning.run(
+      warning.id,
+      request.scheduleRunId,
+      warning.scheduleSlotId,
+      warning.scheduleAssignmentId,
+      warning.severity,
+      warning.warningType,
+      warning.message
+    );
+    inserted += 1;
+  }
+
+  return inserted;
+}
+
+function countRunRows(
+  db: SqliteDatabase,
+  tableName: "schedule_slots" | "schedule_assignments" | "schedule_warnings",
+  scheduleRunId: string
+): number {
+  return Number(
+    (
+      db
+        .prepare(`SELECT COUNT(*) AS count FROM ${tableName} WHERE schedule_run_id = ?`)
+        .get(scheduleRunId) as { count: number }
+    ).count
+  );
+}
+
 function existingAssignmentMatchesRequest(
   existing: ScheduleAssignmentRow,
   scheduleRunId: string,
@@ -609,22 +1276,25 @@ function getAssignmentIsLocked(
 
 function getAssignmentSource(
   assignment: PersistValidatedScheduleAssignmentInput
-): ScheduleAssignmentSource {
-  return assignment.source ?? "automatic_heuristic";
+): ScheduleAssignmentOrigin {
+  return normalizeAssignmentSource(assignment.source ?? "automatic_heuristic");
 }
 
-function normalizeAssignmentSource(source: string): ScheduleAssignmentSource {
+function normalizeAssignmentSource(source: string): ScheduleAssignmentOrigin {
+  if (source === "locked_manual") {
+    return "manual";
+  }
+
   return isValidAssignmentSource(source) ? source : "automatic_heuristic";
 }
 
 function isValidAssignmentSource(
   source: string
-): source is ScheduleAssignmentSource {
+): source is ScheduleAssignmentOrigin {
   return (
     source === "automatic_cp_sat" ||
     source === "automatic_heuristic" ||
     source === "manual" ||
-    source === "locked_manual" ||
     source === "imported"
   );
 }

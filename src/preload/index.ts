@@ -6,9 +6,15 @@ import type {
   DatabaseRecordUpdate,
   DatabaseResult,
   DatabaseStatus,
+  DeleteScheduleRunGraphRequest,
+  DeleteScheduleRunGraphResult,
   ListRecordsOptions,
   PdfExportRequest,
   PdfExportResult,
+  PersistCompleteGeneratedScheduleRequest,
+  PersistCompleteGeneratedScheduleResult,
+  PersistManualAssignmentChangeRequest,
+  PersistManualAssignmentChangeResult,
   PersistValidatedScheduleBatchRequest,
   PersistValidatedScheduleBatchResult,
   SettingRecord
@@ -79,6 +85,31 @@ const api = {
         request
       ) as Promise<
         DatabaseResult<PersistValidatedScheduleBatchResult>
+      >,
+    persistCompleteGeneratedSchedule: (
+      request: PersistCompleteGeneratedScheduleRequest
+    ) =>
+      ipcRenderer.invoke(
+        "database:persistCompleteGeneratedSchedule",
+        request
+      ) as Promise<
+        DatabaseResult<PersistCompleteGeneratedScheduleResult>
+      >,
+    persistManualAssignmentChange: (
+      request: PersistManualAssignmentChangeRequest
+    ) =>
+      ipcRenderer.invoke(
+        "database:persistManualAssignmentChange",
+        request
+      ) as Promise<
+        DatabaseResult<PersistManualAssignmentChangeResult>
+      >,
+    deleteScheduleRunGraph: (request: DeleteScheduleRunGraphRequest) =>
+      ipcRenderer.invoke(
+        "database:deleteScheduleRunGraph",
+        request
+      ) as Promise<
+        DatabaseResult<DeleteScheduleRunGraphResult>
       >
   },
   solver: {

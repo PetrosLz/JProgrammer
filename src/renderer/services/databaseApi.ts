@@ -5,7 +5,13 @@ import type {
   DatabaseRecordUpdate,
   DatabaseResult,
   DatabaseStatus,
+  DeleteScheduleRunGraphRequest,
+  DeleteScheduleRunGraphResult,
   ListRecordsOptions,
+  PersistCompleteGeneratedScheduleRequest,
+  PersistCompleteGeneratedScheduleResult,
+  PersistManualAssignmentChangeRequest,
+  PersistManualAssignmentChangeResult,
   PersistValidatedScheduleBatchRequest,
   PersistValidatedScheduleBatchResult,
   SettingRecord
@@ -68,7 +74,22 @@ export const databaseApi = {
   persistValidatedScheduleBatch: async (
     request: PersistValidatedScheduleBatchRequest
   ): Promise<PersistValidatedScheduleBatchResult> =>
-    unwrap(await window.jprogrammer.database.persistValidatedScheduleBatch(request))
+    unwrap(await window.jprogrammer.database.persistValidatedScheduleBatch(request)),
+
+  persistCompleteGeneratedSchedule: async (
+    request: PersistCompleteGeneratedScheduleRequest
+  ): Promise<PersistCompleteGeneratedScheduleResult> =>
+    unwrap(await window.jprogrammer.database.persistCompleteGeneratedSchedule(request)),
+
+  persistManualAssignmentChange: async (
+    request: PersistManualAssignmentChangeRequest
+  ): Promise<PersistManualAssignmentChangeResult> =>
+    unwrap(await window.jprogrammer.database.persistManualAssignmentChange(request)),
+
+  deleteScheduleRunGraph: async (
+    request: DeleteScheduleRunGraphRequest
+  ): Promise<DeleteScheduleRunGraphResult> =>
+    unwrap(await window.jprogrammer.database.deleteScheduleRunGraph(request))
 };
 
 function unwrap<T>(result: DatabaseResult<T>): T {
