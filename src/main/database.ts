@@ -218,6 +218,8 @@ const crudTables: Record<CrudTableName, CrudTableMetadata> = {
       "employee_id",
       "status",
       "is_manual_override",
+      "is_locked",
+      "source",
       "notes"
     ],
     defaultOrderBy: "created_at DESC"

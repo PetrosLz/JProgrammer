@@ -8,10 +8,7 @@ import type { SchedulerWarningDraft } from "./warnings";
 
 export type ManagerScheduleStatus =
   | "Excellent"
-  | "Good"
-  | "Needs review"
   | "Understaffed"
-  | "Likely scheduler gap"
   | "Invalid";
 
 export type ManagerScheduleDiagnostics = {
@@ -79,12 +76,8 @@ function getManagerStatus({
     return "Invalid";
   }
 
-  if (coverageDiagnosis.diagnosis === "likely_scheduler_gap") {
-    return "Likely scheduler gap";
-  }
-
   if (evaluation.metrics.coverageRate === 1) {
-    return evaluation.grade === "excellent" ? "Excellent" : "Good";
+    return "Excellent";
   }
 
   if (
@@ -94,7 +87,7 @@ function getManagerStatus({
     return "Understaffed";
   }
 
-  return "Needs review";
+  return "Understaffed";
 }
 
 function buildCoverageIssueSummaries({

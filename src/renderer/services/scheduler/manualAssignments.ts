@@ -49,6 +49,25 @@ export type ManualAssignmentSaveOptions = {
   allowHardOverride?: boolean;
 };
 
+export async function setManualAssignmentLock({
+  assignment,
+  locked
+}: {
+  assignment: ScheduleAssignment;
+  locked: boolean;
+}): Promise<void> {
+  await databaseApi.updateRecord("schedule_assignments", assignment.id, {
+    is_locked: locked,
+    source: locked
+      ? "locked_manual"
+      : assignment.is_manual_override === 1
+        ? "manual"
+        : assignment.source === "locked_manual"
+          ? "manual"
+          : assignment.source
+  });
+}
+
 export async function saveManualAssignmentChange(
   input: ManualAssignmentInput,
   options: ManualAssignmentSaveOptions = {}
@@ -64,6 +83,8 @@ export async function saveManualAssignmentChange(
         {
           status: "removed",
           is_manual_override: true,
+          is_locked: false,
+          source: "manual",
           notes: "Manual override: assignment removed by manager."
         }
       );
@@ -112,12 +133,16 @@ export async function saveManualAssignmentChange(
       {
         status: "removed",
         is_manual_override: true,
+        is_locked: false,
+        source: "manual",
         notes: "Manual override: assignment replaced by manager."
       }
     );
     await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
       status: "assigned",
       is_manual_override: true,
+      is_locked: false,
+      source: "manual",
       notes: assignmentNotes
     });
   } else if (input.currentAssignment) {
@@ -128,6 +153,8 @@ export async function saveManualAssignmentChange(
         employee_id: input.employeeId,
         status: "assigned",
         is_manual_override: true,
+        is_locked: false,
+        source: "manual",
         notes: assignmentNotes
       }
     );
@@ -135,6 +162,8 @@ export async function saveManualAssignmentChange(
     await databaseApi.updateRecord("schedule_assignments", reusableAssignment.id, {
       status: "assigned",
       is_manual_override: true,
+      is_locked: false,
+      source: "manual",
       notes: assignmentNotes
     });
   } else {
@@ -144,6 +173,8 @@ export async function saveManualAssignmentChange(
       employee_id: input.employeeId,
       status: "assigned",
       is_manual_override: true,
+      is_locked: false,
+      source: "manual",
       notes: assignmentNotes
     });
   }
@@ -270,6 +301,8 @@ export function validateManualAssignmentChange({
     employee_id: employee.id,
     status: "assigned",
     is_manual_override: 1,
+    is_locked: 0,
+    source: "manual",
     notes: null,
     created_at: "",
     updated_at: ""

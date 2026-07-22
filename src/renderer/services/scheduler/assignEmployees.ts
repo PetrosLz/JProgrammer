@@ -13,6 +13,7 @@ import type {
   ScheduleAssignment,
   ScheduleRun,
   ScheduleSlot,
+  ScheduleAssignmentSource,
   ShiftTemplate,
   StaffingRequirement,
   TimeOff,
@@ -450,7 +451,11 @@ export async function assignEmployeesToRun({
 
   const automaticAssignments = buildAutomaticAssignmentRecords({
     run,
-    plannedAssignments: sortedPlannedAssignments
+    plannedAssignments: sortedPlannedAssignments,
+    source:
+      optimizerPlan.telemetry.engine === "cp_sat"
+        ? "automatic_cp_sat"
+        : "automatic_heuristic"
   });
   const finalAssignments = [...activeRunAssignments, ...automaticAssignments];
   const finalAssignedSlotIds = new Set([
@@ -841,10 +846,12 @@ export function optimizeScheduleInMemory({
 
 function buildAutomaticAssignmentRecords({
   run,
-  plannedAssignments
+  plannedAssignments,
+  source
 }: {
   run: ScheduleRun;
   plannedAssignments: PlannedAssignment[];
+  source: ScheduleAssignmentSource;
 }): ScheduleAssignment[] {
   return plannedAssignments.map((plannedAssignment) => ({
     id: stableBatchId(
@@ -858,6 +865,8 @@ function buildAutomaticAssignmentRecords({
     employee_id: plannedAssignment.employeeId,
     status: "assigned",
     is_manual_override: 0,
+    is_locked: 0,
+    source,
     notes: plannedAssignment.explanation,
     created_at: "",
     updated_at: ""
@@ -903,6 +912,8 @@ function buildPersistValidatedScheduleRequest({
       employeeId: assignment.employee_id,
       status: assignment.status,
       isManualOverride: assignment.is_manual_override,
+      isLocked: assignment.is_locked,
+      source: assignment.source,
       notes: assignment.notes
     })),
     slotUpdates: runSlots
@@ -1336,7 +1347,6 @@ function getOptimizationEarlyStopReason({
 }): SchedulerStopReason | null {
   if (
     !bestSchedule ||
-    attemptsCompleted < optimizationConfig.minimumAttemptsBeforeEarlyStop ||
     bestSchedule.hardConstraintViolations.length > 0 ||
     bestSchedule.evaluation.metrics.hardViolationCount > 0
   ) {
@@ -1353,6 +1363,10 @@ function getOptimizationEarlyStopReason({
 
   if (bestSchedule.evaluation.grade === "excellent") {
     return "perfect_schedule";
+  }
+
+  if (attemptsCompleted < optimizationConfig.minimumAttemptsBeforeEarlyStop) {
+    return null;
   }
 
   if (noImprovementAttempts >= optimizationConfig.noImprovementAttemptLimit) {
@@ -2909,6 +2923,8 @@ function buildSyntheticAssignments({
         employee_id: plannedAssignment.employeeId,
         status: "assigned",
         is_manual_override: 0,
+        is_locked: 0,
+        source: "automatic_heuristic",
         notes: plannedAssignment.explanation,
         created_at: "",
         updated_at: ""
@@ -4584,13 +4600,18 @@ function createFeasibilityWarnings(
       ? "Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως με τα τωρινά δεδομένα."
       : "Το πρόγραμμα δημιουργήθηκε, αλλά είναι οριακό και έχει μικρό περιθώριο για αλλαγές.";
 
+  const managerSummary = buildFeasibilityManagerSummary(
+    feasibility.status,
+    summary
+  );
+
   warnings.push({
     scheduleRunId: runId,
     scheduleSlotId: null,
     scheduleAssignmentId: null,
     severity: "warning",
     warningType: `feasibility_${feasibility.status}`,
-    message: summary
+    message: managerSummary
   });
 
   for (const message of feasibility.warnings.slice(1, 7)) {
@@ -4615,7 +4636,29 @@ function createFeasibilityWarnings(
     });
   }
 
-  return warnings;
+  return warnings.map((warning) =>
+    warning.warningType === "feasibility_recommendation"
+      ? {
+          ...warning,
+          message: `Προτάσεις: ${feasibility.recommendations.slice(0, 4).join(" ")}`
+        }
+      : warning
+  );
+}
+
+function buildFeasibilityManagerSummary(
+  status: FeasibilityResult["status"],
+  fallbackMessage: string
+): string {
+  if (status === "understaffed") {
+    return "Το πρόγραμμα δημιουργήθηκε, αλλά δεν καλύπτεται πλήρως με τα τωρινά δεδομένα.";
+  }
+
+  if (status === "risky") {
+    return "Το πρόγραμμα δημιουργήθηκε, αλλά είναι οριακό και έχει μικρό περιθώριο για αλλαγές.";
+  }
+
+  return fallbackMessage;
 }
 
 async function saveWarning(warning: SchedulerWarningDraft): Promise<void> {

@@ -5,6 +5,7 @@ import { applyV2SchedulerModelMigration } from "./v2SchedulerModel";
 import { applyV3SchedulerRuleCleanupMigration } from "./v3SchedulerRuleCleanup";
 import { applyV4OpeningHours24HourModeMigration } from "./v4OpeningHours24HourMode";
 import { applyV5LegacyEqualTimeShiftSafetyMigration } from "./v5LegacyEqualTimeShiftSafety";
+import { applyV6AssignmentLocksAndSourceMigration } from "./v6AssignmentLocksAndSource";
 
 export type DatabaseMigration = {
   version: number;
@@ -13,7 +14,7 @@ export type DatabaseMigration = {
   disableForeignKeys?: boolean;
 };
 
-export const latestSchemaVersion = 5;
+export const latestSchemaVersion = 6;
 
 const migrations: DatabaseMigration[] = [
   {
@@ -42,6 +43,11 @@ const migrations: DatabaseMigration[] = [
     version: 5,
     name: "v5 legacy equal-time shift safety",
     up: applyV5LegacyEqualTimeShiftSafetyMigration
+  },
+  {
+    version: 6,
+    name: "v6 assignment locks and source",
+    up: applyV6AssignmentLocksAndSourceMigration
   }
 ];
 

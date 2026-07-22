@@ -1,4 +1,9 @@
-import type { DayOfWeek, ExperienceLevel, SqlBoolean } from "./types";
+import type {
+  DayOfWeek,
+  ExperienceLevel,
+  ScheduleAssignmentSource,
+  SqlBoolean
+} from "./types";
 
 export const cpSatSolveStatuses = [
   "OPTIMAL",
@@ -149,4 +154,6 @@ export type CpSatPersistedAssignment = {
   scheduleSlotId: string;
   employeeId: string;
   isManualOverride: SqlBoolean;
+  isLocked: SqlBoolean;
+  source: ScheduleAssignmentSource;
 };

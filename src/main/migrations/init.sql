@@ -243,6 +243,8 @@ CREATE TABLE IF NOT EXISTS schedule_assignments (
   employee_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'assigned',
   is_manual_override INTEGER NOT NULL DEFAULT 0 CHECK (is_manual_override IN (0, 1)),
+  is_locked INTEGER NOT NULL DEFAULT 0 CHECK (is_locked IN (0, 1)),
+  source TEXT NOT NULL DEFAULT 'automatic_heuristic' CHECK (source IN ('automatic_cp_sat', 'automatic_heuristic', 'manual', 'locked_manual', 'imported')),
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),

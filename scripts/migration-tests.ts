@@ -26,6 +26,7 @@ const tests: TestCase[] = [
   { name: "existing v1 database migrates to v2 safely", run: testV1Migration },
   { name: "existing v3 opening-hours schema migrates to explicit 24-hour mode", run: testV3OpeningHoursMigration },
   { name: "existing v4 database migrates legacy equal-time shifts to safe inactive records", run: testV4LegacyEqualTimeShiftSafetyMigration },
+  { name: "existing v5 database migrates assignment locks and source", run: testV5AssignmentLocksAndSourceMigration },
   { name: "forced migration failure rolls back schema and data", run: testRollback },
   { name: "running migrations twice is idempotent", run: testIdempotence },
   { name: "schema version is not reset on startup", run: testSchemaVersionNotReset },
@@ -66,6 +67,7 @@ function testFreshDatabase(): void {
   assertV2WorkRuleSchema(db);
   assertSchedulerRuleCleanupSchema(db);
   assertOpeningHours24HourSchema(db);
+  assertAssignmentLockSourceSchema(db);
   db.close();
 }
 
@@ -78,6 +80,7 @@ function testV1Migration(): void {
   assertV2WorkRuleSchema(db);
   assertSchedulerRuleCleanupSchema(db);
   assertOpeningHours24HourSchema(db);
+  assertAssignmentLockSourceSchema(db);
 
   assertEqual(countRows(db, "employees"), 2, "employees preserved");
   assertEqual(countRows(db, "opening_hours"), 2, "opening hours preserved");
@@ -218,8 +221,8 @@ function testV4LegacyEqualTimeShiftSafetyMigration(): void {
   const db = createOldV4LegacyEqualTimeDatabase();
   applyVersionedMigrations(db);
 
-  assertEqual(readUserVersion(db), 5, "v4 database migrated to v5");
-  assertEqual(latestSchemaVersion, 5, "latest schema version is 5");
+  assertEqual(readUserVersion(db), latestSchemaVersion, "v4 database migrated to latest");
+  assertEqual(latestSchemaVersion, 6, "latest schema version is 6");
 
   const invalidShift = getRow<{
     name: string;
@@ -269,7 +272,11 @@ function testV4LegacyEqualTimeShiftSafetyMigration(): void {
     "SELECT id, name, start_time, end_time, is_overnight, is_active, color, notes FROM shift_templates ORDER BY id"
   );
   applyVersionedMigrations(db);
-  assertEqual(readUserVersion(db), 5, "second migration run keeps user_version at 5");
+  assertEqual(
+    readUserVersion(db),
+    latestSchemaVersion,
+    "second migration run keeps user_version at latest"
+  );
   assertEqual(
     dumpTable(
       db,
@@ -285,10 +292,73 @@ function testV4LegacyEqualTimeShiftSafetyMigration(): void {
   applyVersionedMigrations(dbWithoutShiftTemplates);
   assertEqual(
     readUserVersion(dbWithoutShiftTemplates),
-    5,
+    latestSchemaVersion,
     "v5 migration handles missing shift_templates table safely"
   );
   dbWithoutShiftTemplates.close();
+}
+
+function testV5AssignmentLocksAndSourceMigration(): void {
+  const db = createLegacyV5Database();
+  applyVersionedMigrations(db);
+
+  assertEqual(readUserVersion(db), latestSchemaVersion, "v5 database migrated to latest");
+  assertAssignmentLockSourceSchema(db);
+
+  const autoAssignment = getRow<{
+    is_manual_override: number;
+    is_locked: number;
+    source: string;
+    notes: string | null;
+  }>(db, "SELECT is_manual_override, is_locked, source, notes FROM schedule_assignments WHERE id = 'as-auto'");
+  assertEqual(autoAssignment.is_manual_override, 0, "auto manual flag preserved");
+  assertEqual(autoAssignment.is_locked, 0, "auto assignment unlocked by default");
+  assertEqual(autoAssignment.source, "automatic_heuristic", "auto source defaulted");
+  assertEqual(autoAssignment.notes, "auto", "auto notes preserved");
+
+  const manualAssignment = getRow<{
+    is_manual_override: number;
+    is_locked: number;
+    source: string;
+    notes: string | null;
+  }>(db, "SELECT is_manual_override, is_locked, source, notes FROM schedule_assignments WHERE id = 'as-manual-v5'");
+  assertEqual(manualAssignment.is_manual_override, 1, "manual flag preserved");
+  assertEqual(manualAssignment.is_locked, 0, "manual assignment unlocked by default");
+  assertEqual(manualAssignment.source, "manual", "manual source inferred");
+  assertEqual(manualAssignment.notes, "manual", "manual notes preserved");
+
+  const snapshotAfterFirstRun = dumpTable(
+    db,
+    "SELECT id, is_manual_override, is_locked, source, notes FROM schedule_assignments ORDER BY id"
+  );
+  applyVersionedMigrations(db);
+  assertEqual(
+    dumpTable(
+      db,
+      "SELECT id, is_manual_override, is_locked, source, notes FROM schedule_assignments ORDER BY id"
+    ),
+    snapshotAfterFirstRun,
+    "v6 migration is idempotent"
+  );
+
+  db.close();
+
+  const dbWithoutAssignments = createMemoryDatabase();
+  dbWithoutAssignments.exec(`
+    CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    PRAGMA user_version = 5;
+  `);
+  applyVersionedMigrations(dbWithoutAssignments);
+  assertEqual(
+    readUserVersion(dbWithoutAssignments),
+    latestSchemaVersion,
+    "v6 migration handles missing schedule_assignments table safely"
+  );
+  dbWithoutAssignments.close();
 }
 
 function testRollback(): void {
@@ -372,6 +442,18 @@ function testValidatedScheduleBatchSuccess(): void {
     "run completion timestamp committed"
   );
   assertEqual(countRows(db, "schedule_warnings"), 2, "warning row count");
+  const cpSatAssignment = getRow<{
+    is_locked: number;
+    source: string;
+  }>(db, "SELECT is_locked, source FROM schedule_assignments WHERE id = 'as-batch-1'");
+  assertEqual(cpSatAssignment.is_locked, 0, "batch assignment unlocked");
+  assertEqual(cpSatAssignment.source, "automatic_cp_sat", "batch assignment source committed");
+  const defaultedAssignment = getRow<{
+    is_locked: number;
+    source: string;
+  }>(db, "SELECT is_locked, source FROM schedule_assignments WHERE id = 'as-batch-3'");
+  assertEqual(defaultedAssignment.is_locked, 0, "default batch lock applied");
+  assertEqual(defaultedAssignment.source, "automatic_heuristic", "default batch source applied");
 
   db.close();
 }
@@ -540,6 +622,8 @@ function createScheduleBatchRequest(): PersistValidatedScheduleBatchRequest {
         employeeId: "emp-batch-1",
         status: "assigned",
         isManualOverride: 0,
+        isLocked: 0,
+        source: "automatic_cp_sat",
         notes: "auto one"
       },
       {
@@ -697,6 +781,46 @@ function createV4DatabaseWithoutShiftTemplates(): SqliteDatabase {
       VALUES ('schema_version', '4', datetime('now'));
   `);
   db.pragma("user_version = 4");
+  return db;
+}
+
+function createLegacyV5Database(): SqliteDatabase {
+  const db = createMemoryDatabase();
+  db.exec(`
+    CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE schedule_assignments (
+      id TEXT PRIMARY KEY,
+      schedule_run_id TEXT NOT NULL,
+      schedule_slot_id TEXT NOT NULL,
+      employee_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'assigned',
+      is_manual_override INTEGER NOT NULL DEFAULT 0 CHECK (is_manual_override IN (0, 1)),
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO schedule_assignments (
+      id,
+      schedule_run_id,
+      schedule_slot_id,
+      employee_id,
+      status,
+      is_manual_override,
+      notes
+    ) VALUES
+      ('as-auto', 'run-v5', 'slot-auto', 'emp-auto', 'assigned', 0, 'auto'),
+      ('as-manual-v5', 'run-v5', 'slot-manual', 'emp-manual', 'assigned', 1, 'manual');
+
+    INSERT INTO settings (key, value, updated_at)
+      VALUES ('schema_version', '5', datetime('now'));
+  `);
+  db.pragma("user_version = 5");
   return db;
 }
 
@@ -1052,6 +1176,17 @@ function assertOpeningHours24HourSchema(db: SqliteDatabase): void {
   assert(
     hasColumn(db, "opening_hours", "is_24_hours"),
     "opening_hours supports explicit 24-hour mode"
+  );
+}
+
+function assertAssignmentLockSourceSchema(db: SqliteDatabase): void {
+  assert(
+    hasColumn(db, "schedule_assignments", "is_locked"),
+    "schedule_assignments supports assignment locks"
+  );
+  assert(
+    hasColumn(db, "schedule_assignments", "source"),
+    "schedule_assignments stores assignment source"
   );
 }
 

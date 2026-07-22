@@ -28,6 +28,15 @@ export type DatabaseRecordInput = Record<string, DbValue | undefined>;
 export type DatabaseRecordUpdate = Record<string, DbValue | undefined>;
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type SqlBoolean = 0 | 1;
+export const scheduleAssignmentSourceValues = [
+  "automatic_cp_sat",
+  "automatic_heuristic",
+  "manual",
+  "locked_manual",
+  "imported"
+] as const;
+export type ScheduleAssignmentSource =
+  (typeof scheduleAssignmentSourceValues)[number];
 export const experienceLevelValues = [
   "no_experience",
   "some_experience",
@@ -294,6 +303,8 @@ export interface ScheduleAssignment extends EntityBase {
   employee_id: string;
   status: string;
   is_manual_override: SqlBoolean;
+  is_locked: SqlBoolean;
+  source: ScheduleAssignmentSource;
   notes: string | null;
 }
 
@@ -312,6 +323,8 @@ export type PersistValidatedScheduleAssignmentInput = {
   employeeId: string;
   status: string;
   isManualOverride: SqlBoolean;
+  isLocked?: SqlBoolean;
+  source?: ScheduleAssignmentSource;
   notes: string | null;
 };
 

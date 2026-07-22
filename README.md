@@ -34,7 +34,7 @@ npm run build
 
 `audit:scheduler` scans active scheduler/schema/UI surfaces for deprecated work-rule fields, `break_minutes`, manual overnight controls, staffing priority in the fresh schema, role-name-based criticality, and Demo Cafe business-data drift beyond 24-hour schema compatibility.
 
-`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode, normalizes stored overnight flags without inferring 24-hour operation from equal opening times, and the v4-to-v5 migration that deactivates legacy equal-time shift templates for manager review.
+`test:migrations` checks fresh and legacy schema upgrades, including the v3-to-v4 migration that adds explicit opening-hours 24-hour mode, normalizes stored overnight flags without inferring 24-hour operation from equal opening times, the v4-to-v5 migration that deactivates legacy equal-time shift templates for manager review, and the v5-to-v6 migration that adds assignment lock/source metadata without changing historical assignment rows.
 
 `test:solver` runs the Python CP-SAT solver protocol/model tests and fails clearly when no Python runtime with OR-Tools is available. For local CP-SAT development, install the runtime with:
 
@@ -51,6 +51,8 @@ Opening hours are modeled as continuous absolute local business intervals. A 24-
 Scheduler V2 stores the business timezone, but duration and daily-limit math intentionally use the manager-entered wall-clock schedule minutes. DST clock changes do not alter scheduled shift duration, and the model does not yet represent repeated/nonexistent local-time disambiguation or real elapsed UTC duration.
 
 Stored time strings are accepted only in strict `HH:mm` form from `00:00` through `23:59`. Midnight end times such as `16:00-00:00` remain valid and mean the shift ends the next day; equal ordinary start/end times remain invalid. If the v5 migration finds legacy equal-time shift templates, it marks `scheduler_v4_invalid_equal_time_shifts_need_review=true`, deactivates those shifts, and the Shift Templates page shows the invalid legacy time-range badge as the intended manager review mechanism.
+
+Schema migration policy: released versioned migrations are append-only. New compatibility work must be added as the next migration version, not by editing an already-released migration. The current latest schema version is 6; v6 adds `schedule_assignments.is_locked` and `schedule_assignments.source` for future rerun/lock workflows while preserving legacy manual assignments as `manual` and automatic rows as `automatic_heuristic`.
 
 The Phase 4.2 CP-SAT model implements sparse Boolean employee-slot variables, one employee per slot, locked existing assignments, true overlap blocking, owning-date daily-hour limits, weekly shift-block limits, and hard requirement-group prior-experience composition. It solves staged lexicographic objectives with one shared deadline:
 

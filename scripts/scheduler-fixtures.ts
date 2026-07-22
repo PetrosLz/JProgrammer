@@ -339,6 +339,8 @@ export function createAssignment(
     employee_id: employeeId,
     status: "assigned",
     is_manual_override: 0,
+    is_locked: 0,
+    source: "automatic_heuristic",
     notes: null,
     created_at: timestamp,
     updated_at: timestamp

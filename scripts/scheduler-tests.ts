@@ -9,6 +9,7 @@ import {
   diagnoseCoverageCeiling,
   evaluateSchedule,
   optimizeScheduleInMemory,
+  setManualAssignmentLock,
   validateScheduleHardConstraints
 } from "../src/renderer/services/scheduler";
 import { databaseApi } from "../src/renderer/services/databaseApi";
@@ -1119,6 +1120,8 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         assert.equal(parameters.solver?.status, "OPTIMAL");
         assert.equal(parameters.optimization?.selectedProfile, null);
         assert.equal(request.assignments.length, 1);
+        assert.equal(request.assignments[0]?.source, "automatic_cp_sat");
+        assert.equal(request.assignments[0]?.isLocked, 0);
         return {
           assignmentsInserted: request.assignments.length,
           slotsUpdated: request.slotUpdates.length,
@@ -1270,6 +1273,70 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       } finally {
         databaseApi.persistValidatedScheduleBatch = originalPersist;
         databaseApi.createRecord = originalCreateRecord;
+        databaseApi.updateRecord = originalUpdateRecord;
+      }
+    }
+  },
+  {
+    name: "manual assignment lock helper writes explicit lock source metadata",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      const assignment = {
+        ...createAssignment(
+          "as-lock-source",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_manual_override: 1 as const,
+        source: "manual" as const
+      };
+      const originalUpdateRecord = databaseApi.updateRecord;
+      const updates: Array<{
+        tableName: string;
+        id: string;
+        data: Record<string, unknown>;
+      }> = [];
+
+      databaseApi.updateRecord = (async (tableName, id, data) => {
+        updates.push({
+          tableName,
+          id,
+          data
+        });
+        return null;
+      }) as typeof databaseApi.updateRecord;
+
+      try {
+        await setManualAssignmentLock({ assignment, locked: true });
+        await setManualAssignmentLock({
+          assignment: {
+            ...assignment,
+            is_locked: 1,
+            source: "locked_manual"
+          },
+          locked: false
+        });
+
+        assert.deepEqual(updates, [
+          {
+            tableName: "schedule_assignments",
+            id: "as-lock-source",
+            data: {
+              is_locked: true,
+              source: "locked_manual"
+            }
+          },
+          {
+            tableName: "schedule_assignments",
+            id: "as-lock-source",
+            data: {
+              is_locked: false,
+              source: "manual"
+            }
+          }
+        ]);
+      } finally {
         databaseApi.updateRecord = originalUpdateRecord;
       }
     }

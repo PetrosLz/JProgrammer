@@ -3,6 +3,7 @@ import type {
   PersistValidatedScheduleAssignmentInput,
   PersistValidatedScheduleBatchRequest,
   PersistValidatedScheduleBatchResult,
+  ScheduleAssignmentSource,
   PersistValidatedScheduleWarningInput
 } from "../shared/types";
 
@@ -26,6 +27,8 @@ type ScheduleAssignmentRow = {
   employee_id: string;
   status: string;
   is_manual_override: number;
+  is_locked: number;
+  source: string;
   notes: string | null;
 };
 
@@ -120,6 +123,23 @@ function validateRequestShape(request: PersistValidatedScheduleBatchRequest): vo
       throwPersistenceError(
         "SCHEDULE_BATCH_INVALID_REQUEST",
         `Assignment ${assignment.id} has invalid manual override flag.`
+      );
+    }
+
+    if (
+      getAssignmentIsLocked(assignment) !== 0 &&
+      getAssignmentIsLocked(assignment) !== 1
+    ) {
+      throwPersistenceError(
+        "SCHEDULE_BATCH_INVALID_REQUEST",
+        `Assignment ${assignment.id} has invalid lock flag.`
+      );
+    }
+
+    if (!isValidAssignmentSource(getAssignmentSource(assignment))) {
+      throwPersistenceError(
+        "SCHEDULE_BATCH_INVALID_REQUEST",
+        `Assignment ${assignment.id} has invalid source.`
       );
     }
   }
@@ -336,12 +356,12 @@ function verifyNoConflictingExistingAssignments(
   request: PersistValidatedScheduleBatchRequest
 ): void {
   const selectAssignmentById = db.prepare(
-    `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, notes
+    `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, is_locked, source, notes
      FROM schedule_assignments
      WHERE id = ?`
   );
   const selectActiveAssignmentsBySlot = db.prepare(
-    `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, notes
+    `SELECT id, schedule_run_id, schedule_slot_id, employee_id, status, is_manual_override, is_locked, source, notes
      FROM schedule_assignments
      WHERE schedule_slot_id = ?
        AND status NOT IN ('cancelled', 'removed')`
@@ -430,8 +450,10 @@ function insertNewAssignments(
       employee_id,
       status,
       is_manual_override,
+      is_locked,
+      source,
       notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   let inserted = 0;
 
@@ -451,6 +473,8 @@ function insertNewAssignments(
       assignment.employeeId,
       assignment.status,
       assignment.isManualOverride,
+      getAssignmentIsLocked(assignment),
+      getAssignmentSource(assignment),
       assignment.notes
     );
     inserted += 1;
@@ -571,7 +595,37 @@ function existingAssignmentMatchesRequest(
     existing.employee_id === assignment.employeeId &&
     existing.status === assignment.status &&
     Number(existing.is_manual_override) === assignment.isManualOverride &&
+    Number(existing.is_locked) === getAssignmentIsLocked(assignment) &&
+    normalizeAssignmentSource(existing.source) === getAssignmentSource(assignment) &&
     normalizeNullableText(existing.notes) === normalizeNullableText(assignment.notes)
+  );
+}
+
+function getAssignmentIsLocked(
+  assignment: PersistValidatedScheduleAssignmentInput
+): 0 | 1 {
+  return assignment.isLocked ?? 0;
+}
+
+function getAssignmentSource(
+  assignment: PersistValidatedScheduleAssignmentInput
+): ScheduleAssignmentSource {
+  return assignment.source ?? "automatic_heuristic";
+}
+
+function normalizeAssignmentSource(source: string): ScheduleAssignmentSource {
+  return isValidAssignmentSource(source) ? source : "automatic_heuristic";
+}
+
+function isValidAssignmentSource(
+  source: string
+): source is ScheduleAssignmentSource {
+  return (
+    source === "automatic_cp_sat" ||
+    source === "automatic_heuristic" ||
+    source === "manual" ||
+    source === "locked_manual" ||
+    source === "imported"
   );
 }
 

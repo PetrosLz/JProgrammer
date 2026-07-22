@@ -101,6 +101,7 @@ export {
 } from "./warnings";
 export {
   saveManualAssignmentChange,
+  setManualAssignmentLock,
   splitManualAssignmentViolations,
   validateManualAssignmentChange,
   type ManualAssignmentInput,
