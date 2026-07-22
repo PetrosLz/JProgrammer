@@ -43,6 +43,13 @@ export type BuildCpSatSolveRequestInput = {
   manualOverrides?: ManualOverrideMap;
 };
 
+export type CpSatWarmStartHintPlan = {
+  hints: CpSatHint[];
+  previousAssignmentHintCount: number;
+  warmStartHintCount: number;
+  ignoredPreviousAssignmentHintCount: number;
+};
+
 export function buildCpSatSolveRequest({
   requestId,
   run,
@@ -201,6 +208,16 @@ export function buildCpSatWarmStartHints({
   request: CpSatSolveRequest;
   timeBudgetMs?: number;
 }): CpSatHint[] {
+  return buildCpSatWarmStartHintPlan({ request, timeBudgetMs }).hints;
+}
+
+export function buildCpSatWarmStartHintPlan({
+  request,
+  timeBudgetMs = 200
+}: {
+  request: CpSatSolveRequest;
+  timeBudgetMs?: number;
+}): CpSatWarmStartHintPlan {
   const deadline = Date.now() + Math.max(0, timeBudgetMs);
   const slotById = new Map(request.slots.map((slot) => [slot.id, slot]));
   const employeeById = new Map(
@@ -263,13 +280,23 @@ export function buildCpSatWarmStartHints({
       );
     });
   const hints: CpSatHint[] = [];
-
-  for (const assignment of unlockedExistingAssignments.sort(
+  let previousAssignmentHintCount = 0;
+  let ignoredPreviousAssignmentHintCount = 0;
+  const sortedUnlockedExistingAssignments = unlockedExistingAssignments.sort(
     (left, right) =>
       left.slotId.localeCompare(right.slotId) ||
       left.employeeId.localeCompare(right.employeeId)
-  )) {
+  );
+
+  for (let index = 0; index < sortedUnlockedExistingAssignments.length; index += 1) {
+    const assignment = sortedUnlockedExistingAssignments[index];
+    if (!assignment) {
+      continue;
+    }
+
     if (Date.now() >= deadline) {
+      ignoredPreviousAssignmentHintCount +=
+        sortedUnlockedExistingAssignments.length - index;
       break;
     }
 
@@ -292,6 +319,7 @@ export function buildCpSatWarmStartHints({
         intervalsByEmployee
       })
     ) {
+      ignoredPreviousAssignmentHintCount += 1;
       continue;
     }
 
@@ -299,6 +327,7 @@ export function buildCpSatWarmStartHints({
       employeeId: assignment.employeeId,
       slotId: slot.id
     });
+    previousAssignmentHintCount += 1;
     assignedSlotIds.add(slot.id);
     addHintState({
       employeeId: assignment.employeeId,
@@ -360,7 +389,12 @@ export function buildCpSatWarmStartHints({
     }
   }
 
-  return hints;
+  return {
+    hints,
+    previousAssignmentHintCount,
+    warmStartHintCount: hints.length,
+    ignoredPreviousAssignmentHintCount
+  };
 }
 
 function buildEligibilityPairs({

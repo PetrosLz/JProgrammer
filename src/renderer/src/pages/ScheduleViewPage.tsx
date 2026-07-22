@@ -4,15 +4,13 @@ import { databaseApi } from "../../services/databaseApi";
 import { pdfExportApi, PdfExportError } from "../../services/pdfExportApi";
 import {
   addDays,
-  buildAutomaticScheduleCandidate,
-  buildScheduleGenerationPlan,
+  buildRerunSchedulePlan,
   getDayOfWeek,
   getSlotDurationHours,
   evaluateSchedule,
   saveManualAssignmentChange,
   setManualAssignmentLock,
   splitManualAssignmentViolations,
-  validateScheduleHardConstraints,
   validateManualAssignmentChange,
   type AssignmentResult,
   type ManualAssignmentValidation,
@@ -31,8 +29,6 @@ import type {
   OpeningHours,
   Role,
   ScheduleAssignment,
-  ScheduleAssignmentOrigin,
-  ScheduleAssignmentSource,
   ScheduleRun,
   ScheduleSlot,
   ScheduleWarning,
@@ -416,119 +412,17 @@ export function ScheduleViewPage({
     setIsRerunningProgram(true);
 
     try {
-      const generatedAt = new Date().toISOString();
-      const weekStartsOn = businessSettings?.week_starts_on ?? 1;
-      const plan = buildScheduleGenerationPlan({
-        weekStartDate: selectedRun.start_date,
+      const rerunPlan = await buildRerunSchedulePlan({
+        sourceRun: selectedRun,
+        sourceRunSlots: runSlots,
+        sourceRunAssignments: runAssignments,
+        allScheduleSlots: scheduleSlots,
+        allScheduleAssignments: scheduleAssignments,
         openingHours,
         staffingRequirements,
+        specialDays,
         specialDayStaffingRequirements,
         shiftTemplates,
-        specialDays
-      });
-      const newRunId = createClientId("schedule-run");
-      const initialParameters = {
-        stage: "rerun_candidate",
-        type: "weekly",
-        rerunFromRunId: selectedRun.id,
-        weekStartsOn,
-        weekStartDate: plan.weekStartDate,
-        weekEndDate: plan.weekEndDate,
-        generatedAt
-      };
-      const rerun: ScheduleRun = {
-        id: newRunId,
-        name: `${selectedRun.name} rerun`,
-        start_date: plan.weekStartDate,
-        end_date: plan.weekEndDate,
-        status: "generating",
-        parameters_json: JSON.stringify(initialParameters),
-        completed_at: null,
-        created_at: generatedAt,
-        updated_at: generatedAt
-      };
-      const regeneratedSlots: ScheduleSlot[] = plan.slots.map((slot) => ({
-        id: createClientId("schedule-slot"),
-        schedule_run_id: rerun.id,
-        date: slot.date,
-        role_id: slot.roleId,
-        start_time: slot.startTime,
-        end_time: slot.endTime,
-        required_count: 1,
-        requirement_group_id: slot.requirementGroupId,
-        minimum_experience_level: slot.minimumExperienceLevel,
-        experienced_required_count: slot.experiencedRequiredCount,
-        status: "unfilled",
-        source_type: slot.sourceType,
-        source_id: slot.sourceId,
-        slot_number: slot.slotNumber,
-        notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`,
-        created_at: generatedAt,
-        updated_at: generatedAt
-      }));
-      const lockedAssignments = runAssignments.filter(
-        (assignment) => assignment.is_locked === 1
-      );
-      const unlockedAssignments = runAssignments.filter(
-        (assignment) => assignment.is_locked !== 1
-      );
-      const mappedLockedAssignments = mapAssignmentsToRegeneratedSlots({
-        assignments: lockedAssignments,
-        sourceSlots: runSlots,
-        targetSlots: regeneratedSlots,
-        newRunId: rerun.id,
-        generatedAt,
-        locked: true,
-        idPrefix: "locked-assignment",
-        requireAll: true
-      });
-      const mappedStabilityAssignments = mapAssignmentsToRegeneratedSlots({
-        assignments: unlockedAssignments,
-        sourceSlots: runSlots,
-        targetSlots: regeneratedSlots,
-        newRunId: rerun.id,
-        generatedAt,
-        locked: false,
-        idPrefix: "stability-assignment",
-        requireAll: false
-      });
-
-      if (mappedLockedAssignments.unmapped.length > 0) {
-        throw new Error(
-          `Locked assignment cannot be preserved because its slot no longer exists in the current staffing rules: ${mappedLockedAssignments.unmapped
-            .slice(0, 3)
-            .join("; ")}`
-        );
-      }
-
-      const lockValidation = validateScheduleHardConstraints({
-        runSlots: regeneratedSlots,
-        assignments: mappedLockedAssignments.assignments,
-        employees,
-        data: {
-          employeeRoles,
-          employeeWorkRules,
-          employeeDayConstraints,
-          employeeShiftAvailability,
-          employeeTimeConstraints,
-          timeOff,
-          staffingRequirements,
-          weekStartsOn
-        }
-      });
-
-      if (!lockValidation.valid) {
-        throw new Error(
-          `Locked assignments are no longer valid: ${lockValidation.violations
-            .map((violation) => violation.message)
-            .slice(0, 3)
-            .join(" ")}`
-        );
-      }
-
-      const assignmentResult = await buildAutomaticScheduleCandidate({
-        run: rerun,
-        slots: [...scheduleSlots, ...regeneratedSlots],
         employees,
         employeeRoles,
         employeeWorkRules,
@@ -537,88 +431,27 @@ export function ScheduleViewPage({
         employeeTimeConstraints,
         timeOff,
         roles,
-        shiftTemplates,
-        staffingRequirements,
-        weekStartsOn,
-        assignments: [
-          ...scheduleAssignments,
-          ...mappedLockedAssignments.assignments,
-          ...mappedStabilityAssignments.assignments
-        ]
+        weekStartsOn: businessSettings?.week_starts_on ?? 1
       });
 
-      if (!assignmentResult.validation.valid) {
+      if (!rerunPlan.ok) {
+        throw new Error(rerunPlan.message);
+      }
+
+      if (!rerunPlan.candidate.validation.valid || !rerunPlan.persistenceRequest) {
         throw new Error(
-          `Automatic schedule validation failed. Nothing was saved. ${assignmentResult.validation.violations
+          `Automatic schedule validation failed. Nothing was saved. ${rerunPlan.candidate.validation.violations
             .map((violation) => violation.message)
             .join(" ")}`
         );
       }
 
-      const slotStatusById = new Map(
-        assignmentResult.slotUpdates.map((update) => [update.slotId, update.status])
+      await databaseApi.persistCompleteGeneratedSchedule(
+        rerunPlan.persistenceRequest
       );
-      const finalParameters = mergeRerunCandidateParameters(
-        assignmentResult.runUpdate.parametersJson,
-        {
-          rerunFromRunId: selectedRun.id,
-          preservedLockedAssignmentCount:
-            mappedLockedAssignments.assignments.length,
-          stabilityHintCount: assignmentResult.stabilityHintCount,
-          droppedStabilityHintCount: mappedStabilityAssignments.unmapped.length,
-          engine: assignmentResult.optimizerTelemetry.engine,
-          solverStatus: assignmentResult.optimizerTelemetry.solverStatus,
-          validationStatus: "valid",
-          generatedAt
-        }
-      );
-
-      await databaseApi.persistCompleteGeneratedSchedule({
-        run: {
-          id: rerun.id,
-          name: rerun.name,
-          startDate: rerun.start_date,
-          endDate: rerun.end_date,
-          status: rerun.status,
-          parametersJson: rerun.parameters_json,
-          completedAt: rerun.completed_at
-        },
-        slots: regeneratedSlots.map((slot) => ({
-          id: slot.id,
-          date: slot.date,
-          roleId: slot.role_id,
-          startTime: slot.start_time,
-          endTime: slot.end_time,
-          requiredCount: slot.required_count,
-          requirementGroupId: slot.requirement_group_id,
-          minimumExperienceLevel: slot.minimum_experience_level,
-          experiencedRequiredCount: slot.experienced_required_count,
-          status: slotStatusById.get(slot.id) ?? slot.status,
-          sourceType: slot.source_type,
-          sourceId: slot.source_id,
-          slotNumber: slot.slot_number,
-          notes: slot.notes
-        })),
-        assignments: assignmentResult.finalAssignmentInputs,
-        warnings: [
-          ...plan.warnings.map((warning) => ({
-            id: createClientId("schedule-warning"),
-            scheduleSlotId: null,
-            scheduleAssignmentId: null,
-            severity: warning.severity,
-            warningType: warning.warningType,
-            message: warning.message
-          })),
-          ...assignmentResult.warningInputs
-        ],
-        runUpdate: {
-          ...assignmentResult.runUpdate,
-          parametersJson: finalParameters
-        }
-      });
 
       setIsRerunConfirmOpen(false);
-      onSelectRun(rerun.id);
+      onSelectRun(rerunPlan.run.id);
       await onChanged(
         language === "en"
           ? "Rerun complete. The previous schedule remains available."
@@ -1312,126 +1145,6 @@ function QualityMetric({
       <p className="mt-1 text-base font-semibold text-slate-950">{value}</p>
     </div>
   );
-}
-
-function createClientId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function assignmentOriginForWrite(source: ScheduleAssignmentSource): ScheduleAssignmentOrigin {
-  return source === "locked_manual" ? "manual" : source;
-}
-
-function mapAssignmentsToRegeneratedSlots({
-  assignments,
-  sourceSlots,
-  targetSlots,
-  newRunId,
-  generatedAt,
-  locked,
-  idPrefix,
-  requireAll
-}: {
-  assignments: ScheduleAssignment[];
-  sourceSlots: ScheduleSlot[];
-  targetSlots: ScheduleSlot[];
-  newRunId: string;
-  generatedAt: string;
-  locked: boolean;
-  idPrefix: string;
-  requireAll: boolean;
-}): { assignments: ScheduleAssignment[]; unmapped: string[] } {
-  const sourceSlotById = new Map(sourceSlots.map((slot) => [slot.id, slot]));
-  const targetSlotByKey = new Map(
-    targetSlots.map((slot) => [slotSemanticKey(slot), slot])
-  );
-  const mappedAssignments: ScheduleAssignment[] = [];
-  const unmapped: string[] = [];
-
-  for (const assignment of assignments) {
-    const sourceSlot = sourceSlotById.get(assignment.schedule_slot_id);
-    const targetSlot = sourceSlot
-      ? targetSlotByKey.get(slotSemanticKey(sourceSlot))
-      : null;
-
-    if (!sourceSlot || !targetSlot) {
-      const label = sourceSlot
-        ? `${sourceSlot.date} ${sourceSlot.start_time}-${sourceSlot.end_time} role ${sourceSlot.role_id}`
-        : assignment.schedule_slot_id;
-      unmapped.push(label);
-
-      if (requireAll) {
-        continue;
-      }
-
-      continue;
-    }
-
-    mappedAssignments.push({
-      ...assignment,
-      id: createClientId(idPrefix),
-      schedule_run_id: newRunId,
-      schedule_slot_id: targetSlot.id,
-      is_locked: locked ? 1 : 0,
-      source: assignmentOriginForWrite(assignment.source),
-      created_at: generatedAt,
-      updated_at: generatedAt
-    });
-  }
-
-  return {
-    assignments: mappedAssignments,
-    unmapped
-  };
-}
-
-function slotSemanticKey(slot: ScheduleSlot): string {
-  return [
-    slot.date,
-    slot.source_type ?? "",
-    slot.source_id ?? "",
-    slot.requirement_group_id ?? "",
-    slot.role_id,
-    slot.start_time,
-    slot.end_time,
-    slot.slot_number ?? ""
-  ].join("|");
-}
-
-function mergeRerunCandidateParameters(
-  parametersJson: string | null,
-  metadata: {
-    rerunFromRunId: string;
-    preservedLockedAssignmentCount: number;
-    stabilityHintCount: number;
-    droppedStabilityHintCount: number;
-    engine: string;
-    solverStatus: string;
-    validationStatus: string;
-    generatedAt: string;
-  }
-): string {
-  const base = parseJsonObject(parametersJson);
-
-  return JSON.stringify({
-    ...base,
-    ...metadata
-  });
-}
-
-function parseJsonObject(value: string | null): Record<string, unknown> {
-  if (!value) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 function qualityGradeLabel(

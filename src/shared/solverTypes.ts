@@ -145,6 +145,9 @@ export type CpSatTelemetry = {
   fullLexicographicOptimality: boolean;
   objectiveStages: CpSatObjectiveStages | null;
   hintDiagnostics: CpSatHintDiagnostics;
+  previousAssignmentHintCount: number;
+  warmStartHintCount: number;
+  ignoredPreviousAssignmentHintCount: number;
   pythonVersion: string | null;
   ortoolsVersion: string | null;
   fallbackReason: string | null;

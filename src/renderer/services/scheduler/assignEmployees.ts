@@ -92,9 +92,10 @@ import {
   type SchedulerStopReason
 } from "./optimizationConfig";
 import {
-  buildCpSatWarmStartHints,
+  buildCpSatWarmStartHintPlan,
   buildCpSatSolveRequest,
-  getCpSatGeneratedAssignments
+  getCpSatGeneratedAssignments,
+  type CpSatWarmStartHintPlan
 } from "./cpSatAdapter";
 
 export type AssignmentResult = {
@@ -167,6 +168,9 @@ export type AutomaticScheduleCandidateResult = {
   repairFinalScore: number;
   repairNoImprovementAttempts: number;
   stabilityHintCount: number;
+  previousAssignmentHintCount: number;
+  warmStartHintCount: number;
+  ignoredPreviousAssignmentHintCount: number;
 };
 
 type AssignmentCandidate = {
@@ -398,9 +402,13 @@ export async function buildAutomaticScheduleCandidate({
       lockedAssignments: lockedRunAssignments,
       generatedAssignments: [],
       finalAssignments,
-      finalAssignmentInputs: assignmentsToPersistInputs(finalAssignments),
+      finalAssignmentInputs: validationResult.valid
+        ? assignmentsToPersistInputs(finalAssignments)
+        : [],
       generatedAssignmentInputs: [],
-      slotUpdates: buildSlotStatusUpdates(runSlots, assignedSlotIds),
+      slotUpdates: validationResult.valid
+        ? buildSlotStatusUpdates(runSlots, assignedSlotIds)
+        : [],
       runUpdate,
       warningInputs: validationResult.valid ? materializeWarnings(warnings) : [],
       warnings: validationResult.valid ? warnings : [],
@@ -426,7 +434,10 @@ export async function buildAutomaticScheduleCandidate({
       repairInitialScore: evaluation.reward,
       repairFinalScore: evaluation.reward,
       repairNoImprovementAttempts: 0,
-      stabilityHintCount: 0
+      stabilityHintCount: 0,
+      previousAssignmentHintCount: 0,
+      warmStartHintCount: 0,
+      ignoredPreviousAssignmentHintCount: 0
     };
   }
 
@@ -585,9 +596,15 @@ export async function buildAutomaticScheduleCandidate({
     lockedAssignments: lockedRunAssignments,
     generatedAssignments: automaticAssignments,
     finalAssignments,
-    finalAssignmentInputs: assignmentsToPersistInputs(finalAssignments),
-    generatedAssignmentInputs: assignmentsToPersistInputs(automaticAssignments),
-    slotUpdates: buildSlotStatusUpdates(runSlots, finalAssignedSlotIds),
+    finalAssignmentInputs: validationResult.valid
+      ? assignmentsToPersistInputs(finalAssignments)
+      : [],
+    generatedAssignmentInputs: validationResult.valid
+      ? assignmentsToPersistInputs(automaticAssignments)
+      : [],
+    slotUpdates: validationResult.valid
+      ? buildSlotStatusUpdates(runSlots, finalAssignedSlotIds)
+      : [],
     runUpdate,
     warningInputs: validationResult.valid ? materializeWarnings(pendingWarnings) : [],
     warnings: validationResult.valid ? pendingWarnings : [],
@@ -611,7 +628,12 @@ export async function buildAutomaticScheduleCandidate({
       optimizerPlan.selectedSchedule?.repairFinalScore ?? finalEvaluation.reward,
     repairNoImprovementAttempts:
       optimizerPlan.selectedSchedule?.repairNoImprovementAttempts ?? 0,
-    stabilityHintCount: optimizerPlan.telemetry.hintDiagnostics.received
+    stabilityHintCount: optimizerPlan.telemetry.previousAssignmentHintCount,
+    previousAssignmentHintCount:
+      optimizerPlan.telemetry.previousAssignmentHintCount,
+    warmStartHintCount: optimizerPlan.telemetry.warmStartHintCount,
+    ignoredPreviousAssignmentHintCount:
+      optimizerPlan.telemetry.ignoredPreviousAssignmentHintCount
   };
 }
 
@@ -1037,12 +1059,18 @@ function createHeuristicTelemetry({
   fallbackReason,
   coveredSlots,
   totalSlots,
-  coverageRate
+  coverageRate,
+  previousAssignmentHintCount = 0,
+  warmStartHintCount = 0,
+  ignoredPreviousAssignmentHintCount = 0
 }: {
   fallbackReason: string | null;
   coveredSlots: number;
   totalSlots: number;
   coverageRate: number;
+  previousAssignmentHintCount?: number;
+  warmStartHintCount?: number;
+  ignoredPreviousAssignmentHintCount?: number;
 }): CpSatTelemetry {
   return {
     engine: "heuristic_fallback",
@@ -1059,10 +1087,53 @@ function createHeuristicTelemetry({
       accepted: 0,
       ignored: 0
     },
+    previousAssignmentHintCount,
+    warmStartHintCount,
+    ignoredPreviousAssignmentHintCount,
     pythonVersion: null,
     ortoolsVersion: null,
     fallbackReason
   };
+}
+
+function createEmptyHintPlan(): CpSatWarmStartHintPlan {
+  return {
+    hints: [],
+    previousAssignmentHintCount: 0,
+    warmStartHintCount: 0,
+    ignoredPreviousAssignmentHintCount: 0
+  };
+}
+
+function countCoveredSlotsForTelemetry({
+  runSlots,
+  lockedRunAssignments,
+  plannedAssignments
+}: {
+  runSlots: ScheduleSlot[];
+  lockedRunAssignments: ScheduleAssignment[];
+  plannedAssignments: PlannedAssignment[];
+}): number {
+  const runSlotIds = new Set(runSlots.map((slot) => slot.id));
+  const coveredSlotIds = new Set<string>();
+
+  for (const assignment of lockedRunAssignments) {
+    if (
+      assignment.status !== "cancelled" &&
+      assignment.status !== "removed" &&
+      runSlotIds.has(assignment.schedule_slot_id)
+    ) {
+      coveredSlotIds.add(assignment.schedule_slot_id);
+    }
+  }
+
+  for (const assignment of plannedAssignments) {
+    if (runSlotIds.has(assignment.scheduleSlotId)) {
+      coveredSlotIds.add(assignment.scheduleSlotId);
+    }
+  }
+
+  return coveredSlotIds.size;
 }
 
 function isLockedAssignment(assignment: ScheduleAssignment): boolean {
@@ -1188,6 +1259,7 @@ async function selectOptimizerPlan({
   shiftTemplates: ShiftTemplate[];
   manualOverrides: ManualOverrideMap;
 }): Promise<OptimizerPlanSelection> {
+  let latestHintPlan = createEmptyHintPlan();
   const heuristicFallback = (fallbackReason: string | null): OptimizerPlanSelection => {
     const selectedSchedule = optimizeCandidateSchedules({
       run,
@@ -1206,32 +1278,25 @@ async function selectOptimizerPlan({
       optimizationConfig,
       shiftTemplates
     });
+    const coveredSlots = countCoveredSlotsForTelemetry({
+      runSlots,
+      lockedRunAssignments,
+      plannedAssignments: selectedSchedule.plannedAssignments
+    });
 
     return {
       plannedAssignments: selectedSchedule.plannedAssignments,
       selectedSchedule,
-      telemetry: {
-        engine: "heuristic_fallback",
-        solverStatus: "HEURISTIC_FALLBACK",
-        runtimeMs: null,
-        coveredSlots: selectedSchedule.plannedAssignments.length,
+      telemetry: createHeuristicTelemetry({
+        fallbackReason,
+        coveredSlots,
         totalSlots: runSlots.length,
-        coverageRate:
-          runSlots.length === 0
-            ? 0
-            : selectedSchedule.plannedAssignments.length / runSlots.length,
-        coverageProvenOptimal: false,
-        fullLexicographicOptimality: false,
-        objectiveStages: null,
-        hintDiagnostics: {
-          received: 0,
-          accepted: 0,
-          ignored: 0
-        },
-        pythonVersion: null,
-        ortoolsVersion: null,
-        fallbackReason
-      },
+        coverageRate: runSlots.length === 0 ? 0 : coveredSlots / runSlots.length,
+        previousAssignmentHintCount: latestHintPlan.previousAssignmentHintCount,
+        warmStartHintCount: latestHintPlan.warmStartHintCount,
+        ignoredPreviousAssignmentHintCount:
+          latestHintPlan.ignoredPreviousAssignmentHintCount
+      }),
       explanations: fallbackReason
         ? [
             `HEURISTIC_FALLBACK: ${fallbackReason}`,
@@ -1259,12 +1324,13 @@ async function selectOptimizerPlan({
       timeoutSeconds: getCpSatTimeoutSeconds(optimizationConfig),
       manualOverrides
     });
+    latestHintPlan = buildCpSatWarmStartHintPlan({
+      request: baseRequest,
+      timeBudgetMs: getCpSatHintBudgetMs(optimizationConfig)
+    });
     const request = {
       ...baseRequest,
-      hints: buildCpSatWarmStartHints({
-        request: baseRequest,
-        timeBudgetMs: getCpSatHintBudgetMs(optimizationConfig)
-      })
+      hints: latestHintPlan.hints
     };
     const result = await solverApi.solveScheduleWithCpSat(request);
 
@@ -1316,6 +1382,11 @@ async function selectOptimizerPlan({
         fullLexicographicOptimality: result.fullLexicographicOptimality,
         objectiveStages: result.objectiveStages,
         hintDiagnostics: result.hintDiagnostics,
+        previousAssignmentHintCount:
+          latestHintPlan.previousAssignmentHintCount,
+        warmStartHintCount: latestHintPlan.warmStartHintCount,
+        ignoredPreviousAssignmentHintCount:
+          latestHintPlan.ignoredPreviousAssignmentHintCount,
         pythonVersion: result.pythonVersion ?? availability.pythonVersion,
         ortoolsVersion: result.ortoolsVersion ?? availability.ortoolsVersion,
         fallbackReason: null
@@ -4927,6 +4998,11 @@ function mergeRunParameters(
             optimizerTelemetry.fullLexicographicOptimality,
           objectiveStages: optimizerTelemetry.objectiveStages,
           hintDiagnostics: optimizerTelemetry.hintDiagnostics,
+          previousAssignmentHintCount:
+            optimizerTelemetry.previousAssignmentHintCount,
+          warmStartHintCount: optimizerTelemetry.warmStartHintCount,
+          ignoredPreviousAssignmentHintCount:
+            optimizerTelemetry.ignoredPreviousAssignmentHintCount,
           pythonVersion: optimizerTelemetry.pythonVersion,
           ortoolsVersion: optimizerTelemetry.ortoolsVersion,
           fallbackReason: optimizerTelemetry.fallbackReason
@@ -4946,6 +5022,9 @@ function mergeRunParameters(
             accepted: 0,
             ignored: 0
           },
+          previousAssignmentHintCount: 0,
+          warmStartHintCount: 0,
+          ignoredPreviousAssignmentHintCount: 0,
           pythonVersion: null,
           ortoolsVersion: null,
           fallbackReason: null

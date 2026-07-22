@@ -5,9 +5,11 @@ import { runSolverProcess } from "../src/main/solver/solverProcess";
 import {
   buildCoverageCeilingAnalysis,
   buildAutomaticScheduleCandidate,
+  buildCpSatWarmStartHintPlan,
   buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
   buildManagerScheduleDiagnostics,
+  buildRerunSchedulePlan,
   buildScheduleGenerationPlan,
   assignEmployeesToRun,
   diagnoseCoverageCeiling,
@@ -24,6 +26,7 @@ import type {
   CpSatSolveResult,
   SolverAvailability
 } from "../src/shared/solverTypes";
+import type { ScheduleAssignment, ScheduleSlot } from "../src/renderer/types";
 import {
   buildShiftInterval,
   getShiftDurationMinutes,
@@ -40,6 +43,9 @@ import {
   createFixture,
   createSpecialDay,
   createSpecialDayStaffingRequirement,
+  createStaffingRequirement,
+  createShiftTemplate,
+  createRole,
   createSlot,
   createTimeConstraint,
   createTimeOff,
@@ -231,6 +237,84 @@ function createTwoSlotSameEmployeeFixture({
   ];
 
   return fixture;
+}
+
+function createSequentialIdFactory() {
+  let index = 0;
+
+  return (prefix: string) => `${prefix}-${++index}`;
+}
+
+function buildGeneratedSlotsForFixture(
+  fixture: ReturnType<typeof createFixture>,
+  prefix: string,
+  status: string = "unfilled"
+): ScheduleSlot[] {
+  const plan = buildScheduleGenerationPlan({
+    weekStartDate: fixture.run.start_date,
+    openingHours: fixture.openingHours,
+    staffingRequirements: fixture.staffingRequirements,
+    specialDayStaffingRequirements: fixture.specialDayStaffingRequirements,
+    shiftTemplates: fixture.shiftTemplates,
+    specialDays: fixture.specialDays
+  });
+
+  return plan.slots.map((slot, index) =>
+    createSlot({
+      id: `${prefix}-${index + 1}`,
+      runId: fixture.run.id,
+      date: slot.date,
+      roleId: slot.roleId,
+      sourceId: slot.sourceId,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      status,
+      sourceType: slot.sourceType,
+      requirementGroupId: slot.requirementGroupId,
+      minimumExperienceLevel: slot.minimumExperienceLevel,
+      experiencedRequiredCount: slot.experiencedRequiredCount,
+      slotNumber: slot.slotNumber
+    })
+  );
+}
+
+async function buildTestRerunSchedulePlan(
+  fixture: ReturnType<typeof createFixture>,
+  {
+    sourceRunAssignments = fixture.assignments,
+    allScheduleAssignments = sourceRunAssignments,
+    idFactory = createSequentialIdFactory(),
+    generatedAt = "2026-05-20T12:00:00.000Z"
+  }: {
+    sourceRunAssignments?: ScheduleAssignment[];
+    allScheduleAssignments?: ScheduleAssignment[];
+    idFactory?: (prefix: string) => string;
+    generatedAt?: string;
+  } = {}
+) {
+  return buildRerunSchedulePlan({
+    sourceRun: fixture.run,
+    sourceRunSlots: fixture.slots,
+    sourceRunAssignments,
+    allScheduleSlots: fixture.slots,
+    allScheduleAssignments,
+    openingHours: fixture.openingHours,
+    staffingRequirements: fixture.staffingRequirements,
+    specialDays: fixture.specialDays,
+    specialDayStaffingRequirements: fixture.specialDayStaffingRequirements,
+    shiftTemplates: fixture.shiftTemplates,
+    employees: fixture.employees,
+    employeeRoles: fixture.employeeRoles,
+    employeeWorkRules: fixture.employeeWorkRules,
+    employeeDayConstraints: fixture.employeeDayConstraints,
+    employeeShiftAvailability: fixture.employeeShiftAvailability,
+    employeeTimeConstraints: fixture.employeeTimeConstraints,
+    timeOff: fixture.timeOff,
+    roles: fixture.roles,
+    weekStartsOn: 1,
+    generatedAt,
+    idFactory
+  });
 }
 
 const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
@@ -1284,6 +1368,246 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
     }
   },
   {
+    name: "heuristic fallback coverage telemetry counts planned slots without locks",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-fallback-zero-locks",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "13:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: false,
+          pythonExecutable: null,
+          pythonVersion: null,
+          ortoolsAvailable: false,
+          ortoolsVersion: null,
+          message: "mock unavailable"
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[0].id,
+          employeeId: fixture.employees[0].id
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: [],
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.coveredSlots, 1);
+        assert.equal(candidate.optimizerTelemetry.totalSlots, 1);
+        assert.equal(candidate.optimizerTelemetry.coverageRate, 1);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "heuristic fallback coverage telemetry includes locked and planned slots",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.employeeRoles = [
+        ...fixture.employeeRoles,
+        createEmployeeRole("er-nina-service-fallback-lock", "emp-nina", fixture.roles[0].id)
+      ];
+      fixture.slots = [
+        createSlot({
+          id: "slot-fallback-locked",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "13:00",
+          status: "filled"
+        }),
+        createSlot({
+          id: "slot-fallback-planned",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "14:00",
+          endTime: "18:00",
+          status: "unfilled"
+        })
+      ];
+      const lockedAssignment = {
+        ...createAssignment(
+          "as-fallback-locked",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 1 as const,
+        source: "manual" as const
+      };
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: false,
+          pythonExecutable: null,
+          pythonVersion: null,
+          ortoolsAvailable: false,
+          ortoolsVersion: null,
+          message: "mock unavailable"
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[1].id,
+          employeeId: fixture.employees[1].id
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: [lockedAssignment],
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.alreadyAssignedSlots, 1);
+        assert.equal(candidate.generatedAssignmentInputs.length, 1);
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.coveredSlots, 2);
+        assert.equal(candidate.optimizerTelemetry.totalSlots, 2);
+        assert.equal(candidate.optimizerTelemetry.coverageRate, 1);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "heuristic fallback coverage telemetry reports partial locked and planned coverage",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      const missingRole = createRole("role-no-candidate", "No candidate");
+      fixture.roles = [...fixture.roles, missingRole];
+      fixture.employeeRoles = [
+        ...fixture.employeeRoles,
+        createEmployeeRole("er-nina-service-fallback-partial", "emp-nina", fixture.roles[0].id)
+      ];
+      fixture.slots = [
+        createSlot({
+          id: "slot-fallback-partial-locked",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "12:00",
+          status: "filled"
+        }),
+        createSlot({
+          id: "slot-fallback-partial-planned",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "13:00",
+          endTime: "16:00",
+          status: "unfilled"
+        }),
+        createSlot({
+          id: "slot-fallback-partial-unfilled",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: missingRole.id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "17:00",
+          endTime: "20:00",
+          status: "unfilled"
+        })
+      ];
+      const lockedAssignment = {
+        ...createAssignment(
+          "as-fallback-partial-locked",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 1 as const,
+        source: "manual" as const
+      };
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: false,
+          pythonExecutable: null,
+          pythonVersion: null,
+          ortoolsAvailable: false,
+          ortoolsVersion: null,
+          message: "mock unavailable"
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[1].id,
+          employeeId: fixture.employees[1].id
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: [lockedAssignment],
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.coveredSlots, 2);
+        assert.equal(candidate.optimizerTelemetry.totalSlots, 3);
+        assert.equal(candidate.optimizerTelemetry.coverageRate, 2 / 3);
+        assert.equal(candidate.unfilledSlots, 1);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
     name: "automatic candidate builder validates bad CP-SAT result before heuristic fallback",
     run: async () => {
       const fixture = createFixture({ assignments: [] });
@@ -1392,8 +1716,217 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
 
       assert.equal(candidate.validation.valid, false);
       assert.equal(candidate.generatedAssignmentInputs.length, 0);
+      assert.equal(candidate.finalAssignmentInputs.length, 0);
+      assert.equal(candidate.slotUpdates.length, 0);
       assert.equal(candidate.warningInputs.length, 0);
       assert.ok(candidate.validation.violations.length > 0);
+    }
+  },
+  {
+    name: "rerun plan regenerates slots from changed requirements without mutating source run data",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = buildGeneratedSlotsForFixture(fixture, "source-rerun-change");
+      const sourceSnapshot = JSON.stringify({
+        run: fixture.run,
+        slots: fixture.slots,
+        assignments: fixture.assignments
+      });
+      const changedShift = createShiftTemplate(
+        fixture.shiftTemplates[0].id,
+        fixture.shiftTemplates[0].name,
+        "10:00",
+        "18:00"
+      );
+      const changedRequirement = createStaffingRequirement({
+        id: fixture.staffingRequirements[0].id,
+        roleId: fixture.roles[0].id,
+        shiftTemplateId: changedShift.id,
+        startTime: "10:00",
+        endTime: "18:00"
+      });
+      fixture.shiftTemplates = [changedShift, fixture.shiftTemplates[1]];
+      fixture.staffingRequirements = [changedRequirement];
+
+      const result = await buildTestRerunSchedulePlan(fixture);
+
+      assert.equal(result.ok, true);
+      if (!result.ok) {
+        return;
+      }
+
+      assert.equal(result.slots.length, 1);
+      assert.equal(result.slots[0]?.start_time, "10:00");
+      assert.equal(result.slots[0]?.end_time, "18:00");
+      assert.equal(JSON.stringify({
+        run: fixture.run,
+        slots: fixture.slots,
+        assignments: fixture.assignments
+      }), sourceSnapshot);
+    }
+  },
+  {
+    name: "rerun plan maps valid locked assignments to regenerated slots",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = buildGeneratedSlotsForFixture(
+        fixture,
+        "source-rerun-locked",
+        "filled"
+      );
+      const lockedAssignment = {
+        ...createAssignment(
+          "as-rerun-locked",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 1 as const,
+        source: "manual" as const
+      };
+
+      const result = await buildTestRerunSchedulePlan(fixture, {
+        sourceRunAssignments: [lockedAssignment],
+        allScheduleAssignments: [lockedAssignment]
+      });
+
+      assert.equal(result.ok, true);
+      if (!result.ok) {
+        return;
+      }
+
+      assert.equal(result.mappedLockedAssignments.length, 1);
+      assert.notEqual(
+        result.mappedLockedAssignments[0]?.schedule_slot_id,
+        lockedAssignment.schedule_slot_id
+      );
+      assert.equal(
+        result.mappedLockedAssignments[0]?.schedule_slot_id,
+        result.slots[0]?.id
+      );
+      assert.equal(result.mappedLockedAssignments[0]?.is_locked, 1);
+      assert.equal(result.metadata.preservedLockedAssignmentCount, 1);
+      assert.equal(result.persistenceRequest?.assignments[0]?.isLocked, 1);
+    }
+  },
+  {
+    name: "rerun plan blocks unmappable locked assignments before persistence",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = buildGeneratedSlotsForFixture(
+        fixture,
+        "source-rerun-unmappable",
+        "filled"
+      );
+      const lockedAssignment = {
+        ...createAssignment(
+          "as-rerun-unmappable",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 1 as const,
+        source: "manual" as const
+      };
+      const changedShift = createShiftTemplate(
+        fixture.shiftTemplates[0].id,
+        fixture.shiftTemplates[0].name,
+        "10:00",
+        "18:00"
+      );
+      fixture.shiftTemplates = [changedShift, fixture.shiftTemplates[1]];
+      fixture.staffingRequirements = [
+        createStaffingRequirement({
+          id: fixture.staffingRequirements[0].id,
+          roleId: fixture.roles[0].id,
+          shiftTemplateId: changedShift.id,
+          startTime: "10:00",
+          endTime: "18:00"
+        })
+      ];
+
+      const result = await buildTestRerunSchedulePlan(fixture, {
+        sourceRunAssignments: [lockedAssignment],
+        allScheduleAssignments: [lockedAssignment]
+      });
+
+      assert.equal(result.ok, false);
+      if (result.ok) {
+        return;
+      }
+
+      assert.equal(result.reason, "unmappable_locked_assignment");
+      assert.equal(result.unmappedLockedAssignments.length, 1);
+    }
+  },
+  {
+    name: "rerun plan maps unlocked assignments as previous-assignment hint candidates",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = buildGeneratedSlotsForFixture(
+        fixture,
+        "source-rerun-hint",
+        "filled"
+      );
+      const unlockedAssignment = {
+        ...createAssignment(
+          "as-rerun-hint",
+          fixture.run.id,
+          fixture.slots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 0 as const,
+        source: "automatic_cp_sat" as const
+      };
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          pythonVersion: "3.12.0",
+          ortoolsAvailable: true,
+          ortoolsVersion: "9.15.0",
+          message: null
+        },
+        assignment: {
+          scheduleSlotId: "schedule-slot-2",
+          employeeId: fixture.employees[0].id
+        }
+      });
+
+      try {
+        const result = await buildTestRerunSchedulePlan(fixture, {
+          sourceRunAssignments: [unlockedAssignment],
+          allScheduleAssignments: [unlockedAssignment],
+          idFactory: createSequentialIdFactory()
+        });
+
+        assert.equal(result.ok, true);
+        if (!result.ok) {
+          return;
+        }
+
+        assert.equal(result.mappedPreviousAssignments.length, 1);
+        assert.equal(result.mappedPreviousAssignments[0]?.is_locked, 0);
+        assert.equal(result.metadata.previousAssignmentHintCount, 1);
+        assert.ok(result.metadata.warmStartHintCount >= 1);
+        assert.equal(result.metadata.ignoredPreviousAssignmentHintCount, 0);
+        const parameters = result.persistenceRequest?.runUpdate.parametersJson
+          ? (JSON.parse(result.persistenceRequest.runUpdate.parametersJson) as {
+              previousAssignmentHintCount?: number;
+              warmStartHintCount?: number;
+              ignoredPreviousAssignmentHintCount?: number;
+              unmappedPreviousAssignmentHintCount?: number;
+            })
+          : {};
+        assert.equal(parameters.previousAssignmentHintCount, 1);
+        assert.ok((parameters.warmStartHintCount ?? 0) >= 1);
+        assert.equal(parameters.ignoredPreviousAssignmentHintCount, 0);
+        assert.equal(parameters.unmappedPreviousAssignmentHintCount, 0);
+      } finally {
+        restoreWindow(originalWindow);
+      }
     }
   },
   {
@@ -1407,18 +1940,27 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         "src/renderer/src/pages/ScheduleViewPage.tsx",
         "utf8"
       );
+      const rerunPlanSource = fs.readFileSync(
+        "src/renderer/services/scheduler/rerunPlan.ts",
+        "utf8"
+      );
 
       assert.match(generateSource, /buildAutomaticScheduleCandidate/);
       assert.doesNotMatch(generateSource, /optimizeScheduleInMemory/);
       assert.doesNotMatch(generateSource, /HEURISTIC_FALLBACK/);
-      assert.match(scheduleViewSource, /buildAutomaticScheduleCandidate/);
-      assert.match(scheduleViewSource, /buildScheduleGenerationPlan/);
-      assert.match(scheduleViewSource, /mapAssignmentsToRegeneratedSlots/);
+      assert.match(scheduleViewSource, /buildRerunSchedulePlan/);
+      assert.doesNotMatch(scheduleViewSource, /buildAutomaticScheduleCandidate/);
+      assert.doesNotMatch(scheduleViewSource, /buildScheduleGenerationPlan/);
+      assert.doesNotMatch(scheduleViewSource, /mapAssignmentsToRegeneratedSlots/);
+      assert.match(rerunPlanSource, /buildAutomaticScheduleCandidate/);
+      assert.match(rerunPlanSource, /buildScheduleGenerationPlan/);
+      assert.match(rerunPlanSource, /mapAssignmentsToRegeneratedSlots/);
       assert.match(
-        scheduleViewSource,
+        rerunPlanSource,
         /Locked assignment cannot be preserved/
       );
       assert.doesNotMatch(scheduleViewSource, /optimizeScheduleInMemory/);
+      assert.doesNotMatch(rerunPlanSource, /optimizeScheduleInMemory/);
       assert.doesNotMatch(scheduleViewSource, /HEURISTIC_FALLBACK/);
       assert.ok(scheduleViewSource.includes("Επανεκτέλεση προγράμματος"));
       assert.ok(scheduleViewSource.includes("Η ανάθεση κλειδώθηκε."));
@@ -1820,6 +2362,16 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           startTime: "14:00",
           endTime: "18:00",
           status: "unfilled"
+        }),
+        createSlot({
+          id: "slot-hint-invalid-previous",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "19:00",
+          endTime: "21:00",
+          status: "filled"
         })
       ];
       const unlockedAssignment = {
@@ -1828,6 +2380,16 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           fixture.run.id,
           runSlots[0].id,
           fixture.employees[0].id
+        ),
+        is_locked: 0 as const,
+        source: "automatic_cp_sat" as const
+      };
+      const invalidUnlockedAssignment = {
+        ...createAssignment(
+          "as-hint-invalid-previous",
+          fixture.run.id,
+          runSlots[2].id,
+          fixture.employees[1].id
         ),
         is_locked: 0 as const,
         source: "automatic_cp_sat" as const
@@ -1848,8 +2410,12 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           timeOff: fixture.timeOff,
           weekStartsOn: 1
         },
-        activeRunAssignments: [unlockedAssignment],
+        activeRunAssignments: [unlockedAssignment, invalidUnlockedAssignment],
         timeoutSeconds: 1
+      });
+      const hintPlan = buildCpSatWarmStartHintPlan({
+        request,
+        timeBudgetMs: 1_000
       });
       const hints = buildCpSatWarmStartHints({
         request,
@@ -1864,6 +2430,10 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         ),
         "valid unlocked assignment should be sent as an explicit CP-SAT hint"
       );
+      assert.equal(hintPlan.previousAssignmentHintCount, 1);
+      assert.equal(hintPlan.ignoredPreviousAssignmentHintCount, 1);
+      assert.ok(hintPlan.warmStartHintCount >= hintPlan.previousAssignmentHintCount);
+      assert.equal(hints.length, hintPlan.hints.length);
     }
   },
   {

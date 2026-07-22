@@ -93,11 +93,20 @@ export {
   buildUnfilledSlotMessage
 } from "./explanations";
 export {
+  buildCpSatWarmStartHintPlan,
   buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
   getCpSatGeneratedAssignments,
-  type BuildCpSatSolveRequestInput
+  type BuildCpSatSolveRequestInput,
+  type CpSatWarmStartHintPlan
 } from "./cpSatAdapter";
+export {
+  buildRerunSchedulePlan,
+  type RerunSchedulePlanFailure,
+  type RerunSchedulePlanMetadata,
+  type RerunSchedulePlanResult,
+  type RerunSchedulePlanSuccess
+} from "./rerunPlan";
 export {
   createNoSlotsWarning,
   createSoftScoreWarnings,
