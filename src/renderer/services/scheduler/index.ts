@@ -11,8 +11,12 @@ export {
 } from "./generateSlots";
 export {
   assignEmployeesToRun,
+  buildAutomaticScheduleCandidate,
   optimizeScheduleInMemory,
   type AssignmentResult,
+  type AutomaticScheduleCandidateResult,
+  type AutomaticScheduleCandidateValidation,
+  type FinalHardConstraintViolation,
   type InMemoryScheduleOptimizationResult
 } from "./assignEmployees";
 export {
@@ -89,6 +93,7 @@ export {
   buildUnfilledSlotMessage
 } from "./explanations";
 export {
+  buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
   getCpSatGeneratedAssignments,
   type BuildCpSatSolveRequestInput

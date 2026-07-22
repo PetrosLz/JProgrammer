@@ -2,10 +2,10 @@ import { useState } from "react";
 
 import { databaseApi } from "../../services/databaseApi";
 import {
+  buildAutomaticScheduleCandidate,
   buildScheduleGenerationPlan,
   getWeekRangeForDate,
   isDateInputValue,
-  optimizeScheduleInMemory,
   type ScheduleEvaluationGrade
 } from "../../services/scheduler";
 import type {
@@ -20,8 +20,6 @@ import type {
   OpeningHours,
   Role,
   ScheduleAssignment,
-  ScheduleAssignmentOrigin,
-  ScheduleAssignmentSource,
   ScheduleRun,
   ScheduleSlot,
   ScheduleWarning,
@@ -172,7 +170,7 @@ export function GenerateSchedulePage({
         updated_at: generatedAt
       }));
 
-      const assignmentResult = optimizeScheduleInMemory({
+      const assignmentResult = await buildAutomaticScheduleCandidate({
         run,
         slots: [...scheduleSlots, ...createdSlots],
         employees,
@@ -188,36 +186,18 @@ export function GenerateSchedulePage({
         weekStartsOn,
         assignments: scheduleAssignments
       });
-      const assignedSlotIds = new Set(
-        assignmentResult.generatedAssignments.map(
-          (assignment) => assignment.schedule_slot_id
-        )
+
+      if (!assignmentResult.validation.valid) {
+        throw new Error(
+          `Automatic schedule validation failed. Nothing was saved. ${assignmentResult.validation.violations
+            .map((violation) => violation.message)
+            .join(" ")}`
+        );
+      }
+
+      const slotStatusById = new Map(
+        assignmentResult.slotUpdates.map((update) => [update.slotId, update.status])
       );
-      const finalParameters = JSON.stringify({
-        ...initialParameters,
-        stage: "employee_assignment",
-        algorithm: "multi_start_coverage_first_manager_policy",
-        optimizerEngine: "heuristic_fallback",
-        solverStatus: "HEURISTIC_FALLBACK",
-        validationStatus:
-          assignmentResult.evaluation.metrics.hardViolationCount === 0
-            ? "valid"
-            : "needs_review",
-        generatedAt,
-        optimization: {
-          selectedProfile: assignmentResult.selectedProfile,
-          selectedScore: assignmentResult.selectedScore,
-          repairIterations: assignmentResult.repairIterations,
-          stopReason: assignmentResult.stopReason,
-          attemptsCompleted: assignmentResult.attemptsCompleted,
-          noImprovementAttempts: assignmentResult.noImprovementAttempts
-        },
-        evaluation: {
-          grade: assignmentResult.evaluation.grade,
-          reward: assignmentResult.evaluation.reward,
-          metrics: assignmentResult.evaluation.metrics
-        }
-      });
 
       await databaseApi.persistCompleteGeneratedSchedule({
         run: {
@@ -239,22 +219,13 @@ export function GenerateSchedulePage({
           requirementGroupId: slot.requirement_group_id,
           minimumExperienceLevel: slot.minimum_experience_level,
           experiencedRequiredCount: slot.experienced_required_count,
-          status: assignedSlotIds.has(slot.id) ? "filled" : "unfilled",
+          status: slotStatusById.get(slot.id) ?? slot.status,
           sourceType: slot.source_type,
           sourceId: slot.source_id,
           slotNumber: slot.slot_number,
           notes: slot.notes
         })),
-        assignments: assignmentResult.generatedAssignments.map((assignment) => ({
-          id: assignment.id,
-          scheduleSlotId: assignment.schedule_slot_id,
-          employeeId: assignment.employee_id,
-          status: assignment.status,
-          isManualOverride: assignment.is_manual_override,
-          isLocked: assignment.is_locked,
-          source: assignmentOriginForWrite(assignment.source),
-          notes: assignment.notes
-        })),
+        assignments: assignmentResult.finalAssignmentInputs,
         warnings: [
           ...plan.warnings.map((warning) => ({
             id: createClientId("schedule-warning"),
@@ -264,23 +235,9 @@ export function GenerateSchedulePage({
             warningType: warning.warningType,
             message: warning.message
           })),
-          ...assignmentResult.warnings.map((warning) => ({
-            id: createClientId("schedule-warning"),
-            scheduleSlotId: warning.scheduleSlotId,
-            scheduleAssignmentId: warning.scheduleAssignmentId,
-            severity: warning.severity,
-            warningType: warning.warningType,
-            message: warning.message
-          }))
+          ...assignmentResult.warningInputs
         ],
-        runUpdate: {
-          status: buildGeneratedRunStatus({
-            totalSlots: createdSlots.length,
-            assignedSlots: assignmentResult.generatedAssignments.length
-          }),
-          parametersJson: finalParameters,
-          completedAt: generatedAt
-        }
+        runUpdate: assignmentResult.runUpdate
       });
 
       await onProgramGenerated(
@@ -593,30 +550,6 @@ function qualityGradeLabel(
   return labels[grade];
 }
 
-function buildGeneratedRunStatus({
-  totalSlots,
-  assignedSlots
-}: {
-  totalSlots: number;
-  assignedSlots: number;
-}): string {
-  if (totalSlots === 0) {
-    return "generated";
-  }
-
-  if (assignedSlots === totalSlots) {
-    return "assigned";
-  }
-
-  return assignedSlots > 0 ? "partially_assigned" : "unfilled";
-}
-
 function createClientId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function assignmentOriginForWrite(
-  source: ScheduleAssignmentSource
-): ScheduleAssignmentOrigin {
-  return source === "locked_manual" ? "manual" : source;
 }

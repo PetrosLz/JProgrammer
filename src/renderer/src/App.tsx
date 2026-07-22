@@ -482,6 +482,9 @@ function renderPage(
     return (
       <ScheduleViewPage
         businessSettings={summary.businessSettings}
+        openingHours={summary.openingHours}
+        specialDays={summary.specialDays}
+        specialDayStaffingRequirements={summary.specialDayStaffingRequirements}
         selectedRunId={actions.selectedScheduleRunId}
         scheduleRuns={summary.scheduleRuns}
         scheduleSlots={summary.scheduleSlots}

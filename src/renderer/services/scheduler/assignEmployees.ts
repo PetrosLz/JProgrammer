@@ -132,6 +132,43 @@ export type InMemoryScheduleOptimizationResult = {
   repairNoImprovementAttempts: number;
 };
 
+export type AutomaticScheduleCandidateValidation = {
+  valid: boolean;
+  violations: FinalHardConstraintViolation[];
+};
+
+export type AutomaticScheduleCandidateResult = {
+  runId: string;
+  totalSlots: number;
+  alreadyAssignedSlots: number;
+  attemptedSlots: number;
+  assignedSlots: number;
+  unfilledSlots: number;
+  lockedAssignments: ScheduleAssignment[];
+  generatedAssignments: ScheduleAssignment[];
+  finalAssignments: ScheduleAssignment[];
+  finalAssignmentInputs: PersistValidatedScheduleBatchRequest["assignments"];
+  generatedAssignmentInputs: PersistValidatedScheduleBatchRequest["assignments"];
+  slotUpdates: PersistValidatedScheduleBatchRequest["slotUpdates"];
+  runUpdate: PersistValidatedScheduleBatchRequest["runUpdate"];
+  warningInputs: PersistValidatedScheduleBatchRequest["warnings"];
+  warnings: SchedulerWarningDraft[];
+  explanations: string[];
+  evaluation: ScheduleEvaluationResult;
+  optimizerTelemetry: CpSatTelemetry;
+  validation: AutomaticScheduleCandidateValidation;
+  selectedProfile: string | null;
+  selectedScore: number;
+  repairIterations: number;
+  stopReason: SchedulerStopReason;
+  attemptsCompleted: number;
+  noImprovementAttempts: number;
+  repairInitialScore: number;
+  repairFinalScore: number;
+  repairNoImprovementAttempts: number;
+  stabilityHintCount: number;
+};
+
 type AssignmentCandidate = {
   employee: Employee;
   score: CandidateScore;
@@ -166,7 +203,7 @@ type PlannedAssignment = {
   explanation: string;
 };
 
-type FinalHardConstraintViolation = {
+export type FinalHardConstraintViolation = {
   assignmentId: string | null;
   slotId: string | null;
   message: string;
@@ -229,7 +266,7 @@ type EmployeeRotationHistory = {
 
 type RotationHistoryMap = Map<string, EmployeeRotationHistory>;
 
-export async function assignEmployeesToRun({
+export async function buildAutomaticScheduleCandidate({
   run,
   slots,
   employees,
@@ -261,11 +298,11 @@ export async function assignEmployeesToRun({
   staffingRequirements?: StaffingRequirement[];
   weekStartsOn?: DayOfWeek;
   manualOverrides?: ManualOverrideMap;
-}): Promise<AssignmentResult> {
+}): Promise<AutomaticScheduleCandidateResult> {
   const runSlots = slots
     .filter((slot) => slot.schedule_run_id === run.id)
     .sort(compareSlots);
-  let activeRunAssignments = assignments.filter(
+  const activeRunAssignments = assignments.filter(
     (assignment) =>
       assignment.schedule_run_id === run.id &&
       assignment.status !== "cancelled" &&
@@ -290,7 +327,7 @@ export async function assignEmployeesToRun({
     weekStartsOn
   };
   const optimizationConfig = defaultSchedulerOptimizationConfig;
-  const initialAssignedShifts: AssignedShift[] = buildExistingAssignedShifts({
+  const initialAssignedShifts = buildExistingAssignedShifts({
     slots: runSlots,
     assignments: lockedRunAssignments
   });
@@ -310,7 +347,7 @@ export async function assignEmployeesToRun({
     const evaluation = evaluateSchedule({
       run,
       slots: runSlots,
-      assignments: activeRunAssignments,
+      assignments: lockedRunAssignments,
       employees,
       roles,
       employeeRoles,
@@ -324,33 +361,72 @@ export async function assignEmployeesToRun({
       weekStartsOn,
       manualOverrides
     });
-    const batchResult = await databaseApi.persistValidatedScheduleBatch({
-      scheduleRunId: run.id,
-      assignments: [],
-      slotUpdates: [],
-      runUpdate: buildRunUpdate(
-        run,
-        runSlots.length,
-        assignedSlotIds.size,
-        undefined,
-        undefined,
-        undefined,
-        optimizationConfig,
-        evaluation
-      ),
-      warnings: materializeWarnings([noSlotsWarning])
+    const warnings = [noSlotsWarning];
+    const finalAssignments = [...lockedRunAssignments];
+    const validationResult = validateScheduleHardConstraints({
+      runSlots,
+      assignments: finalAssignments,
+      employees,
+      data,
+      manualOverrides
     });
+    const finalHardConstraintViolations = validationResult.violations.map(
+      (violation) => ({
+        assignmentId: null,
+        slotId: violation.slotId,
+        message: `Critical validation issue: ${violation.message}`
+      })
+    );
+    const runUpdate = buildRunUpdate(
+      run,
+      runSlots.length,
+      assignedSlotIds.size,
+      undefined,
+      undefined,
+      undefined,
+      optimizationConfig,
+      evaluation
+    );
 
     return {
       runId: run.id,
       totalSlots: runSlots.length,
-      alreadyAssignedSlots: assignedSlotIds.size,
+      alreadyAssignedSlots,
       attemptedSlots: 0,
       assignedSlots: 0,
       unfilledSlots: Math.max(0, runSlots.length - assignedSlotIds.size),
-      warningsCreated: batchResult.warningsInserted,
+      lockedAssignments: lockedRunAssignments,
+      generatedAssignments: [],
+      finalAssignments,
+      finalAssignmentInputs: assignmentsToPersistInputs(finalAssignments),
+      generatedAssignmentInputs: [],
+      slotUpdates: buildSlotStatusUpdates(runSlots, assignedSlotIds),
+      runUpdate,
+      warningInputs: validationResult.valid ? materializeWarnings(warnings) : [],
+      warnings: validationResult.valid ? warnings : [],
       explanations: [],
-      evaluation
+      evaluation,
+      optimizerTelemetry: createHeuristicTelemetry({
+        fallbackReason: null,
+        coveredSlots: lockedRunAssignments.length,
+        totalSlots: runSlots.length,
+        coverageRate:
+          runSlots.length === 0 ? 0 : lockedRunAssignments.length / runSlots.length
+      }),
+      validation: {
+        valid: validationResult.valid,
+        violations: finalHardConstraintViolations
+      },
+      selectedProfile: null,
+      selectedScore: evaluation.reward,
+      repairIterations: 0,
+      stopReason: "attempt_limit",
+      attemptsCompleted: 0,
+      noImprovementAttempts: 0,
+      repairInitialScore: evaluation.reward,
+      repairFinalScore: evaluation.reward,
+      repairNoImprovementAttempts: 0,
+      stabilityHintCount: 0
     };
   }
 
@@ -407,25 +483,6 @@ export async function assignEmployeesToRun({
     optimizerPlan.plannedAssignments,
     runSlots
   );
-  const candidateFinalAssignments = buildSyntheticAssignments({
-    run,
-    fixedAssignments: lockedRunAssignments,
-    plannedAssignments: sortedPlannedAssignments
-  });
-  const candidateValidation = validateScheduleHardConstraints({
-    runSlots,
-    assignments: candidateFinalAssignments,
-    employees,
-    data,
-    manualOverrides
-  });
-
-  if (!candidateValidation.valid) {
-    throw new Error(
-      `Automatic schedule validation failed with ${candidateValidation.violations.length} hard-rule issue(s). No assignments were saved.`
-    );
-  }
-
   const automaticAssignments = buildAutomaticAssignmentRecords({
     run,
     plannedAssignments: sortedPlannedAssignments,
@@ -439,21 +496,24 @@ export async function assignEmployeesToRun({
     ...assignedSlotIds,
     ...automaticAssignments.map((assignment) => assignment.schedule_slot_id)
   ]);
-  const finalAssignedShifts = buildExistingAssignedShifts({
-    slots: runSlots,
-    assignments: finalAssignments
-  });
-  const finalHardConstraintViolations = validateScheduleHardConstraints({
+  const validationResult = validateScheduleHardConstraints({
     runSlots,
     assignments: finalAssignments,
     employees,
     data,
     manualOverrides
-  }).violations.map((violation) => ({
-    assignmentId: null,
-    slotId: violation.slotId,
-    message: `Critical validation issue: ${violation.message}`
-  }));
+  });
+  const finalHardConstraintViolations = validationResult.violations.map(
+    (violation) => ({
+      assignmentId: null,
+      slotId: violation.slotId,
+      message: `Critical validation issue: ${violation.message}`
+    })
+  );
+  const finalAssignedShifts = buildExistingAssignedShifts({
+    slots: runSlots,
+    assignments: finalAssignments
+  });
   const finalEvaluation = evaluateSchedule({
     run,
     slots: runSlots,
@@ -472,56 +532,48 @@ export async function assignEmployeesToRun({
     manualOverrides
   });
 
-  if (finalHardConstraintViolations.length > 0) {
-    throw new Error(
-      `Automatic schedule validation failed with ${finalHardConstraintViolations.length} final hard-rule issue(s). No assignments were saved.`
+  if (validationResult.valid) {
+    pendingWarnings.push(
+      ...createRoleGroupCoverageWarnings({
+        runId: run.id,
+        runSlots,
+        assignedShifts: finalAssignedShifts,
+        employees,
+        data,
+        roles,
+        shiftTemplates,
+        staffingRequirements,
+        manualOverrides
+      })
+    );
+    pendingWarnings.push(
+      ...createTeamQualityWarnings({
+        runId: run.id,
+        runSlots,
+        assignments: finalAssignments,
+        employees,
+        employeeRoles,
+        roles,
+        shiftTemplates,
+        staffingRequirements
+      })
     );
   }
 
-  pendingWarnings.push(
-    ...createRoleGroupCoverageWarnings({
-      runId: run.id,
-      runSlots,
-      assignedShifts: finalAssignedShifts,
-      employees,
-      data,
-      roles,
-      shiftTemplates,
-      staffingRequirements,
-      manualOverrides
-    })
-  );
-  pendingWarnings.push(
-    ...createTeamQualityWarnings({
-      runId: run.id,
-      runSlots,
-      assignments: finalAssignments,
-      employees,
-      employeeRoles,
-      roles,
-      shiftTemplates,
-      staffingRequirements
-    })
-  );
-
-  const batchRequest = buildPersistValidatedScheduleRequest({
+  const runUpdate = buildRunUpdate(
     run,
-    automaticAssignments,
-    runSlots,
-    totalSlots: runSlots.length,
-    assignedSlots: finalAssignments.filter(
+    runSlots.length,
+    finalAssignments.filter(
       (assignment) =>
         assignment.status !== "cancelled" && assignment.status !== "removed"
     ).length,
-    warnings: pendingWarnings,
     diagnostics,
-    selectedSchedule: optimizerPlan.selectedSchedule,
+    optimizerPlan.selectedSchedule,
     feasibility,
     optimizationConfig,
-    evaluation: finalEvaluation,
-    optimizerTelemetry: optimizerPlan.telemetry
-  });
-  const batchResult = await persistValidatedScheduleBatch(batchRequest);
+    finalEvaluation,
+    optimizerPlan.telemetry
+  );
 
   return {
     runId: run.id,
@@ -530,9 +582,114 @@ export async function assignEmployeesToRun({
     attemptedSlots: slotsToAssign.length,
     assignedSlots: automaticAssignments.length,
     unfilledSlots: Math.max(0, runSlots.length - finalAssignedSlotIds.size),
-    warningsCreated: batchResult.warningsInserted,
+    lockedAssignments: lockedRunAssignments,
+    generatedAssignments: automaticAssignments,
+    finalAssignments,
+    finalAssignmentInputs: assignmentsToPersistInputs(finalAssignments),
+    generatedAssignmentInputs: assignmentsToPersistInputs(automaticAssignments),
+    slotUpdates: buildSlotStatusUpdates(runSlots, finalAssignedSlotIds),
+    runUpdate,
+    warningInputs: validationResult.valid ? materializeWarnings(pendingWarnings) : [],
+    warnings: validationResult.valid ? pendingWarnings : [],
     explanations: optimizerPlan.explanations,
-    evaluation: finalEvaluation
+    evaluation: finalEvaluation,
+    optimizerTelemetry: optimizerPlan.telemetry,
+    validation: {
+      valid: validationResult.valid,
+      violations: finalHardConstraintViolations
+    },
+    selectedProfile: optimizerPlan.selectedSchedule?.profile.id ?? null,
+    selectedScore: optimizerPlan.selectedSchedule?.score ?? finalEvaluation.reward,
+    repairIterations: optimizerPlan.selectedSchedule?.repairIterations ?? 0,
+    stopReason: optimizerPlan.selectedSchedule?.stopReason ?? "attempt_limit",
+    attemptsCompleted: optimizerPlan.selectedSchedule?.attemptsCompleted ?? 0,
+    noImprovementAttempts:
+      optimizerPlan.selectedSchedule?.noImprovementAttempts ?? 0,
+    repairInitialScore:
+      optimizerPlan.selectedSchedule?.repairInitialScore ?? finalEvaluation.reward,
+    repairFinalScore:
+      optimizerPlan.selectedSchedule?.repairFinalScore ?? finalEvaluation.reward,
+    repairNoImprovementAttempts:
+      optimizerPlan.selectedSchedule?.repairNoImprovementAttempts ?? 0,
+    stabilityHintCount: optimizerPlan.telemetry.hintDiagnostics.received
+  };
+}
+
+export async function assignEmployeesToRun({
+  run,
+  slots,
+  employees,
+  employeeRoles,
+  employeeWorkRules,
+  employeeDayConstraints,
+  employeeShiftAvailability = [],
+  employeeTimeConstraints = [],
+  timeOff,
+  assignments,
+  roles = [],
+  shiftTemplates = [],
+  staffingRequirements = [],
+  weekStartsOn = 1,
+  manualOverrides = {}
+}: {
+  run: ScheduleRun;
+  slots: ScheduleSlot[];
+  employees: Employee[];
+  employeeRoles: EmployeeRole[];
+  employeeWorkRules: EmployeeWorkRules[];
+  employeeDayConstraints: EmployeeDayConstraint[];
+  employeeShiftAvailability?: EmployeeShiftAvailability[];
+  employeeTimeConstraints?: EmployeeTimeConstraint[];
+  timeOff: TimeOff[];
+  assignments: ScheduleAssignment[];
+  roles?: Role[];
+  shiftTemplates?: ShiftTemplate[];
+  staffingRequirements?: StaffingRequirement[];
+  weekStartsOn?: DayOfWeek;
+  manualOverrides?: ManualOverrideMap;
+}): Promise<AssignmentResult> {
+  const candidate = await buildAutomaticScheduleCandidate({
+    run,
+    slots,
+    employees,
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    employeeTimeConstraints,
+    timeOff,
+    assignments,
+    roles,
+    shiftTemplates,
+    staffingRequirements,
+    weekStartsOn,
+    manualOverrides
+  });
+
+  if (!candidate.validation.valid) {
+    throw new Error(
+      `Automatic schedule validation failed with ${candidate.validation.violations.length} hard-rule issue(s). No assignments were saved.`
+    );
+  }
+
+  const batchResult = await persistValidatedScheduleBatch({
+    scheduleRunId: run.id,
+    assignments: candidate.generatedAssignmentInputs,
+    slotUpdates: candidate.slotUpdates,
+    runUpdate: candidate.runUpdate,
+    warnings: candidate.warningInputs
+  });
+
+  return {
+    runId: run.id,
+    totalSlots: candidate.totalSlots,
+    alreadyAssignedSlots: candidate.alreadyAssignedSlots,
+    attemptedSlots: candidate.attemptedSlots,
+    assignedSlots: candidate.assignedSlots,
+    unfilledSlots: candidate.unfilledSlots,
+    warningsCreated: batchResult.warningsInserted,
+    explanations: candidate.explanations,
+    evaluation: candidate.evaluation
   };
 }
 
@@ -849,6 +1006,63 @@ function buildAutomaticAssignmentRecords({
     created_at: "",
     updated_at: ""
   }));
+}
+
+function assignmentsToPersistInputs(
+  assignments: ScheduleAssignment[]
+): PersistValidatedScheduleBatchRequest["assignments"] {
+  return assignments.map((assignment) => ({
+    id: assignment.id,
+    scheduleSlotId: assignment.schedule_slot_id,
+    employeeId: assignment.employee_id,
+    status: assignment.status,
+    isManualOverride: assignment.is_manual_override,
+    isLocked: assignment.is_locked,
+    source: assignmentOriginForWrite(assignment.source),
+    notes: assignment.notes
+  }));
+}
+
+function buildSlotStatusUpdates(
+  runSlots: ScheduleSlot[],
+  filledSlotIds: Set<string>
+): PersistValidatedScheduleBatchRequest["slotUpdates"] {
+  return runSlots.map((slot) => ({
+    slotId: slot.id,
+    status: filledSlotIds.has(slot.id) ? "filled" : "unfilled"
+  }));
+}
+
+function createHeuristicTelemetry({
+  fallbackReason,
+  coveredSlots,
+  totalSlots,
+  coverageRate
+}: {
+  fallbackReason: string | null;
+  coveredSlots: number;
+  totalSlots: number;
+  coverageRate: number;
+}): CpSatTelemetry {
+  return {
+    engine: "heuristic_fallback",
+    solverStatus: "HEURISTIC_FALLBACK",
+    runtimeMs: null,
+    coveredSlots,
+    totalSlots,
+    coverageRate,
+    coverageProvenOptimal: false,
+    fullLexicographicOptimality: false,
+    objectiveStages: null,
+    hintDiagnostics: {
+      received: 0,
+      accepted: 0,
+      ignored: 0
+    },
+    pythonVersion: null,
+    ortoolsVersion: null,
+    fallbackReason
+  };
 }
 
 function isLockedAssignment(assignment: ScheduleAssignment): boolean {

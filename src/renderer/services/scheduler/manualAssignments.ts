@@ -55,9 +55,15 @@ export async function setManualAssignmentLock({
   assignment: ScheduleAssignment;
   locked: boolean;
 }): Promise<void> {
-  await databaseApi.updateRecord("schedule_assignments", assignment.id, {
+  const updated = await databaseApi.updateRecord("schedule_assignments", assignment.id, {
     is_locked: locked
   });
+
+  if (updated === null) {
+    throw new Error(
+      `Assignment ${assignment.id} no longer exists and could not be ${locked ? "locked" : "unlocked"}.`
+    );
+  }
 }
 
 export async function saveManualAssignmentChange(

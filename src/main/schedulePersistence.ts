@@ -239,6 +239,16 @@ export function deleteScheduleRunGraphInTransaction(
   return db.transaction(() => {
     requireNonEmptyString(request.scheduleRunId, "scheduleRunId");
     verifyRunExists(db, request.scheduleRunId);
+    const rerunDescendants = findRerunDescendants(db, request.scheduleRunId);
+
+    if (rerunDescendants.length > 0) {
+      throwPersistenceError(
+        "SCHEDULE_DELETE_HAS_RERUN_DESCENDANTS",
+        `Schedule run ${request.scheduleRunId} has rerun descendants and cannot be deleted before ${rerunDescendants
+          .slice(0, 3)
+          .join(", ")}.`
+      );
+    }
 
     const slotsDeleted = countRunRows(db, "schedule_slots", request.scheduleRunId);
     const assignmentsDeleted = countRunRows(
@@ -639,7 +649,9 @@ function verifyWarningAssignmentReferences(
   request: PersistValidatedScheduleBatchRequest,
   requestAssignmentIds: Set<string>
 ): void {
-  const selectAssignment = db.prepare("SELECT id FROM schedule_assignments WHERE id = ?");
+  const selectAssignment = db.prepare(
+    "SELECT id, schedule_run_id FROM schedule_assignments WHERE id = ?"
+  );
 
   for (const warning of request.warnings) {
     if (!warning.scheduleAssignmentId) {
@@ -651,13 +663,20 @@ function verifyWarningAssignmentReferences(
     }
 
     const assignment = selectAssignment.get(warning.scheduleAssignmentId) as
-      | { id: string }
+      | { id: string; schedule_run_id: string }
       | undefined;
 
     if (!assignment) {
       throwPersistenceError(
         "SCHEDULE_BATCH_WARNING_ASSIGNMENT_NOT_FOUND",
         `Warning ${warning.id} references missing assignment ${warning.scheduleAssignmentId}.`
+      );
+    }
+
+    if (assignment.schedule_run_id !== request.scheduleRunId) {
+      throwPersistenceError(
+        "SCHEDULE_BATCH_WARNING_ASSIGNMENT_RUN_MISMATCH",
+        `Warning ${warning.id} references assignment ${warning.scheduleAssignmentId} outside run ${request.scheduleRunId}.`
       );
     }
   }
@@ -1201,6 +1220,9 @@ function insertManualAssignmentWarnings(
   request: PersistManualAssignmentChangeRequest
 ): number {
   const warnings = [...request.softWarnings, ...request.hardWarnings];
+  const selectAssignment = db.prepare(
+    "SELECT id, schedule_run_id FROM schedule_assignments WHERE id = ?"
+  );
   const insertWarning = db.prepare(
     `INSERT INTO schedule_warnings (
       id,
@@ -1220,6 +1242,19 @@ function insertManualAssignmentWarnings(
         "MANUAL_ASSIGNMENT_WARNING_SLOT_MISMATCH",
         `Warning ${warning.id} does not belong to slot ${request.scheduleSlotId}.`
       );
+    }
+
+    if (warning.scheduleAssignmentId) {
+      const assignment = selectAssignment.get(warning.scheduleAssignmentId) as
+        | { id: string; schedule_run_id: string }
+        | undefined;
+
+      if (!assignment || assignment.schedule_run_id !== request.scheduleRunId) {
+        throwPersistenceError(
+          "MANUAL_ASSIGNMENT_WARNING_ASSIGNMENT_MISMATCH",
+          `Warning ${warning.id} references assignment ${warning.scheduleAssignmentId} outside run ${request.scheduleRunId}.`
+        );
+      }
     }
 
     insertWarning.run(
@@ -1249,6 +1284,43 @@ function countRunRows(
         .get(scheduleRunId) as { count: number }
     ).count
   );
+}
+
+function findRerunDescendants(
+  db: SqliteDatabase,
+  scheduleRunId: string
+): string[] {
+  const rows = db
+    .prepare("SELECT id, parameters_json FROM schedule_runs WHERE id <> ?")
+    .all(scheduleRunId) as Array<{ id: string; parameters_json: string | null }>;
+
+  return rows
+    .filter((row) => getRerunFromRunId(row.parameters_json) === scheduleRunId)
+    .map((row) => row.id)
+    .sort();
+}
+
+function getRerunFromRunId(parametersJson: string | null): string | null {
+  if (!parametersJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(parametersJson) as unknown;
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "rerunFromRunId" in parsed &&
+      typeof (parsed as { rerunFromRunId?: unknown }).rerunFromRunId === "string"
+    ) {
+      return (parsed as { rerunFromRunId: string }).rerunFromRunId;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function existingAssignmentMatchesRequest(

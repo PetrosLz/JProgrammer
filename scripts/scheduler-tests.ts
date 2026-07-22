@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { runSolverProcess } from "../src/main/solver/solverProcess";
 import {
   buildCoverageCeilingAnalysis,
+  buildAutomaticScheduleCandidate,
+  buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
   buildManagerScheduleDiagnostics,
   buildScheduleGenerationPlan,
@@ -1159,6 +1162,270 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
     }
   },
   {
+    name: "automatic candidate builder uses CP-SAT when available",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-cp-sat",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          pythonVersion: "3.12.0",
+          ortoolsAvailable: true,
+          ortoolsVersion: "9.15.0",
+          message: null
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[0].id,
+          employeeId: fixture.employees[0].id
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.validation.valid, true);
+        assert.equal(candidate.optimizerTelemetry.engine, "cp_sat");
+        assert.equal(candidate.generatedAssignmentInputs.length, 1);
+        assert.equal(candidate.generatedAssignmentInputs[0]?.source, "automatic_cp_sat");
+        assert.equal(candidate.finalAssignmentInputs[0]?.isLocked, 0);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "automatic candidate builder falls back when CP-SAT is unavailable",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-fallback",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: false,
+          pythonExecutable: null,
+          pythonVersion: null,
+          ortoolsAvailable: false,
+          ortoolsVersion: null,
+          message: "mock unavailable"
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[0].id,
+          employeeId: fixture.employees[0].id
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.validation.valid, true);
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(
+          candidate.generatedAssignmentInputs[0]?.source,
+          "automatic_heuristic"
+        );
+        assert.match(candidate.optimizerTelemetry.fallbackReason ?? "", /mock unavailable/);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "automatic candidate builder validates bad CP-SAT result before heuristic fallback",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-invalid-cp-sat",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          pythonVersion: "3.12.0",
+          ortoolsAvailable: true,
+          ortoolsVersion: "9.15.0",
+          message: null
+        },
+        assignment: {
+          scheduleSlotId: fixture.slots[0].id,
+          employeeId: "missing-employee"
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.validation.valid, true);
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(
+          candidate.generatedAssignmentInputs[0]?.source,
+          "automatic_heuristic"
+        );
+        assert.match(
+          candidate.optimizerTelemetry.fallbackReason ?? "",
+          /TypeScript validation/
+        );
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "automatic candidate builder returns invalid candidates without persistence inputs",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-invalid-final",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "filled"
+        })
+      ];
+      const invalidLockedAssignment = {
+        ...createAssignment(
+          "as-builder-invalid-final",
+          fixture.run.id,
+          fixture.slots[0].id,
+          "missing-employee"
+        ),
+        is_locked: 1 as const,
+        source: "manual" as const
+      };
+      const candidate = await buildAutomaticScheduleCandidate({
+        run: fixture.run,
+        slots: fixture.slots,
+        employees: fixture.employees,
+        employeeRoles: fixture.employeeRoles,
+        employeeWorkRules: fixture.employeeWorkRules,
+        employeeDayConstraints: fixture.employeeDayConstraints,
+        employeeShiftAvailability: fixture.employeeShiftAvailability,
+        employeeTimeConstraints: fixture.employeeTimeConstraints,
+        timeOff: fixture.timeOff,
+        assignments: [invalidLockedAssignment],
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements
+      });
+
+      assert.equal(candidate.validation.valid, false);
+      assert.equal(candidate.generatedAssignmentInputs.length, 0);
+      assert.equal(candidate.warningInputs.length, 0);
+      assert.ok(candidate.validation.violations.length > 0);
+    }
+  },
+  {
+    name: "Generate and rerun UI use CP-SAT-first candidate workflow",
+    run: () => {
+      const generateSource = fs.readFileSync(
+        "src/renderer/src/pages/GenerateSchedulePage.tsx",
+        "utf8"
+      );
+      const scheduleViewSource = fs.readFileSync(
+        "src/renderer/src/pages/ScheduleViewPage.tsx",
+        "utf8"
+      );
+
+      assert.match(generateSource, /buildAutomaticScheduleCandidate/);
+      assert.doesNotMatch(generateSource, /optimizeScheduleInMemory/);
+      assert.doesNotMatch(generateSource, /HEURISTIC_FALLBACK/);
+      assert.match(scheduleViewSource, /buildAutomaticScheduleCandidate/);
+      assert.match(scheduleViewSource, /buildScheduleGenerationPlan/);
+      assert.match(scheduleViewSource, /mapAssignmentsToRegeneratedSlots/);
+      assert.match(
+        scheduleViewSource,
+        /Locked assignment cannot be preserved/
+      );
+      assert.doesNotMatch(scheduleViewSource, /optimizeScheduleInMemory/);
+      assert.doesNotMatch(scheduleViewSource, /HEURISTIC_FALLBACK/);
+      assert.ok(scheduleViewSource.includes("Επανεκτέλεση προγράμματος"));
+      assert.ok(scheduleViewSource.includes("Η ανάθεση κλειδώθηκε."));
+      assert.ok(scheduleViewSource.includes("Η ανάθεση ξεκλειδώθηκε."));
+    }
+  },
+  {
     name: "solver protocol rejects mismatched request id",
     run: async () => {
       const request = createMinimalCpSatRequest("expected-request");
@@ -1316,7 +1583,14 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           id,
           data
         });
-        return null;
+        const assignment =
+          id === automaticAssignment.id
+            ? automaticAssignment
+            : id === manualAssignment.id
+              ? manualAssignment
+              : null;
+
+        return assignment ? { ...assignment, ...data } : null;
       }) as typeof databaseApi.updateRecord;
 
       try {
@@ -1370,6 +1644,17 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
             }
           }
         ]);
+        await assert.rejects(
+          () =>
+            setManualAssignmentLock({
+              assignment: {
+                ...manualAssignment,
+                id: "as-lock-missing"
+              },
+              locked: true
+            }),
+          /no longer exists/
+        );
       } finally {
         databaseApi.updateRecord = originalUpdateRecord;
       }
@@ -1509,6 +1794,76 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
           employeeId: fixture.employees[0].id
         }
       ]);
+    }
+  },
+  {
+    name: "CP-SAT warm-start hints include valid unlocked existing assignments",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      const runSlots = [
+        createSlot({
+          id: "slot-hint-unlocked",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "13:00",
+          status: "filled"
+        }),
+        createSlot({
+          id: "slot-hint-open",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "14:00",
+          endTime: "18:00",
+          status: "unfilled"
+        })
+      ];
+      const unlockedAssignment = {
+        ...createAssignment(
+          "as-hint-unlocked",
+          fixture.run.id,
+          runSlots[0].id,
+          fixture.employees[0].id
+        ),
+        is_locked: 0 as const,
+        source: "automatic_cp_sat" as const
+      };
+      const request = buildCpSatSolveRequest({
+        requestId: "cp-sat-unlocked-hints",
+        run: fixture.run,
+        runSlots,
+        employees: fixture.employees,
+        employeeRoles: fixture.employeeRoles,
+        data: {
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          staffingRequirements: fixture.staffingRequirements,
+          timeOff: fixture.timeOff,
+          weekStartsOn: 1
+        },
+        activeRunAssignments: [unlockedAssignment],
+        timeoutSeconds: 1
+      });
+      const hints = buildCpSatWarmStartHints({
+        request,
+        timeBudgetMs: 1_000
+      });
+
+      assert(
+        hints.some(
+          (hint) =>
+            hint.slotId === runSlots[0].id &&
+            hint.employeeId === fixture.employees[0].id
+        ),
+        "valid unlocked assignment should be sent as an explicit CP-SAT hint"
+      );
     }
   },
   {
@@ -1670,8 +2025,8 @@ function setMockSolverWindow({
             }
           },
           hintDiagnostics: {
-            received: 0,
-            accepted: 0,
+            received: request.hints.length,
+            accepted: request.hints.length,
             ignored: 0
           },
           pythonVersion: "3.12.0",

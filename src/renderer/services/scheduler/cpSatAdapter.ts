@@ -208,6 +208,10 @@ export function buildCpSatWarmStartHints({
   );
   const lockedSlotIds = new Set<string>();
   const assignedSlotIds = new Set<string>();
+  const unlockedExistingAssignments: Array<{
+    employeeId: string;
+    slotId: string;
+  }> = [];
   const weeklyShiftCountByEmployee = new Map<string, number>();
   const dailyMinutesByEmployeeAndDate = new Map<string, number>();
   const intervalsByEmployee = new Map<
@@ -221,17 +225,22 @@ export function buildCpSatWarmStartHints({
       continue;
     }
 
-    assignedSlotIds.add(slot.id);
     if (assignment.locked) {
+      assignedSlotIds.add(slot.id);
       lockedSlotIds.add(slot.id);
+      addHintState({
+        employeeId: assignment.employeeId,
+        slot,
+        weeklyShiftCountByEmployee,
+        dailyMinutesByEmployeeAndDate,
+        intervalsByEmployee
+      });
+    } else {
+      unlockedExistingAssignments.push({
+        employeeId: assignment.employeeId,
+        slotId: slot.id
+      });
     }
-    addHintState({
-      employeeId: assignment.employeeId,
-      slot,
-      weeklyShiftCountByEmployee,
-      dailyMinutesByEmployeeAndDate,
-      intervalsByEmployee
-    });
   }
 
   const eligibilityBySlot = new Map<string, typeof request.eligibility>();
@@ -254,6 +263,51 @@ export function buildCpSatWarmStartHints({
       );
     });
   const hints: CpSatHint[] = [];
+
+  for (const assignment of unlockedExistingAssignments.sort(
+    (left, right) =>
+      left.slotId.localeCompare(right.slotId) ||
+      left.employeeId.localeCompare(right.employeeId)
+  )) {
+    if (Date.now() >= deadline) {
+      break;
+    }
+
+    const slot = slotById.get(assignment.slotId);
+    const employee = employeeById.get(assignment.employeeId);
+    const isEligible = (eligibilityBySlot.get(assignment.slotId) ?? []).some(
+      (pair) => pair.employeeId === assignment.employeeId
+    );
+
+    if (
+      !slot ||
+      !employee ||
+      !isEligible ||
+      assignedSlotIds.has(slot.id) ||
+      !canAddHint({
+        employee,
+        slot,
+        weeklyShiftCountByEmployee,
+        dailyMinutesByEmployeeAndDate,
+        intervalsByEmployee
+      })
+    ) {
+      continue;
+    }
+
+    hints.push({
+      employeeId: assignment.employeeId,
+      slotId: slot.id
+    });
+    assignedSlotIds.add(slot.id);
+    addHintState({
+      employeeId: assignment.employeeId,
+      slot,
+      weeklyShiftCountByEmployee,
+      dailyMinutesByEmployeeAndDate,
+      intervalsByEmployee
+    });
+  }
 
   for (const slot of slots) {
     if (Date.now() >= deadline) {

@@ -4,10 +4,11 @@ import { databaseApi } from "../../services/databaseApi";
 import { pdfExportApi, PdfExportError } from "../../services/pdfExportApi";
 import {
   addDays,
+  buildAutomaticScheduleCandidate,
+  buildScheduleGenerationPlan,
   getDayOfWeek,
   getSlotDurationHours,
   evaluateSchedule,
-  optimizeScheduleInMemory,
   saveManualAssignmentChange,
   setManualAssignmentLock,
   splitManualAssignmentViolations,
@@ -27,6 +28,7 @@ import type {
   EmployeeShiftAvailability,
   EmployeeTimeConstraint,
   EmployeeWorkRules,
+  OpeningHours,
   Role,
   ScheduleAssignment,
   ScheduleAssignmentOrigin,
@@ -35,6 +37,8 @@ import type {
   ScheduleSlot,
   ScheduleWarning,
   ShiftTemplate,
+  SpecialDay,
+  SpecialDayStaffingRequirement,
   StaffingRequirement,
   TimeOff
 } from "../../types";
@@ -84,6 +88,9 @@ type AssignmentEditorState = {
 
 export function ScheduleViewPage({
   businessSettings,
+  openingHours,
+  specialDays,
+  specialDayStaffingRequirements,
   selectedRunId,
   scheduleRuns,
   scheduleSlots,
@@ -104,6 +111,9 @@ export function ScheduleViewPage({
   onChanged
 }: {
   businessSettings: BusinessSettings | null;
+  openingHours: OpeningHours[];
+  specialDays: SpecialDay[];
+  specialDayStaffingRequirements: SpecialDayStaffingRequirement[];
   selectedRunId: string | null;
   scheduleRuns: ScheduleRun[];
   scheduleSlots: ScheduleSlot[];
@@ -251,6 +261,20 @@ export function ScheduleViewPage({
         weekStartsOn: businessSettings?.week_starts_on ?? 1
       })
     : null;
+  const lockedAssignmentCount = runAssignments.filter(
+    (assignment) => assignment.is_locked === 1
+  ).length;
+  const unlockedAssignmentCount = runAssignments.filter(
+    (assignment) => assignment.is_locked !== 1
+  ).length;
+  const rerunConfirmTitle =
+    language === "en" ? "Rerun scheduling" : "Επανεκτέλεση προγράμματος";
+  const rerunConfirmBody =
+    language === "en"
+      ? `This will create a new schedule. ${lockedAssignmentCount} locked assignment(s) will be preserved, and ${unlockedAssignmentCount} unlocked assignment(s) may change. The old schedule will remain available.`
+      : `Θα δημιουργηθεί νέο πρόγραμμα. ${lockedAssignmentCount} κλειδωμένες αναθέσεις θα διατηρηθούν, και ${unlockedAssignmentCount} ξεκλείδωτες αναθέσεις μπορεί να αλλάξουν. Το παλιό πρόγραμμα θα παραμείνει διαθέσιμο.`;
+  const rerunConfirmLabel = language === "en" ? "Rerun" : "Επανεκτέλεση";
+  const cancelLabel = language === "en" ? "Cancel" : "Ακύρωση";
 
   async function saveEditor() {
     if (!editor) {
@@ -376,15 +400,7 @@ export function ScheduleViewPage({
             }
           : current
       );
-      await onChanged(
-        assignment.is_locked === 1
-          ? language === "en"
-            ? "Assignment unlocked."
-            : "Ξ— Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ· ΞΎΞµΞΊΞ»ΞµΞΉΞ΄ΟΞΈΞ·ΞΊΞµ."
-          : language === "en"
-            ? "Assignment locked."
-            : "Ξ— Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ· ΞΊΞ»ΞµΞΉΞ΄ΟΞΈΞ·ΞΊΞµ."
-      );
+      await onChanged(assignment.is_locked === 1 ? (language === "en" ? "Assignment unlocked." : "Η ανάθεση ξεκλειδώθηκε.") : (language === "en" ? "Assignment locked." : "Η ανάθεση κλειδώθηκε."));
     } catch (error) {
       setEditor((current) =>
         current ? { ...current, error: getErrorMessage(error) } : current
@@ -401,59 +417,93 @@ export function ScheduleViewPage({
 
     try {
       const generatedAt = new Date().toISOString();
-      const newRunId = createClientId("schedule-run");
-      const slotIdBySourceSlotId = new Map<string, string>();
-      const clonedSlots: ScheduleSlot[] = runSlots.map((slot) => {
-        const nextSlotId = createClientId("schedule-slot");
-        slotIdBySourceSlotId.set(slot.id, nextSlotId);
-        return {
-          ...slot,
-          id: nextSlotId,
-          schedule_run_id: newRunId,
-          status: "unfilled",
-          created_at: generatedAt,
-          updated_at: generatedAt
-        };
+      const weekStartsOn = businessSettings?.week_starts_on ?? 1;
+      const plan = buildScheduleGenerationPlan({
+        weekStartDate: selectedRun.start_date,
+        openingHours,
+        staffingRequirements,
+        specialDayStaffingRequirements,
+        shiftTemplates,
+        specialDays
       });
+      const newRunId = createClientId("schedule-run");
+      const initialParameters = {
+        stage: "rerun_candidate",
+        type: "weekly",
+        rerunFromRunId: selectedRun.id,
+        weekStartsOn,
+        weekStartDate: plan.weekStartDate,
+        weekEndDate: plan.weekEndDate,
+        generatedAt
+      };
+      const rerun: ScheduleRun = {
+        id: newRunId,
+        name: `${selectedRun.name} rerun`,
+        start_date: plan.weekStartDate,
+        end_date: plan.weekEndDate,
+        status: "generating",
+        parameters_json: JSON.stringify(initialParameters),
+        completed_at: null,
+        created_at: generatedAt,
+        updated_at: generatedAt
+      };
+      const regeneratedSlots: ScheduleSlot[] = plan.slots.map((slot) => ({
+        id: createClientId("schedule-slot"),
+        schedule_run_id: rerun.id,
+        date: slot.date,
+        role_id: slot.roleId,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
+        required_count: 1,
+        requirement_group_id: slot.requirementGroupId,
+        minimum_experience_level: slot.minimumExperienceLevel,
+        experienced_required_count: slot.experiencedRequiredCount,
+        status: "unfilled",
+        source_type: slot.sourceType,
+        source_id: slot.sourceId,
+        slot_number: slot.slotNumber,
+        notes: `Slot ${slot.slotNumber} of ${slot.requiredCount}`,
+        created_at: generatedAt,
+        updated_at: generatedAt
+      }));
       const lockedAssignments = runAssignments.filter(
         (assignment) => assignment.is_locked === 1
       );
       const unlockedAssignments = runAssignments.filter(
         (assignment) => assignment.is_locked !== 1
       );
-      const clonedLockedAssignments: ScheduleAssignment[] =
-        lockedAssignments.map((assignment) => ({
-          ...assignment,
-          id: createClientId("locked-assignment"),
-          schedule_run_id: newRunId,
-          schedule_slot_id:
-            slotIdBySourceSlotId.get(assignment.schedule_slot_id) ??
-            assignment.schedule_slot_id,
-          is_locked: 1,
-          source:
-            assignment.source === "locked_manual" ? "manual" : assignment.source,
-          created_at: generatedAt,
-          updated_at: generatedAt
-        }));
-      const rerun: ScheduleRun = {
-        id: newRunId,
-        name: `${selectedRun.name} rerun`,
-        start_date: selectedRun.start_date,
-        end_date: selectedRun.end_date,
-        status: "generating",
-        parameters_json: JSON.stringify({
-          stage: "rerun_candidate",
-          type: "weekly",
-          rerunFromRunId: selectedRun.id,
-          generatedAt
-        }),
-        completed_at: null,
-        created_at: generatedAt,
-        updated_at: generatedAt
-      };
+      const mappedLockedAssignments = mapAssignmentsToRegeneratedSlots({
+        assignments: lockedAssignments,
+        sourceSlots: runSlots,
+        targetSlots: regeneratedSlots,
+        newRunId: rerun.id,
+        generatedAt,
+        locked: true,
+        idPrefix: "locked-assignment",
+        requireAll: true
+      });
+      const mappedStabilityAssignments = mapAssignmentsToRegeneratedSlots({
+        assignments: unlockedAssignments,
+        sourceSlots: runSlots,
+        targetSlots: regeneratedSlots,
+        newRunId: rerun.id,
+        generatedAt,
+        locked: false,
+        idPrefix: "stability-assignment",
+        requireAll: false
+      });
+
+      if (mappedLockedAssignments.unmapped.length > 0) {
+        throw new Error(
+          `Locked assignment cannot be preserved because its slot no longer exists in the current staffing rules: ${mappedLockedAssignments.unmapped
+            .slice(0, 3)
+            .join("; ")}`
+        );
+      }
+
       const lockValidation = validateScheduleHardConstraints({
-        runSlots: clonedSlots,
-        assignments: clonedLockedAssignments,
+        runSlots: regeneratedSlots,
+        assignments: mappedLockedAssignments.assignments,
         employees,
         data: {
           employeeRoles,
@@ -463,7 +513,7 @@ export function ScheduleViewPage({
           employeeTimeConstraints,
           timeOff,
           staffingRequirements,
-          weekStartsOn: businessSettings?.week_starts_on ?? 1
+          weekStartsOn
         }
       });
 
@@ -476,9 +526,9 @@ export function ScheduleViewPage({
         );
       }
 
-      const assignmentResult = optimizeScheduleInMemory({
+      const assignmentResult = await buildAutomaticScheduleCandidate({
         run: rerun,
-        slots: [...scheduleSlots, ...clonedSlots],
+        slots: [...scheduleSlots, ...regeneratedSlots],
         employees,
         employeeRoles,
         employeeWorkRules,
@@ -489,45 +539,39 @@ export function ScheduleViewPage({
         roles,
         shiftTemplates,
         staffingRequirements,
-        weekStartsOn: businessSettings?.week_starts_on ?? 1,
-        assignments: [...scheduleAssignments, ...clonedLockedAssignments]
+        weekStartsOn,
+        assignments: [
+          ...scheduleAssignments,
+          ...mappedLockedAssignments.assignments,
+          ...mappedStabilityAssignments.assignments
+        ]
       });
-      const finalAssignments = [
-        ...clonedLockedAssignments,
-        ...assignmentResult.generatedAssignments
-      ];
-      const assignedSlotIds = new Set(
-        finalAssignments.map((assignment) => assignment.schedule_slot_id)
+
+      if (!assignmentResult.validation.valid) {
+        throw new Error(
+          `Automatic schedule validation failed. Nothing was saved. ${assignmentResult.validation.violations
+            .map((violation) => violation.message)
+            .join(" ")}`
+        );
+      }
+
+      const slotStatusById = new Map(
+        assignmentResult.slotUpdates.map((update) => [update.slotId, update.status])
       );
-      const finalStatus = buildGeneratedRunStatus({
-        totalSlots: clonedSlots.length,
-        assignedSlots: finalAssignments.length
-      });
-      const finalParameters = JSON.stringify({
-        stage: "employee_assignment",
-        type: "weekly",
-        rerunFromRunId: selectedRun.id,
-        preservedLockedAssignmentCount: clonedLockedAssignments.length,
-        stabilityHintCount: unlockedAssignments.length,
-        engine: "heuristic_fallback",
-        solverStatus: "HEURISTIC_FALLBACK",
-        validationStatus:
-          assignmentResult.evaluation.metrics.hardViolationCount === 0
-            ? "valid"
-            : "needs_review",
-        generatedAt,
-        evaluation: {
-          grade: assignmentResult.evaluation.grade,
-          reward: assignmentResult.evaluation.reward,
-          metrics: assignmentResult.evaluation.metrics
-        },
-        optimization: {
-          selectedProfile: assignmentResult.selectedProfile,
-          selectedScore: assignmentResult.selectedScore,
-          repairIterations: assignmentResult.repairIterations,
-          stopReason: assignmentResult.stopReason
+      const finalParameters = mergeRerunCandidateParameters(
+        assignmentResult.runUpdate.parametersJson,
+        {
+          rerunFromRunId: selectedRun.id,
+          preservedLockedAssignmentCount:
+            mappedLockedAssignments.assignments.length,
+          stabilityHintCount: assignmentResult.stabilityHintCount,
+          droppedStabilityHintCount: mappedStabilityAssignments.unmapped.length,
+          engine: assignmentResult.optimizerTelemetry.engine,
+          solverStatus: assignmentResult.optimizerTelemetry.solverStatus,
+          validationStatus: "valid",
+          generatedAt
         }
-      });
+      );
 
       await databaseApi.persistCompleteGeneratedSchedule({
         run: {
@@ -539,7 +583,7 @@ export function ScheduleViewPage({
           parametersJson: rerun.parameters_json,
           completedAt: rerun.completed_at
         },
-        slots: clonedSlots.map((slot) => ({
+        slots: regeneratedSlots.map((slot) => ({
           id: slot.id,
           date: slot.date,
           roleId: slot.role_id,
@@ -549,34 +593,27 @@ export function ScheduleViewPage({
           requirementGroupId: slot.requirement_group_id,
           minimumExperienceLevel: slot.minimum_experience_level,
           experiencedRequiredCount: slot.experienced_required_count,
-          status: assignedSlotIds.has(slot.id) ? "filled" : "unfilled",
+          status: slotStatusById.get(slot.id) ?? slot.status,
           sourceType: slot.source_type,
           sourceId: slot.source_id,
           slotNumber: slot.slot_number,
           notes: slot.notes
         })),
-        assignments: finalAssignments.map((assignment) => ({
-          id: assignment.id,
-          scheduleSlotId: assignment.schedule_slot_id,
-          employeeId: assignment.employee_id,
-          status: assignment.status,
-          isManualOverride: assignment.is_manual_override,
-          isLocked: assignment.is_locked,
-          source: assignmentOriginForWrite(assignment.source),
-          notes: assignment.notes
-        })),
-        warnings: assignmentResult.warnings.map((warning) => ({
-          id: createClientId("schedule-warning"),
-          scheduleSlotId: warning.scheduleSlotId,
-          scheduleAssignmentId: warning.scheduleAssignmentId,
-          severity: warning.severity,
-          warningType: warning.warningType,
-          message: warning.message
-        })),
+        assignments: assignmentResult.finalAssignmentInputs,
+        warnings: [
+          ...plan.warnings.map((warning) => ({
+            id: createClientId("schedule-warning"),
+            scheduleSlotId: null,
+            scheduleAssignmentId: null,
+            severity: warning.severity,
+            warningType: warning.warningType,
+            message: warning.message
+          })),
+          ...assignmentResult.warningInputs
+        ],
         runUpdate: {
-          status: finalStatus,
-          parametersJson: finalParameters,
-          completedAt: generatedAt
+          ...assignmentResult.runUpdate,
+          parametersJson: finalParameters
         }
       });
 
@@ -585,7 +622,7 @@ export function ScheduleViewPage({
       await onChanged(
         language === "en"
           ? "Rerun complete. The previous schedule remains available."
-          : "Ξ— ΞµΟ€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· ΞΏΞ»ΞΏΞΊΞ»Ξ·ΟΟΞΈΞ·ΞΊΞµ. Ξ¤ΞΏ Ο€ΟΞΏΞ·Ξ³ΞΏΟΞΌΞµΞ½ΞΏ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ± Ο€Ξ±ΟΞ±ΞΌΞ­Ξ½ΞµΞΉ Ξ΄ΞΉΞ±ΞΈΞ­ΟƒΞΉΞΌΞΏ."
+          : "Η επανεκτέλεση ολοκληρώθηκε. Το προηγούμενο πρόγραμμα παραμένει διαθέσιμο."
       );
     } catch (error) {
       setExportError(getErrorMessage(error));
@@ -593,7 +630,6 @@ export function ScheduleViewPage({
       setIsRerunningProgram(false);
     }
   }
-
   async function exportSchedulePdf(exportType: "team" | "manager") {
     setExportError("");
     setExportNotice("");
@@ -748,13 +784,7 @@ export function ScheduleViewPage({
             disabled={isRerunningProgram}
             className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
           >
-            {isRerunningProgram
-              ? language === "en"
-                ? "Rerunning..."
-                : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ·..."
-              : language === "en"
-                ? "Rerun scheduling"
-                : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· Ο€ΟΞΏΞ³ΟΞ±ΞΌΞΌΞ±Ο„ΞΏΟ‚"}
+            {isRerunningProgram ? (language === "en" ? "Rerunning..." : "Γίνεται επανεκτέλεση...") : rerunConfirmLabel}
           </button>
           <button
             type="button"
@@ -1241,16 +1271,11 @@ export function ScheduleViewPage({
       {isRerunConfirmOpen ? (
         <ConfirmActionModal
           language={language}
-          title={language === "en" ? "Rerun scheduling" : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ· Ο€ΟΞΏΞ³ΟΞ¬ΞΌΞΌΞ±Ο„ΞΏΟ‚"}
-          body={
-            language === "en"
-              ? `This will create a new schedule. ${runAssignments.filter((assignment) => assignment.is_locked === 1).length} locked assignment(s) will be preserved, and ${runAssignments.filter((assignment) => assignment.is_locked !== 1).length} unlocked assignment(s) may change. The old schedule will remain available.`
-              : `ΞΞ± Ξ΄Ξ·ΞΌΞΉΞΏΟ…ΟΞ³Ξ·ΞΈΞµΞ― Ξ½Ξ­ΞΏ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ±. ${runAssignments.filter((assignment) => assignment.is_locked === 1).length} ΞΊΞ»ΞµΞΉΞ΄Ο‰ΞΌΞ­Ξ½ΞµΟ‚ Ξ±Ξ½Ξ±ΞΈΞ­ΟƒΞµΞΉΟ‚ ΞΈΞ± Ξ΄ΞΉΞ±Ο„Ξ·ΟΞ·ΞΈΞΏΟΞ½, ΞΊΞ±ΞΉ ${runAssignments.filter((assignment) => assignment.is_locked !== 1).length} ΞΎΞµΞΊΞ»ΞµΞΉΞ΄ΟΟ„ΞµΟ‚ Ξ±Ξ½Ξ±ΞΈΞ­ΟƒΞµΞΉΟ‚ ΞΌΟ€ΞΏΟΞµΞ― Ξ½Ξ± Ξ±Ξ»Ξ»Ξ¬ΞΎΞΏΟ…Ξ½. Ξ¤ΞΏ Ο€Ξ±Ξ»ΞΉΟ Ο€ΟΟΞ³ΟΞ±ΞΌΞΌΞ± ΞΈΞ± Ο€Ξ±ΟΞ±ΞΌΞµΞ―Ξ½ΞµΞΉ Ξ΄ΞΉΞ±ΞΈΞ­ΟƒΞΉΞΌΞΏ.`
-          }
-          confirmLabel={language === "en" ? "Rerun" : "Ξ•Ο€Ξ±Ξ½ΞµΞΊΟ„Ξ­Ξ»ΞµΟƒΞ·"}
-          cancelLabel={language === "en" ? "Cancel" : "Ξ‘ΞΊΟΟΟ‰ΟƒΞ·"}
-          variant="warning"
-          isWorking={isRerunningProgram}
+          title={rerunConfirmTitle}
+          body={rerunConfirmBody}
+          confirmLabel={rerunConfirmLabel}
+          cancelLabel={cancelLabel}
+          variant="warning"          isWorking={isRerunningProgram}
           onCancel={() => setIsRerunConfirmOpen(false)}
           onConfirm={() => void rerunCurrentProgram()}
         />
@@ -1289,32 +1314,124 @@ function QualityMetric({
   );
 }
 
-function buildGeneratedRunStatus({
-  totalSlots,
-  assignedSlots
-}: {
-  totalSlots: number;
-  assignedSlots: number;
-}): string {
-  if (totalSlots === 0) {
-    return "generated";
-  }
-
-  if (assignedSlots === totalSlots) {
-    return "assigned";
-  }
-
-  return assignedSlots > 0 ? "partially_assigned" : "unfilled";
-}
-
 function createClientId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-function assignmentOriginForWrite(
-  source: ScheduleAssignmentSource
-): ScheduleAssignmentOrigin {
+function assignmentOriginForWrite(source: ScheduleAssignmentSource): ScheduleAssignmentOrigin {
   return source === "locked_manual" ? "manual" : source;
+}
+
+function mapAssignmentsToRegeneratedSlots({
+  assignments,
+  sourceSlots,
+  targetSlots,
+  newRunId,
+  generatedAt,
+  locked,
+  idPrefix,
+  requireAll
+}: {
+  assignments: ScheduleAssignment[];
+  sourceSlots: ScheduleSlot[];
+  targetSlots: ScheduleSlot[];
+  newRunId: string;
+  generatedAt: string;
+  locked: boolean;
+  idPrefix: string;
+  requireAll: boolean;
+}): { assignments: ScheduleAssignment[]; unmapped: string[] } {
+  const sourceSlotById = new Map(sourceSlots.map((slot) => [slot.id, slot]));
+  const targetSlotByKey = new Map(
+    targetSlots.map((slot) => [slotSemanticKey(slot), slot])
+  );
+  const mappedAssignments: ScheduleAssignment[] = [];
+  const unmapped: string[] = [];
+
+  for (const assignment of assignments) {
+    const sourceSlot = sourceSlotById.get(assignment.schedule_slot_id);
+    const targetSlot = sourceSlot
+      ? targetSlotByKey.get(slotSemanticKey(sourceSlot))
+      : null;
+
+    if (!sourceSlot || !targetSlot) {
+      const label = sourceSlot
+        ? `${sourceSlot.date} ${sourceSlot.start_time}-${sourceSlot.end_time} role ${sourceSlot.role_id}`
+        : assignment.schedule_slot_id;
+      unmapped.push(label);
+
+      if (requireAll) {
+        continue;
+      }
+
+      continue;
+    }
+
+    mappedAssignments.push({
+      ...assignment,
+      id: createClientId(idPrefix),
+      schedule_run_id: newRunId,
+      schedule_slot_id: targetSlot.id,
+      is_locked: locked ? 1 : 0,
+      source: assignmentOriginForWrite(assignment.source),
+      created_at: generatedAt,
+      updated_at: generatedAt
+    });
+  }
+
+  return {
+    assignments: mappedAssignments,
+    unmapped
+  };
+}
+
+function slotSemanticKey(slot: ScheduleSlot): string {
+  return [
+    slot.date,
+    slot.source_type ?? "",
+    slot.source_id ?? "",
+    slot.requirement_group_id ?? "",
+    slot.role_id,
+    slot.start_time,
+    slot.end_time,
+    slot.slot_number ?? ""
+  ].join("|");
+}
+
+function mergeRerunCandidateParameters(
+  parametersJson: string | null,
+  metadata: {
+    rerunFromRunId: string;
+    preservedLockedAssignmentCount: number;
+    stabilityHintCount: number;
+    droppedStabilityHintCount: number;
+    engine: string;
+    solverStatus: string;
+    validationStatus: string;
+    generatedAt: string;
+  }
+): string {
+  const base = parseJsonObject(parametersJson);
+
+  return JSON.stringify({
+    ...base,
+    ...metadata
+  });
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function qualityGradeLabel(
@@ -1578,7 +1695,7 @@ function AssignmentEditorModal({
               </p>
               {editor.assignment ? (
                 <p>
-                  {language === "en" ? "Lock status" : "Lock"}:{" "}
+                  {language === "en" ? "Lock status" : "Κατάσταση κλειδώματος"}:{" "}
                   <span
                     className={
                       editor.assignment.is_locked === 1
@@ -1586,13 +1703,7 @@ function AssignmentEditorModal({
                         : "font-semibold text-slate-700"
                     }
                   >
-                    {editor.assignment.is_locked === 1
-                      ? language === "en"
-                        ? "Locked"
-                        : "ΞΞ»ΞµΞΉΞ΄Ο‰ΞΌΞ­Ξ½Ξ·"
-                      : language === "en"
-                        ? "Unlocked"
-                        : "ΞΞµΞΊΞ»ΞµΞΉΞ΄ΟΟ„Ξ·"}
+                    {editor.assignment.is_locked === 1 ? (language === "en" ? "Locked" : "Κλειδωμένη") : (language === "en" ? "Unlocked" : "Ξεκλείδωτη")}
                   </span>
                 </p>
               ) : null}
@@ -1806,13 +1917,7 @@ function AssignmentEditorModal({
                 disabled={isSaving}
                 className="rounded-md border border-amber-200 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-60"
               >
-                {editor.assignment.is_locked === 1
-                  ? language === "en"
-                    ? "Unlock assignment"
-                    : "ΞΞµΞΊΞ»ΞµΞ―Ξ΄Ο‰ΞΌΞ± Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ·Ο‚"
-                  : language === "en"
-                    ? "Lock assignment"
-                    : "ΞΞ»ΞµΞ―Ξ΄Ο‰ΞΌΞ± Ξ±Ξ½Ξ¬ΞΈΞµΟƒΞ·Ο‚"}
+                {editor.assignment.is_locked === 1 ? (language === "en" ? "Unlock assignment" : "Ξεκλείδωμα ανάθεσης") : (language === "en" ? "Lock assignment" : "Κλείδωμα ανάθεσης")}
               </button>
             ) : null}
           </div>
