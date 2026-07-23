@@ -22,6 +22,7 @@ import {
 } from "../src/renderer/services/scheduler";
 import {
   buildEmployeeScheduleRows,
+  formatSlotTime,
   buildManagerCoverageIssues,
   buildManagerReportPdfHtml,
   buildTeamSchedulePdfHtml
@@ -94,6 +95,10 @@ function buildSnapshotForFixture(fixture: ReturnType<typeof createFixture>) {
     shiftTemplates: fixture.shiftTemplates,
     staffingRequirements: fixture.staffingRequirements
   });
+}
+
+function countOccurrences(value: string, search: string): number {
+  return value.split(search).length - 1;
 }
 
 function optimizeBenchmarkScenario(name: string) {
@@ -1920,6 +1925,43 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       ];
 
       const snapshot = buildSnapshotForFixture(fixture);
+      const duplicateReason = `Slot ${fixture.slots[0].id} has 2 active assignments.`;
+      const coverageIssues = buildManagerCoverageIssues({
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        language: "en",
+        slotTimeById: snapshot.slotTimeById
+      });
+      const employeeRows = buildEmployeeScheduleRows({
+        employees: fixture.employees,
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warningsBySlotId: snapshot.warningsBySlotId,
+        coverageIssues,
+        language: "en"
+      });
+      const managerHtml = buildManagerReportPdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        runSlots: snapshot.runSlots,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warnings: snapshot.runWarnings,
+        unfilledSlots: snapshot.unfilledSlots,
+        employeeWorkRules: fixture.employeeWorkRules,
+        coverageIssues,
+        language: "en",
+        snapshot
+      });
 
       assert.equal(snapshot.managerStatus, "Invalid");
       assert.equal(snapshot.validationStatus, "failed");
@@ -1927,18 +1969,21 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       assert.equal(snapshot.activeAssignmentCount, 2);
       assert.equal(snapshot.uniqueAssignedSlotCount, 0);
       assert.equal(snapshot.unfilledSlotCount, 1);
+      assert.equal(snapshot.hardIssueCount, 1);
+      assert.equal(snapshot.evaluation.metrics.hardViolationCount, 1);
       assert.equal(snapshot.assignmentBySlotId.has(fixture.slots[0].id), false);
-      assert.ok(
-        snapshot.invalidReasons.some((reason) =>
-          reason.includes("has 2 active assignments")
-        )
+      assert.equal(
+        snapshot.invalidReasons.filter((reason) => reason === duplicateReason)
+          .length,
+        1
       );
+      assert.equal(countOccurrences(managerHtml, duplicateReason), 1);
 
       const html = buildTeamSchedulePdfHtml({
         businessName: "Snapshot test",
         run: fixture.run,
         dates: ["2026-05-18"],
-        employeeRows: [],
+        employeeRows,
         snapshot,
         language: "en"
       });
@@ -1964,6 +2009,15 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       ];
 
       const snapshot = buildSnapshotForFixture(fixture);
+      const coverageIssues = buildManagerCoverageIssues({
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        language: "en",
+        slotTimeById: snapshot.slotTimeById
+      });
       const employeeRows = buildEmployeeScheduleRows({
         employees: fixture.employees,
         runSlots: snapshot.runSlots,
@@ -1972,7 +2026,7 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         shiftTemplates: fixture.shiftTemplates,
         staffingRequirements: fixture.staffingRequirements,
         warningsBySlotId: snapshot.warningsBySlotId,
-        coverageIssues: [],
+        coverageIssues,
         language: "en"
       });
       const managerHtml = buildManagerReportPdfHtml({
@@ -1987,17 +2041,150 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         warnings: snapshot.runWarnings,
         unfilledSlots: snapshot.unfilledSlots,
         employeeWorkRules: fixture.employeeWorkRules,
-        coverageIssues: [],
+        coverageIssues,
         language: "en",
         snapshot
       });
+      const teamHtml = buildTeamSchedulePdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        snapshot,
+        language: "en"
+      });
 
       assert.equal(snapshot.managerStatus, "Invalid");
+      assert.equal(snapshot.validationStatus, "failed");
       assert.equal(snapshot.malformedTimeIssues.length, 1);
       assert.equal(snapshot.hardIssueCount, 1);
       assert.match(snapshot.malformedTimeIssues[0]?.message ?? "", /Invalid time value/);
+      assert.equal(coverageIssues.length, 1);
+      assert.equal(coverageIssues[0]?.missingHours, null);
+      assert.match(
+        buildManagerReportPdfHtml({
+          businessName: "Snapshot test",
+          run: fixture.run,
+          dates: ["2026-05-18"],
+          employeeRows,
+          runSlots: snapshot.runSlots,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements,
+          warnings: snapshot.runWarnings,
+          unfilledSlots: snapshot.unfilledSlots,
+          employeeWorkRules: fixture.employeeWorkRules,
+          coverageIssues,
+          language: "en"
+        }),
+        /Missing hours were not calculated/
+      );
       assert.match(managerHtml, /Invalid schedule data/);
       assert.match(managerHtml, /Validation/);
+      assert.match(managerHtml, /Invalid time value/);
+      assert.match(teamHtml, /Invalid schedule data/);
+      assert.doesNotMatch(teamHtml, /<table>/);
+    }
+  },
+  {
+    name: "canonical schedule snapshot preserves valid overnight slot display and duration",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      const overnightShift = createShiftTemplate(
+        "shift-overnight-valid",
+        "Closing",
+        "16:00",
+        "01:00"
+      );
+      const overnightRequirement = createStaffingRequirement({
+        id: "req-overnight-valid",
+        roleId: fixture.roles[0].id,
+        shiftTemplateId: overnightShift.id,
+        startTime: "16:00",
+        endTime: "01:00"
+      });
+      fixture.shiftTemplates = [overnightShift];
+      fixture.staffingRequirements = [overnightRequirement];
+      fixture.slots = [
+        createSlot({
+          id: "slot-overnight-valid",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: overnightRequirement.id,
+          startTime: "16:00",
+          endTime: "01:00",
+          status: "filled"
+        })
+      ];
+      fixture.employeeWorkRules = fixture.employees.map((employee) =>
+        createWorkRules(`wr-overnight-${employee.id}`, employee.id, 5, 10, 8, 1)
+      );
+      fixture.assignments = [
+        createAssignment(
+          "as-overnight-valid",
+          fixture.run.id,
+          fixture.slots[0].id,
+          "emp-alex"
+        )
+      ];
+
+      const snapshot = buildSnapshotForFixture(fixture);
+      const slotTime = snapshot.slotTimeById.get(fixture.slots[0].id);
+      const coverageIssues = buildManagerCoverageIssues({
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        language: "en",
+        slotTimeById: snapshot.slotTimeById
+      });
+      const employeeRows = buildEmployeeScheduleRows({
+        employees: fixture.employees,
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warningsBySlotId: snapshot.warningsBySlotId,
+        coverageIssues,
+        language: "en"
+      });
+      const managerHtml = buildManagerReportPdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        runSlots: snapshot.runSlots,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warnings: snapshot.runWarnings,
+        unfilledSlots: snapshot.unfilledSlots,
+        employeeWorkRules: fixture.employeeWorkRules,
+        coverageIssues,
+        language: "en",
+        snapshot
+      });
+      const teamHtml = buildTeamSchedulePdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        snapshot,
+        language: "en"
+      });
+
+      assert.equal(snapshot.validationStatus, "passed");
+      assert.equal(snapshot.hardIssueCount, 0);
+      assert.equal(slotTime?.valid, true);
+      assert.equal(slotTime?.durationMinutes, 540);
+      assert.equal(slotTime?.endsNextDay, true);
+      assert.match(formatSlotTime(fixture.slots[0], "en"), /\+1/);
+      assert.equal(coverageIssues.length, 0);
+      assert.match(managerHtml, /\+1/);
+      assert.match(teamHtml, /\+1/);
     }
   },
   {
@@ -2037,7 +2224,8 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
         roles: fixture.roles,
         shiftTemplates: fixture.shiftTemplates,
         staffingRequirements: fixture.staffingRequirements,
-        language: "en"
+        language: "en",
+        slotTimeById: snapshot.slotTimeById
       });
       const employeeRows = buildEmployeeScheduleRows({
         employees: fixture.employees,
@@ -2323,6 +2511,33 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       assert.ok(scheduleViewSource.includes("Επανεκτέλεση προγράμματος"));
       assert.ok(scheduleViewSource.includes("Η ανάθεση κλειδώθηκε."));
       assert.ok(scheduleViewSource.includes("Η ανάθεση ξεκλειδώθηκε."));
+    }
+  },
+  {
+    name: "manual acceptance documentation separates headless Demo Cafe baseline from real Electron runtime",
+    run: () => {
+      const manualAcceptancePlan = fs.readFileSync(
+        "docs/MANUAL_ACCEPTANCE_TEST_PLAN.md",
+        "utf8"
+      );
+
+      assert.match(manualAcceptancePlan, /Headless baseline/);
+      assert.match(manualAcceptancePlan, /Real Electron CP-SAT-first manual acceptance/);
+      assert.match(manualAcceptancePlan, /40 requested slots/);
+      assert.match(manualAcceptancePlan, /28 unique assigned/);
+      assert.match(manualAcceptancePlan, /coverage ceiling 28/);
+      assert.match(manualAcceptancePlan, /CP-SAT/);
+      assert.match(manualAcceptancePlan, /heuristic fallback only/);
+    }
+  },
+  {
+    name: "normal CI runs Demo Cafe acceptance test",
+    run: () => {
+      const ciWorkflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+
+      assert.match(ciWorkflow, /npm run test:demo-cafe/);
+      assert.match(ciWorkflow, /Demo Cafe acceptance/);
+      assert.match(ciWorkflow, /Scheduler tests/);
     }
   },
   {

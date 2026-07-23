@@ -86,7 +86,7 @@ type ManagerCoverageIssue = {
   requiredCount: number;
   assignedCount: number;
   missingCount: number;
-  missingHours: number;
+  missingHours: number | null;
   summary: string;
   cause: string;
   recommendations: string[];
@@ -104,13 +104,34 @@ function scheduleCoverageGroupKey(
   return `${slot.date}|${shiftKey}|${slot.role_id}`;
 }
 
+function getCoverageMissingHours(
+  slot: ScheduleSlot,
+  missingCount: number,
+  slotTimeById: CanonicalScheduleSnapshot["slotTimeById"] | undefined
+): number | null {
+  const snapshotSlotTime = slotTimeById?.get(slot.id);
+
+  if (snapshotSlotTime) {
+    return snapshotSlotTime.valid
+      ? (missingCount * snapshotSlotTime.durationMinutes) / 60
+      : null;
+  }
+
+  try {
+    return missingCount * getSlotDurationHours(slot);
+  } catch {
+    return null;
+  }
+}
+
 function buildManagerCoverageIssues({
   runSlots,
   runAssignments,
   roles,
   shiftTemplates,
   staffingRequirements,
-  language
+  language,
+  slotTimeById
 }: {
   runSlots: ScheduleSlot[];
   runAssignments: ScheduleAssignment[];
@@ -118,6 +139,7 @@ function buildManagerCoverageIssues({
   shiftTemplates: ShiftTemplate[];
   staffingRequirements: StaffingRequirement[];
   language: UiLanguage;
+  slotTimeById?: CanonicalScheduleSnapshot["slotTimeById"];
 }): ManagerCoverageIssue[] {
   const assignedSlotIds = new Set(
     runAssignments
@@ -166,7 +188,11 @@ function buildManagerCoverageIssues({
         shiftTemplates
       );
       const missingCount = requiredCount - assignedCount;
-      const missingHours = missingCount * getSlotDurationHours(representativeSlot);
+      const missingHours = getCoverageMissingHours(
+        representativeSlot,
+        missingCount,
+        slotTimeById
+      );
       const dateLabel = `${localizedDayName(
         getDayOfWeek(representativeSlot.date),
         language
@@ -233,16 +259,21 @@ function buildRoleShortageSummaries(
   issues: ManagerCoverageIssue[],
   language: UiLanguage
 ): string[] {
-  const byRole = new Map<string, { missingCount: number; missingHours: number }>();
+  const byRole = new Map<
+    string,
+    { missingCount: number; missingHours: number; hasUnknownHours: boolean }
+  >();
 
   for (const issue of issues) {
     const existing = byRole.get(issue.roleName) ?? {
       missingCount: 0,
-      missingHours: 0
+      missingHours: 0,
+      hasUnknownHours: false
     };
     byRole.set(issue.roleName, {
       missingCount: existing.missingCount + issue.missingCount,
-      missingHours: existing.missingHours + issue.missingHours
+      missingHours: existing.missingHours + (issue.missingHours ?? 0),
+      hasUnknownHours: existing.hasUnknownHours || issue.missingHours === null
     });
   }
 
@@ -253,8 +284,18 @@ function buildRoleShortageSummaries(
         right[1].missingHours - left[1].missingHours ||
         left[0].localeCompare(right[0])
     )
-    .map(([roleName, shortage]) =>
-      language === "en"
+    .map(([roleName, shortage]) => {
+      if (shortage.hasUnknownHours) {
+        return language === "en"
+          ? `${roleName}: ${shortage.missingCount} unfilled position${
+              shortage.missingCount === 1 ? "" : "s"
+            }. Missing hours were not calculated because one or more slot times are invalid.`
+          : `${roleName}: ${shortage.missingCount} κεν${
+              shortage.missingCount === 1 ? "ή θέση" : "ές θέσεις"
+            }. Οι ώρες δεν υπολογίστηκαν γιατί μία ή περισσότερες βάρδιες έχουν μη έγκυρη ώρα.`;
+      }
+
+      return language === "en"
         ? `${roleName}: about ${formatHours(shortage.missingHours)} more hours are needed (${shortage.missingCount} unfilled position${
             shortage.missingCount === 1 ? "" : "s"
           }).`
@@ -262,8 +303,8 @@ function buildRoleShortageSummaries(
             shortage.missingHours
           )} επιπλέον ώρες (${shortage.missingCount} κεν${
             shortage.missingCount === 1 ? "ή θέση" : "ές θέσεις"
-          }).`
-    );
+          }).`;
+    });
 }
 
 function buildShortageSummaryLines({

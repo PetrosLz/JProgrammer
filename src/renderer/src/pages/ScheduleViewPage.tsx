@@ -203,7 +203,8 @@ export function ScheduleViewPage({
     roles,
     shiftTemplates,
     staffingRequirements,
-    language
+    language,
+    slotTimeById: scheduleSnapshot.slotTimeById
   });
   const employeeRows = buildEmployeeScheduleRows({
     employees,

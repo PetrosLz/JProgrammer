@@ -75,6 +75,22 @@ export type ScheduleSnapshotSolver = {
   fallbackReason: string | null;
 };
 
+function uniqueInvalidReasons(messages: string[]): string[] {
+  const seen = new Set<string>();
+  const uniqueMessages: string[] = [];
+
+  for (const message of messages) {
+    if (seen.has(message)) {
+      continue;
+    }
+
+    seen.add(message);
+    uniqueMessages.push(message);
+  }
+
+  return uniqueMessages;
+}
+
 export type CanonicalScheduleSnapshot = {
   run: ScheduleRun;
   runSlots: ScheduleSlot[];
@@ -268,7 +284,7 @@ export function buildCanonicalScheduleSnapshot({
       minutes / 60
     ])
   );
-  const invalidReasons = [
+  const invalidReasons = uniqueInvalidReasons([
     ...duplicateActiveAssignments.map(
       (duplicate) =>
         `Slot ${duplicate.slotId} has ${duplicate.assignments.length} active assignments.`
@@ -277,7 +293,7 @@ export function buildCanonicalScheduleSnapshot({
     ...(malformedTimeIssues.length > 0
       ? []
       : validation.violations.map((violation) => violation.message))
-  ];
+  ]);
   const managerStatus = getSnapshotManagerStatus({
     validation,
     malformedTimeIssues,

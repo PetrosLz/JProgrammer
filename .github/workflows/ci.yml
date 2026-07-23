@@ -45,6 +45,9 @@ jobs:
       - name: Scheduler tests
         run: npm run test:scheduler
 
+      - name: Demo Cafe acceptance
+        run: npm run test:demo-cafe
+
       - name: Migration tests
         run: npm run test:migrations
 
