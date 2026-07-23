@@ -8,6 +8,7 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
     "test:scheduler": "tsc -p scripts/tsconfig.scheduler.json && node .tmp/scheduler-tests/scripts/scheduler-tests.js",
+    "test:demo-cafe": "tsc -p scripts/tsconfig.scheduler.json && node .tmp/scheduler-tests/scripts/scheduler-demo-cafe-acceptance.js",
     "test:migrations": "tsc -p scripts/tsconfig.scheduler.json && electron .tmp/scheduler-tests/scripts/migration-tests.js",
     "test:solver": "node scripts/run-solver-tests.cjs",
     "test:time-model": "tsc -p scripts/tsconfig.scheduler.json && node .tmp/scheduler-tests/scripts/scheduler-time-model-tests.js",

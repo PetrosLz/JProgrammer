@@ -5,6 +5,7 @@ import { runSolverProcess } from "../src/main/solver/solverProcess";
 import {
   buildCoverageCeilingAnalysis,
   buildAutomaticScheduleCandidate,
+  buildCanonicalScheduleSnapshot,
   buildCpSatWarmStartHintPlan,
   buildCpSatWarmStartHints,
   buildCpSatSolveRequest,
@@ -19,6 +20,12 @@ import {
   setManualAssignmentLock,
   validateScheduleHardConstraints
 } from "../src/renderer/services/scheduler";
+import {
+  buildEmployeeScheduleRows,
+  buildManagerCoverageIssues,
+  buildManagerReportPdfHtml,
+  buildTeamSchedulePdfHtml
+} from "../src/renderer/src/utils/scheduleDisplay";
 import { databaseApi } from "../src/renderer/services/databaseApi";
 import type {
   CpSatAssignment,
@@ -67,6 +74,25 @@ function evaluateFixture(fixture: ReturnType<typeof createFixture>) {
     timeOff: fixture.timeOff,
     staffingRequirements: fixture.staffingRequirements,
     shiftTemplates: fixture.shiftTemplates
+  });
+}
+
+function buildSnapshotForFixture(fixture: ReturnType<typeof createFixture>) {
+  return buildCanonicalScheduleSnapshot({
+    run: fixture.run,
+    scheduleSlots: fixture.slots,
+    scheduleAssignments: fixture.assignments,
+    scheduleWarnings: [],
+    employees: fixture.employees,
+    roles: fixture.roles,
+    employeeRoles: fixture.employeeRoles,
+    employeeWorkRules: fixture.employeeWorkRules,
+    employeeDayConstraints: fixture.employeeDayConstraints,
+    employeeShiftAvailability: fixture.employeeShiftAvailability,
+    employeeTimeConstraints: fixture.employeeTimeConstraints,
+    timeOff: fixture.timeOff,
+    shiftTemplates: fixture.shiftTemplates,
+    staffingRequirements: fixture.staffingRequirements
   });
 }
 
@@ -1297,6 +1323,11 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
 
         assert.equal(candidate.validation.valid, true);
         assert.equal(candidate.optimizerTelemetry.engine, "cp_sat");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.attempted, true);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.status, "OPTIMAL");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.runtimeMs, 1);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.pythonVersion, "3.12.0");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.ortoolsVersion, "9.15.0");
         assert.equal(candidate.generatedAssignmentInputs.length, 1);
         assert.equal(candidate.generatedAssignmentInputs[0]?.source, "automatic_cp_sat");
         assert.equal(candidate.finalAssignmentInputs[0]?.isLocked, 0);
@@ -1357,11 +1388,158 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
 
         assert.equal(candidate.validation.valid, true);
         assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.attempted, false);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.status, null);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.hintDiagnostics.received, 0);
         assert.equal(
           candidate.generatedAssignmentInputs[0]?.source,
           "automatic_heuristic"
         );
         assert.match(candidate.optimizerTelemetry.fallbackReason ?? "", /mock unavailable/);
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "automatic candidate preserves UNKNOWN CP-SAT attempt telemetry before fallback",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-unknown-cp-sat",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          pythonVersion: "3.12.1",
+          ortoolsAvailable: true,
+          ortoolsVersion: "9.16.0",
+          message: null
+        },
+        solveResult: {
+          assignments: [],
+          status: "UNKNOWN",
+          runtimeMs: 44,
+          hintDiagnostics: {
+            received: 5,
+            accepted: 2,
+            ignored: 3
+          },
+          pythonVersion: "3.12.1",
+          ortoolsVersion: "9.16.0",
+          message: "deadline reached"
+        }
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.solverStatus, "HEURISTIC_FALLBACK");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.attempted, true);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.status, "UNKNOWN");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.runtimeMs, 44);
+        assert.deepEqual(candidate.optimizerTelemetry.cpSatAttempt.hintDiagnostics, {
+          received: 5,
+          accepted: 2,
+          ignored: 3
+        });
+        assert.deepEqual(candidate.optimizerTelemetry.hintDiagnostics, {
+          received: 5,
+          accepted: 2,
+          ignored: 3
+        });
+        assert.match(
+          candidate.optimizerTelemetry.cpSatAttempt.failureOrFallbackReason ?? "",
+          /UNKNOWN/
+        );
+      } finally {
+        restoreWindow(originalWindow);
+      }
+    }
+  },
+  {
+    name: "automatic candidate records CP-SAT exception attempt before fallback",
+    run: async () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-builder-exception-cp-sat",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "17:00",
+          status: "unfilled"
+        })
+      ];
+      const originalWindow = globalThis.window;
+
+      setMockSolverWindow({
+        availability: {
+          available: true,
+          pythonExecutable: "mock-python",
+          pythonVersion: "3.12.2",
+          ortoolsAvailable: true,
+          ortoolsVersion: "9.16.1",
+          message: null
+        },
+        solveError: new Error("mock solver crash")
+      });
+
+      try {
+        const candidate = await buildAutomaticScheduleCandidate({
+          run: fixture.run,
+          slots: fixture.slots,
+          employees: fixture.employees,
+          employeeRoles: fixture.employeeRoles,
+          employeeWorkRules: fixture.employeeWorkRules,
+          employeeDayConstraints: fixture.employeeDayConstraints,
+          employeeShiftAvailability: fixture.employeeShiftAvailability,
+          employeeTimeConstraints: fixture.employeeTimeConstraints,
+          timeOff: fixture.timeOff,
+          assignments: fixture.assignments,
+          roles: fixture.roles,
+          shiftTemplates: fixture.shiftTemplates,
+          staffingRequirements: fixture.staffingRequirements
+        });
+
+        assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.attempted, true);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.status, "UNKNOWN");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.pythonVersion, "3.12.2");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.ortoolsVersion, "9.16.1");
+        assert.match(
+          candidate.optimizerTelemetry.cpSatAttempt.failureOrFallbackReason ?? "",
+          /mock solver crash/
+        );
       } finally {
         restoreWindow(originalWindow);
       }
@@ -1659,6 +1837,12 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
 
         assert.equal(candidate.validation.valid, true);
         assert.equal(candidate.optimizerTelemetry.engine, "heuristic_fallback");
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.attempted, true);
+        assert.equal(candidate.optimizerTelemetry.cpSatAttempt.status, "OPTIMAL");
+        assert.match(
+          candidate.optimizerTelemetry.cpSatAttempt.failureOrFallbackReason ?? "",
+          /TypeScript validation/
+        );
         assert.equal(
           candidate.generatedAssignmentInputs[0]?.source,
           "automatic_heuristic"
@@ -1720,6 +1904,180 @@ const tests: Array<{ name: string; run: () => void | Promise<void> }> = [
       assert.equal(candidate.slotUpdates.length, 0);
       assert.equal(candidate.warningInputs.length, 0);
       assert.ok(candidate.validation.violations.length > 0);
+    }
+  },
+  {
+    name: "canonical schedule snapshot marks duplicate active slot assignments invalid",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.employeeRoles = [
+        ...fixture.employeeRoles,
+        createEmployeeRole("er-nina-service-duplicate", "emp-nina", fixture.roles[0].id)
+      ];
+      fixture.assignments = [
+        createAssignment("as-duplicate-alex", fixture.run.id, fixture.slots[0].id, "emp-alex"),
+        createAssignment("as-duplicate-nina", fixture.run.id, fixture.slots[0].id, "emp-nina")
+      ];
+
+      const snapshot = buildSnapshotForFixture(fixture);
+
+      assert.equal(snapshot.managerStatus, "Invalid");
+      assert.equal(snapshot.validationStatus, "failed");
+      assert.equal(snapshot.duplicateActiveAssignments.length, 1);
+      assert.equal(snapshot.activeAssignmentCount, 2);
+      assert.equal(snapshot.uniqueAssignedSlotCount, 0);
+      assert.equal(snapshot.unfilledSlotCount, 1);
+      assert.equal(snapshot.assignmentBySlotId.has(fixture.slots[0].id), false);
+      assert.ok(
+        snapshot.invalidReasons.some((reason) =>
+          reason.includes("has 2 active assignments")
+        )
+      );
+
+      const html = buildTeamSchedulePdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows: [],
+        snapshot,
+        language: "en"
+      });
+      assert.match(html, /Invalid schedule data/);
+      assert.doesNotMatch(html, /<table>/);
+    }
+  },
+  {
+    name: "canonical schedule snapshot handles malformed legacy slot times without crashing",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-malformed-time",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "24:00",
+          endTime: "12:60",
+          status: "unfilled"
+        })
+      ];
+
+      const snapshot = buildSnapshotForFixture(fixture);
+      const employeeRows = buildEmployeeScheduleRows({
+        employees: fixture.employees,
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warningsBySlotId: snapshot.warningsBySlotId,
+        coverageIssues: [],
+        language: "en"
+      });
+      const managerHtml = buildManagerReportPdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        runSlots: snapshot.runSlots,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warnings: snapshot.runWarnings,
+        unfilledSlots: snapshot.unfilledSlots,
+        employeeWorkRules: fixture.employeeWorkRules,
+        coverageIssues: [],
+        language: "en",
+        snapshot
+      });
+
+      assert.equal(snapshot.managerStatus, "Invalid");
+      assert.equal(snapshot.malformedTimeIssues.length, 1);
+      assert.equal(snapshot.hardIssueCount, 1);
+      assert.match(snapshot.malformedTimeIssues[0]?.message ?? "", /Invalid time value/);
+      assert.match(managerHtml, /Invalid schedule data/);
+      assert.match(managerHtml, /Validation/);
+    }
+  },
+  {
+    name: "canonical snapshot and manager PDF use the same assigned and unfilled counts",
+    run: () => {
+      const fixture = createFixture({ assignments: [] });
+      fixture.slots = [
+        createSlot({
+          id: "slot-snapshot-filled",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "09:00",
+          endTime: "13:00",
+          status: "filled"
+        }),
+        createSlot({
+          id: "slot-snapshot-unfilled",
+          runId: fixture.run.id,
+          date: "2026-05-18",
+          roleId: fixture.roles[0].id,
+          sourceId: fixture.staffingRequirements[0].id,
+          startTime: "14:00",
+          endTime: "18:00",
+          status: "unfilled"
+        })
+      ];
+      fixture.assignments = [
+        createAssignment("as-snapshot-filled", fixture.run.id, fixture.slots[0].id, "emp-alex")
+      ];
+
+      const snapshot = buildSnapshotForFixture(fixture);
+      const coverageIssues = buildManagerCoverageIssues({
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        language: "en"
+      });
+      const employeeRows = buildEmployeeScheduleRows({
+        employees: fixture.employees,
+        runSlots: snapshot.runSlots,
+        runAssignments: snapshot.uniqueActiveAssignments,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warningsBySlotId: snapshot.warningsBySlotId,
+        coverageIssues,
+        language: "en"
+      });
+      const managerHtml = buildManagerReportPdfHtml({
+        businessName: "Snapshot test",
+        run: fixture.run,
+        dates: ["2026-05-18"],
+        employeeRows,
+        runSlots: snapshot.runSlots,
+        roles: fixture.roles,
+        shiftTemplates: fixture.shiftTemplates,
+        staffingRequirements: fixture.staffingRequirements,
+        warnings: snapshot.runWarnings,
+        unfilledSlots: snapshot.unfilledSlots,
+        employeeWorkRules: fixture.employeeWorkRules,
+        coverageIssues,
+        language: "en",
+        snapshot
+      });
+
+      assert.equal(snapshot.managerStatus, "Understaffed");
+      assert.equal(snapshot.uniqueAssignedSlotCount, 1);
+      assert.equal(snapshot.unfilledSlotCount, 1);
+      assert.match(
+        managerHtml,
+        new RegExp(`<div class="summary-value">${snapshot.uniqueAssignedSlotCount}</div>`)
+      );
+      assert.match(
+        managerHtml,
+        new RegExp(`<div class="summary-value">${snapshot.unfilledSlotCount}</div>`)
+      );
     }
   },
   {
@@ -2558,10 +2916,14 @@ void runTests();
 
 function setMockSolverWindow({
   availability,
-  assignment
+  assignment,
+  solveResult,
+  solveError
 }: {
   availability: SolverAvailability;
-  assignment: CpSatAssignment;
+  assignment?: CpSatAssignment;
+  solveResult?: Partial<CpSatSolveResult>;
+  solveError?: Error;
 }) {
   const mockApi = {
     solver: {
@@ -2569,17 +2931,24 @@ function setMockSolverWindow({
         ok: true,
         data: availability
       }),
-      solveScheduleWithCpSat: async (request: CpSatSolveRequest) => ({
-        ok: true,
-        data: {
+      solveScheduleWithCpSat: async (request: CpSatSolveRequest) => {
+        if (solveError) {
+          throw solveError;
+        }
+
+        const defaultObjectiveValues = {
+          coveredSlots: assignment ? 1 : 0,
+          totalSlots: request.slots.length,
+          coverageRate:
+            request.slots.length === 0
+              ? 0
+              : (assignment ? 1 : 0) / request.slots.length
+        };
+        const resultOverrides = solveResult ?? {};
+        const data: CpSatSolveResult = {
           requestId: request.requestId,
-          assignments: [assignment],
+          assignments: assignment ? [assignment] : [],
           status: "OPTIMAL",
-          objectiveValues: {
-            coveredSlots: 1,
-            totalSlots: request.slots.length,
-            coverageRate: request.slots.length === 0 ? 0 : 1 / request.slots.length
-          },
           coverageProvenOptimal: true,
           fullLexicographicOptimality: true,
           objectiveStages: {
@@ -2594,17 +2963,28 @@ function setMockSolverWindow({
               provenOptimal: true
             }
           },
-          hintDiagnostics: {
-            received: request.hints.length,
-            accepted: request.hints.length,
-            ignored: 0
-          },
           pythonVersion: "3.12.0",
           ortoolsVersion: "9.15.0",
           runtimeMs: 1,
-          message: null
-        }
-      })
+          message: null,
+          ...resultOverrides,
+          objectiveValues: {
+            ...defaultObjectiveValues,
+            ...resultOverrides.objectiveValues
+          },
+          hintDiagnostics: {
+            received: request.hints.length,
+            accepted: request.hints.length,
+            ignored: 0,
+            ...resultOverrides.hintDiagnostics
+          }
+        };
+
+        return {
+          ok: true,
+          data
+        };
+      }
     }
   } as unknown as Window["jprogrammer"];
   type TestWindow = Window & typeof globalThis;

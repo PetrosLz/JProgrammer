@@ -108,6 +108,14 @@ export {
   type RerunSchedulePlanSuccess
 } from "./rerunPlan";
 export {
+  buildCanonicalScheduleSnapshot,
+  type CanonicalScheduleSnapshot,
+  type ScheduleSnapshotDuplicateAssignment,
+  type ScheduleSnapshotSlotTime,
+  type ScheduleSnapshotSolver,
+  type ScheduleSnapshotTimeIssue
+} from "./scheduleSnapshot";
+export {
   createNoSlotsWarning,
   createSoftScoreWarnings,
   createUnfilledSlotWarning,

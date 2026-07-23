@@ -1,6 +1,10 @@
 import { databaseApi } from "../databaseApi";
 import { solverApi } from "../solverApi";
-import type { CpSatTelemetry } from "../../../shared/solverTypes";
+import type {
+  CpSatAttemptTelemetry,
+  CpSatTelemetry,
+  SolverAvailability
+} from "../../../shared/solverTypes";
 import type {
   Employee,
   DayOfWeek,
@@ -1062,7 +1066,8 @@ function createHeuristicTelemetry({
   coverageRate,
   previousAssignmentHintCount = 0,
   warmStartHintCount = 0,
-  ignoredPreviousAssignmentHintCount = 0
+  ignoredPreviousAssignmentHintCount = 0,
+  cpSatAttempt
 }: {
   fallbackReason: string | null;
   coveredSlots: number;
@@ -1071,7 +1076,14 @@ function createHeuristicTelemetry({
   previousAssignmentHintCount?: number;
   warmStartHintCount?: number;
   ignoredPreviousAssignmentHintCount?: number;
+  cpSatAttempt?: CpSatAttemptTelemetry;
 }): CpSatTelemetry {
+  const emptyHintDiagnostics = {
+    received: 0,
+    accepted: 0,
+    ignored: 0
+  };
+
   return {
     engine: "heuristic_fallback",
     solverStatus: "HEURISTIC_FALLBACK",
@@ -1082,17 +1094,44 @@ function createHeuristicTelemetry({
     coverageProvenOptimal: false,
     fullLexicographicOptimality: false,
     objectiveStages: null,
-    hintDiagnostics: {
-      received: 0,
-      accepted: 0,
-      ignored: 0
-    },
+    hintDiagnostics: cpSatAttempt?.hintDiagnostics ?? emptyHintDiagnostics,
     previousAssignmentHintCount,
     warmStartHintCount,
     ignoredPreviousAssignmentHintCount,
-    pythonVersion: null,
-    ortoolsVersion: null,
+    cpSatAttempt:
+      cpSatAttempt ??
+      createCpSatAttemptTelemetry({
+        attempted: false,
+        status: null,
+        runtimeMs: null,
+        hintDiagnostics: emptyHintDiagnostics,
+        pythonVersion: null,
+        ortoolsVersion: null,
+        failureOrFallbackReason: fallbackReason
+      }),
+    pythonVersion: cpSatAttempt?.pythonVersion ?? null,
+    ortoolsVersion: cpSatAttempt?.ortoolsVersion ?? null,
     fallbackReason
+  };
+}
+
+function createCpSatAttemptTelemetry({
+  attempted,
+  status,
+  runtimeMs,
+  hintDiagnostics,
+  pythonVersion,
+  ortoolsVersion,
+  failureOrFallbackReason
+}: CpSatAttemptTelemetry): CpSatAttemptTelemetry {
+  return {
+    attempted,
+    status,
+    runtimeMs,
+    hintDiagnostics,
+    pythonVersion,
+    ortoolsVersion,
+    failureOrFallbackReason
   };
 }
 
@@ -1260,7 +1299,12 @@ async function selectOptimizerPlan({
   manualOverrides: ManualOverrideMap;
 }): Promise<OptimizerPlanSelection> {
   let latestHintPlan = createEmptyHintPlan();
-  const heuristicFallback = (fallbackReason: string | null): OptimizerPlanSelection => {
+  let latestAvailability: SolverAvailability | null = null;
+  let cpSatSolveAttempted = false;
+  const heuristicFallback = (
+    fallbackReason: string | null,
+    cpSatAttempt?: CpSatAttemptTelemetry
+  ): OptimizerPlanSelection => {
     const selectedSchedule = optimizeCandidateSchedules({
       run,
       runSlots,
@@ -1295,7 +1339,8 @@ async function selectOptimizerPlan({
         previousAssignmentHintCount: latestHintPlan.previousAssignmentHintCount,
         warmStartHintCount: latestHintPlan.warmStartHintCount,
         ignoredPreviousAssignmentHintCount:
-          latestHintPlan.ignoredPreviousAssignmentHintCount
+          latestHintPlan.ignoredPreviousAssignmentHintCount,
+        cpSatAttempt
       }),
       explanations: fallbackReason
         ? [
@@ -1308,9 +1353,27 @@ async function selectOptimizerPlan({
 
   try {
     const availability = await solverApi.getCpSatAvailability();
+    latestAvailability = availability;
 
     if (!availability.available) {
-      return heuristicFallback(availability.message ?? "CP-SAT solver unavailable.");
+      const fallbackReason =
+        availability.message ?? "CP-SAT solver unavailable.";
+      return heuristicFallback(
+        fallbackReason,
+        createCpSatAttemptTelemetry({
+          attempted: false,
+          status: null,
+          runtimeMs: null,
+          hintDiagnostics: {
+            received: 0,
+            accepted: 0,
+            ignored: 0
+          },
+          pythonVersion: availability.pythonVersion,
+          ortoolsVersion: availability.ortoolsVersion,
+          failureOrFallbackReason: fallbackReason
+        })
+      );
     }
 
     const baseRequest = buildCpSatSolveRequest({
@@ -1332,11 +1395,28 @@ async function selectOptimizerPlan({
       ...baseRequest,
       hints: latestHintPlan.hints
     };
+    cpSatSolveAttempted = true;
     const result = await solverApi.solveScheduleWithCpSat(request);
+    const resultAttempt = createCpSatAttemptTelemetry({
+      attempted: true,
+      status: result.status,
+      runtimeMs: result.runtimeMs,
+      hintDiagnostics: result.hintDiagnostics,
+      pythonVersion: result.pythonVersion ?? availability.pythonVersion,
+      ortoolsVersion: result.ortoolsVersion ?? availability.ortoolsVersion,
+      failureOrFallbackReason: null
+    });
 
     if (result.status !== "OPTIMAL" && result.status !== "FEASIBLE") {
+      const fallbackReason = `CP-SAT returned ${result.status}${
+        result.message ? `: ${result.message}` : ""
+      }.`;
       return heuristicFallback(
-        `CP-SAT returned ${result.status}${result.message ? `: ${result.message}` : ""}.`
+        fallbackReason,
+        {
+          ...resultAttempt,
+          failureOrFallbackReason: fallbackReason
+        }
       );
     }
 
@@ -1364,8 +1444,13 @@ async function selectOptimizerPlan({
     });
 
     if (!validation.valid) {
+      const fallbackReason = `CP-SAT result failed TypeScript validation with ${validation.violations.length} hard-rule issue(s).`;
       return heuristicFallback(
-        `CP-SAT result failed TypeScript validation with ${validation.violations.length} hard-rule issue(s).`
+        fallbackReason,
+        {
+          ...resultAttempt,
+          failureOrFallbackReason: fallbackReason
+        }
       );
     }
 
@@ -1387,6 +1472,7 @@ async function selectOptimizerPlan({
         warmStartHintCount: latestHintPlan.warmStartHintCount,
         ignoredPreviousAssignmentHintCount:
           latestHintPlan.ignoredPreviousAssignmentHintCount,
+        cpSatAttempt: resultAttempt,
         pythonVersion: result.pythonVersion ?? availability.pythonVersion,
         ortoolsVersion: result.ortoolsVersion ?? availability.ortoolsVersion,
         fallbackReason: null
@@ -1396,8 +1482,22 @@ async function selectOptimizerPlan({
       ]
     };
   } catch (error) {
+    const fallbackReason = `CP-SAT failed before validation: ${getErrorMessage(error)}.`;
     return heuristicFallback(
-      `CP-SAT failed before validation: ${getErrorMessage(error)}.`
+      fallbackReason,
+      createCpSatAttemptTelemetry({
+        attempted: cpSatSolveAttempted,
+        status: "UNKNOWN",
+        runtimeMs: null,
+        hintDiagnostics: {
+          received: latestHintPlan.warmStartHintCount,
+          accepted: 0,
+          ignored: 0
+        },
+        pythonVersion: latestAvailability?.pythonVersion ?? null,
+        ortoolsVersion: latestAvailability?.ortoolsVersion ?? null,
+        failureOrFallbackReason: fallbackReason
+      })
     );
   }
 }
@@ -5003,6 +5103,7 @@ function mergeRunParameters(
           warmStartHintCount: optimizerTelemetry.warmStartHintCount,
           ignoredPreviousAssignmentHintCount:
             optimizerTelemetry.ignoredPreviousAssignmentHintCount,
+          cpSatAttempt: optimizerTelemetry.cpSatAttempt,
           pythonVersion: optimizerTelemetry.pythonVersion,
           ortoolsVersion: optimizerTelemetry.ortoolsVersion,
           fallbackReason: optimizerTelemetry.fallbackReason
@@ -5025,6 +5126,19 @@ function mergeRunParameters(
           previousAssignmentHintCount: 0,
           warmStartHintCount: 0,
           ignoredPreviousAssignmentHintCount: 0,
+          cpSatAttempt: {
+            attempted: false,
+            status: null,
+            runtimeMs: null,
+            hintDiagnostics: {
+              received: 0,
+              accepted: 0,
+              ignored: 0
+            },
+            pythonVersion: null,
+            ortoolsVersion: null,
+            failureOrFallbackReason: null
+          },
           pythonVersion: null,
           ortoolsVersion: null,
           fallbackReason: null

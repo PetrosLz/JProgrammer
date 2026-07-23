@@ -80,6 +80,16 @@ export type CpSatHintDiagnostics = {
   ignored: number;
 };
 
+export type CpSatAttemptTelemetry = {
+  attempted: boolean;
+  status: CpSatSolveStatus | null;
+  runtimeMs: number | null;
+  hintDiagnostics: CpSatHintDiagnostics;
+  pythonVersion: string | null;
+  ortoolsVersion: string | null;
+  failureOrFallbackReason: string | null;
+};
+
 export type CpSatObjectiveStageResult = {
   value: number | null;
   status: CpSatSolveStatus;
@@ -148,6 +158,7 @@ export type CpSatTelemetry = {
   previousAssignmentHintCount: number;
   warmStartHintCount: number;
   ignoredPreviousAssignmentHintCount: number;
+  cpSatAttempt: CpSatAttemptTelemetry;
   pythonVersion: string | null;
   ortoolsVersion: string | null;
   fallbackReason: string | null;

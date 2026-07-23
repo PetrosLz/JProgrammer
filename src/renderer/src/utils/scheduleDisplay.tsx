@@ -10,7 +10,11 @@ import type {
   ShiftTemplate,
   StaffingRequirement
 } from "../../types";
-import { getDayOfWeek, getSlotDurationHours } from "../../services/scheduler";
+import {
+  getDayOfWeek,
+  getSlotDurationHours,
+  type CanonicalScheduleSnapshot
+} from "../../services/scheduler";
 import { formatTimeRange } from "../../services/scheduler/model/workingTime";
 import { dayLabels } from "../setupData";
 import type { UiLanguage } from "./localization";
@@ -36,11 +40,15 @@ function roleCoverageSummary(slots: ScheduleSlot[], roles: Role[]): string {
 }
 
 function formatSlotTime(slot: ScheduleSlot, language: UiLanguage = "en"): string {
-  return formatTimeRange({
-    startTime: slot.start_time,
-    endTime: slot.end_time,
-    language
-  });
+  try {
+    return formatTimeRange({
+      startTime: slot.start_time,
+      endTime: slot.end_time,
+      language
+    });
+  } catch {
+    return `${slot.start_time}-${slot.end_time}`;
+  }
 }
 
 type ScheduleRow = {
@@ -754,19 +762,105 @@ function WarningBadge({ messages }: { messages: string[] }) {
   );
 }
 
+function buildInvalidSchedulePdfHtml({
+  businessName,
+  run,
+  language,
+  title,
+  body,
+  reasons
+}: {
+  businessName: string;
+  run: ScheduleRun;
+  language: UiLanguage;
+  title: string;
+  body: string;
+  reasons: string[];
+}): string {
+  const displayedReasons = reasons.slice(0, 12);
+
+  return `<!doctype html>
+<html lang="${language}">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(businessName)} - ${escapeHtml(title)}</title>
+  <style>
+    @page { size: A4; margin: 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #0f172a;
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 12px;
+      line-height: 1.45;
+      background: white;
+    }
+    .panel {
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      background: #fef2f2;
+      color: #7f1d1d;
+      padding: 18px 20px;
+    }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    .meta { color: #64748b; margin: 0 0 16px; }
+    ul { margin: 10px 0 0; padding-left: 18px; }
+    li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <p class="meta">${escapeHtml(businessName)} · ${escapeHtml(
+    formatDateRangeEu(run.start_date, run.end_date)
+  )}</p>
+  <section class="panel">
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(body)}</p>
+    ${
+      displayedReasons.length > 0
+        ? `<ul>${displayedReasons
+            .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+            .join("")}</ul>`
+        : ""
+    }
+  </section>
+</body>
+</html>`;
+}
+
 function buildTeamSchedulePdfHtml({
   businessName,
   run,
   dates,
-  employeeRows
+  employeeRows,
+  snapshot,
+  language = "el"
 }: {
   businessName: string;
   run: ScheduleRun;
   dates: string[];
   employeeRows: EmployeeScheduleRow[];
+  snapshot?: CanonicalScheduleSnapshot;
+  language?: UiLanguage;
 }): string {
+  if (snapshot?.managerStatus === "Invalid") {
+    return buildInvalidSchedulePdfHtml({
+      businessName,
+      run,
+      language,
+      title:
+        language === "en"
+          ? "Invalid schedule data"
+          : "Μη έγκυρα δεδομένα προγράμματος",
+      body:
+        language === "en"
+          ? "This schedule has validation issues and cannot be presented as a clean team schedule."
+          : "Το πρόγραμμα έχει θέματα ελέγχου και δεν μπορεί να εμφανιστεί ως καθαρό πρόγραμμα ομάδας.",
+      reasons: snapshot.invalidReasons
+    });
+  }
+
   return `<!doctype html>
-<html lang="el">
+<html lang="${language}">
 <head>
   <meta charset="utf-8" />
   <title>${escapeHtml(businessName)} Program</title>
@@ -889,7 +983,8 @@ function buildManagerReportPdfHtml({
   unfilledSlots,
   employeeWorkRules,
   coverageIssues,
-  language
+  language,
+  snapshot
 }: {
   businessName: string;
   run: ScheduleRun;
@@ -904,10 +999,13 @@ function buildManagerReportPdfHtml({
   employeeWorkRules: EmployeeWorkRules[];
   coverageIssues: ManagerCoverageIssue[];
   language: UiLanguage;
+  snapshot?: CanonicalScheduleSnapshot;
 }): string {
+  const effectiveUnfilledSlotCount =
+    snapshot?.unfilledSlotCount ?? unfilledSlots.length;
   const shortageSummaryRows = buildShortageSummaryLines({
     issues: coverageIssues,
-    unfilledSlotCount: unfilledSlots.length,
+    unfilledSlotCount: effectiveUnfilledSlotCount,
     language
   })
     .map((line) => `<p>${escapeHtml(line)}</p>`)
@@ -1050,6 +1148,18 @@ function buildManagerReportPdfHtml({
     (total, employeeRow) => total + employeeRow.assignmentCount,
     0
   );
+  const effectiveAssignedShiftCount =
+    snapshot?.uniqueAssignedSlotCount ?? assignedShiftCount;
+  const effectiveWarningCount = snapshot?.runWarnings.length ?? warnings.length;
+  const snapshotStatusRows = snapshot
+    ? buildSnapshotStatusRows(snapshot, language)
+    : "";
+  const invalidDiagnosticRows = snapshot?.invalidReasons.length
+    ? snapshot.invalidReasons
+        .slice(0, 12)
+        .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+        .join("")
+    : "";
   const text =
     language === "en"
       ? {
@@ -1280,15 +1390,26 @@ function buildManagerReportPdfHtml({
 
   <section class="summary">
     <div class="summary-item"><div class="summary-label">${escapeHtml(text.employees)}</div><div class="summary-value">${employeeRows.length}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.assignedShifts)}</div><div class="summary-value">${assignedShiftCount}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.unfilled)}</div><div class="summary-value">${unfilledSlots.length}</div></div>
-    <div class="summary-item"><div class="summary-label">${escapeHtml(text.warnings)}</div><div class="summary-value">${warnings.length}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.assignedShifts)}</div><div class="summary-value">${effectiveAssignedShiftCount}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.unfilled)}</div><div class="summary-value">${effectiveUnfilledSlotCount}</div></div>
+    <div class="summary-item"><div class="summary-label">${escapeHtml(text.warnings)}</div><div class="summary-value">${effectiveWarningCount}</div></div>
   </section>
 
   <section class="manager-summary">
     <strong>${escapeHtml(text.summaryTitle)}</strong>
+    ${snapshotStatusRows}
     ${shortageSummaryRows}
   </section>
+
+  ${
+    invalidDiagnosticRows
+      ? `<section class="section"><h2>${escapeHtml(
+          language === "en"
+            ? "Invalid schedule data"
+            : "Μη έγκυρα δεδομένα προγράμματος"
+        )}</h2><ul>${invalidDiagnosticRows}</ul></section>`
+      : ""
+  }
 
   <section class="section">
     <h2>${escapeHtml(text.scheduleTitle)}</h2>
@@ -1425,10 +1546,128 @@ function buildManagerReportPdfHtml({
 </html>`;
 }
 
+function buildSnapshotStatusRows(
+  snapshot: CanonicalScheduleSnapshot,
+  language: UiLanguage
+): string {
+  const percent = Math.round(snapshot.coverageRate * 100);
+  const labels =
+    language === "en"
+      ? {
+          coverage: "Coverage",
+          engine: "Engine",
+          hardIssues: "Hard issues",
+          locked: "Locked assignments",
+          manual: "Manual assignments",
+          proof: "Proof",
+          solver: "Solver result",
+          status: "Status",
+          validation: "Validation"
+        }
+      : {
+          coverage: "Κάλυψη",
+          engine: "Μηχανή",
+          hardIssues: "Σκληρά θέματα",
+          locked: "Κλειδωμένες αναθέσεις",
+          manual: "Χειροκίνητες αναθέσεις",
+          proof: "Απόδειξη",
+          solver: "Αποτέλεσμα solver",
+          status: "Κατάσταση",
+          validation: "Έλεγχος"
+        };
+  const values = [
+    [labels.status, scheduleManagerStatusLabel(snapshot.managerStatus, language)],
+    [labels.engine, optimizerEngineLabel(snapshot.solver.engine, language)],
+    [labels.solver, snapshot.solver.solverStatus],
+    [labels.validation, validationStatusLabel(snapshot.validationStatus, language)],
+    [
+      labels.coverage,
+      `${snapshot.uniqueAssignedSlotCount}/${snapshot.totalSlots} (${percent}%)`
+    ],
+    [labels.proof, coverageProofLabel(snapshot, language)],
+    [labels.locked, String(snapshot.lockedAssignmentCount)],
+    [labels.manual, String(snapshot.manualAssignmentCount)],
+    [labels.hardIssues, String(snapshot.hardIssueCount)]
+  ];
+
+  return values
+    .map(
+      ([label, value]) =>
+        `<p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`
+    )
+    .join("");
+}
+
+function scheduleManagerStatusLabel(
+  status: CanonicalScheduleSnapshot["managerStatus"],
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    return status;
+  }
+
+  if (status === "Excellent") {
+    return "Άριστο";
+  }
+
+  if (status === "Understaffed") {
+    return "Υποστελεχωμένο";
+  }
+
+  return "Μη έγκυρο";
+}
+
+function optimizerEngineLabel(
+  engine: CanonicalScheduleSnapshot["solver"]["engine"],
+  language: UiLanguage
+): string {
+  if (engine === "cp_sat") {
+    return "CP-SAT";
+  }
+
+  if (engine === "heuristic_fallback") {
+    return language === "en" ? "Heuristic fallback" : "Heuristic fallback";
+  }
+
+  return language === "en" ? "Unknown" : "Άγνωστο";
+}
+
+function validationStatusLabel(
+  status: CanonicalScheduleSnapshot["validationStatus"],
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    return status === "passed" ? "Passed" : "Failed";
+  }
+
+  return status === "passed" ? "Πέρασε" : "Απέτυχε";
+}
+
+function coverageProofLabel(
+  snapshot: CanonicalScheduleSnapshot,
+  language: UiLanguage
+): string {
+  if (snapshot.solver.engine !== "cp_sat") {
+    return language === "en"
+      ? "Not applicable for heuristic fallback"
+      : "Δεν εφαρμόζεται για heuristic fallback";
+  }
+
+  if (snapshot.solver.coverageProvenOptimal === true) {
+    return language === "en"
+      ? "Coverage proven optimal"
+      : "Η κάλυψη αποδείχθηκε βέλτιστη";
+  }
+
+  return language === "en"
+    ? "Coverage not proven optimal"
+    : "Η κάλυψη δεν αποδείχθηκε βέλτιστη";
+}
+
 function getEmployeeScheduleHours(employeeRow: EmployeeScheduleRow): number {
   return [...employeeRow.assignmentsByDate.values()]
     .flat()
-    .reduce((total, item) => total + getSlotDurationHours(item.slot), 0);
+    .reduce((total, item) => total + safeSlotDurationHours(item.slot), 0);
 }
 
 function getEmployeeWeekendShiftCount(employeeRow: EmployeeScheduleRow): number {
@@ -1451,6 +1690,14 @@ function isDifficultScheduleSlot(slot: ScheduleSlot): boolean {
   const endMinutes = timeStringToMinutes(slot.end_time);
 
   return endMinutes <= startMinutes || endMinutes > 22 * 60 || startMinutes < 6 * 60;
+}
+
+function safeSlotDurationHours(slot: ScheduleSlot): number {
+  try {
+    return getSlotDurationHours(slot);
+  } catch {
+    return 0;
+  }
 }
 
 function timeStringToMinutes(value: string): number {

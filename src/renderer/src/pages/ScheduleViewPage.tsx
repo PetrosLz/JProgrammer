@@ -4,15 +4,16 @@ import { databaseApi } from "../../services/databaseApi";
 import { pdfExportApi, PdfExportError } from "../../services/pdfExportApi";
 import {
   addDays,
+  buildCanonicalScheduleSnapshot,
   buildRerunSchedulePlan,
   getDayOfWeek,
   getSlotDurationHours,
-  evaluateSchedule,
   saveManualAssignmentChange,
   setManualAssignmentLock,
   splitManualAssignmentViolations,
   validateManualAssignmentChange,
   type AssignmentResult,
+  type CanonicalScheduleSnapshot,
   type ManualAssignmentValidation,
   type ScheduleEvaluationBreakdown,
   type ScheduleEvaluationGrade
@@ -63,8 +64,6 @@ import {
   formatDateEu,
   formatHours,
   formatSlotTime,
-  groupUnfilledSlotsByDate,
-  groupWarningsBySlot,
   localizedDayName,
   managerFriendlyWarningMessage,
   roleLabel,
@@ -167,19 +166,28 @@ export function ScheduleViewPage({
     );
   }
 
-  const runSlots = scheduleSlots.filter(
-    (slot) => slot.schedule_run_id === selectedRun.id
-  );
-  const runAssignments = scheduleAssignments.filter(
-    (assignment) =>
-      assignment.schedule_run_id === selectedRun.id &&
-      assignment.status !== "cancelled" &&
-      assignment.status !== "removed"
-  );
-  const assignmentBySlotId = new Map(
-    runAssignments.map((assignment) => [assignment.schedule_slot_id, assignment])
-  );
-  const warningsBySlotId = groupWarningsBySlot(scheduleWarnings, selectedRun.id);
+  const scheduleSnapshot = buildCanonicalScheduleSnapshot({
+    run: selectedRun,
+    scheduleSlots,
+    scheduleAssignments,
+    scheduleWarnings,
+    employees,
+    roles,
+    employeeRoles,
+    employeeWorkRules,
+    employeeDayConstraints,
+    employeeShiftAvailability,
+    employeeTimeConstraints,
+    timeOff,
+    shiftTemplates,
+    staffingRequirements,
+    weekStartsOn: businessSettings?.week_starts_on ?? 1
+  });
+  const runSlots = scheduleSnapshot.runSlots;
+  const activeRunAssignments = scheduleSnapshot.activeAssignments;
+  const runAssignments = scheduleSnapshot.uniqueActiveAssignments;
+  const assignmentBySlotId = scheduleSnapshot.assignmentBySlotId;
+  const warningsBySlotId = scheduleSnapshot.warningsBySlotId;
   const dates = Array.from({ length: 7 }, (_, index) =>
     addDays(selectedRun.start_date, index)
   );
@@ -208,35 +216,54 @@ export function ScheduleViewPage({
     coverageIssues: managerCoverageIssues,
     language
   });
-  const unfilledSlotsByDate = groupUnfilledSlotsByDate({
-    runSlots,
-    assignmentBySlotId
-  });
-  const assignedSlotIds = new Set(
-    runAssignments.map((assignment) => assignment.schedule_slot_id)
-  );
-  const unfilledSlotCount = runSlots.filter(
-    (slot) => slot.status !== "filled" && !assignedSlotIds.has(slot.id)
-  ).length;
-  const runWarnings = scheduleWarnings.filter(
-    (warning) => warning.schedule_run_id === selectedRun.id
-  );
-  const scheduleEvaluation = evaluateSchedule({
-    run: selectedRun,
-    slots: runSlots,
-    assignments: runAssignments,
-    employees,
-    roles,
-    employeeRoles,
-    employeeWorkRules,
-    employeeDayConstraints,
-    employeeShiftAvailability,
-    employeeTimeConstraints,
-    timeOff,
-    staffingRequirements,
-    shiftTemplates,
-    weekStartsOn: businessSettings?.week_starts_on ?? 1
-  });
+  const unfilledSlotsByDate = groupSlotsByDate(scheduleSnapshot.unfilledSlots);
+  const unfilledSlotCount = scheduleSnapshot.unfilledSlotCount;
+  const runWarnings = scheduleSnapshot.runWarnings;
+  const scheduleEvaluation = scheduleSnapshot.evaluation;
+  const snapshotCoveragePercent = Math.round(scheduleSnapshot.coverageRate * 100);
+  const cpSatAttempt = scheduleSnapshot.solver.cpSatAttempt;
+  const snapshotSummaryItems = [
+    {
+      label: language === "en" ? "Status" : "Κατάσταση",
+      value: managerStatusLabel(scheduleSnapshot.managerStatus, language)
+    },
+    {
+      label: language === "en" ? "Engine" : "Μηχανή",
+      value: optimizerEngineLabelForUi(scheduleSnapshot.solver.engine, language)
+    },
+    {
+      label: language === "en" ? "Solver result" : "Αποτέλεσμα solver",
+      value: scheduleSnapshot.solver.solverStatus
+    },
+    {
+      label: language === "en" ? "Validation" : "Έλεγχος",
+      value: validationStatusLabelForUi(scheduleSnapshot.validationStatus, language)
+    },
+    {
+      label: language === "en" ? "Coverage" : "Κάλυψη",
+      value: `${scheduleSnapshot.uniqueAssignedSlotCount}/${scheduleSnapshot.totalSlots} (${snapshotCoveragePercent}%)`
+    },
+    {
+      label: language === "en" ? "Proof" : "Απόδειξη",
+      value: coverageProofLabelForUi(scheduleSnapshot, language)
+    },
+    {
+      label: language === "en" ? "Locked" : "Κλειδωμένες",
+      value: String(scheduleSnapshot.lockedAssignmentCount)
+    },
+    {
+      label: language === "en" ? "Manual" : "Χειροκίνητες",
+      value: String(scheduleSnapshot.manualAssignmentCount)
+    },
+    {
+      label: language === "en" ? "Unfilled" : "Κενές",
+      value: String(scheduleSnapshot.unfilledSlotCount)
+    },
+    {
+      label: language === "en" ? "Hard issues" : "Σκληρά θέματα",
+      value: String(scheduleSnapshot.hardIssueCount)
+    }
+  ];
   const businessName = businessSettings?.business_name?.trim() || "JProgrammer";
   const modalValidation = editor
     ? validateManualAssignmentChange({
@@ -257,12 +284,9 @@ export function ScheduleViewPage({
         weekStartsOn: businessSettings?.week_starts_on ?? 1
       })
     : null;
-  const lockedAssignmentCount = runAssignments.filter(
-    (assignment) => assignment.is_locked === 1
-  ).length;
-  const unlockedAssignmentCount = runAssignments.filter(
-    (assignment) => assignment.is_locked !== 1
-  ).length;
+  const lockedAssignmentCount = scheduleSnapshot.lockedAssignmentCount;
+  const unlockedAssignmentCount =
+    scheduleSnapshot.activeAssignmentCount - lockedAssignmentCount;
   const rerunConfirmTitle =
     language === "en" ? "Rerun scheduling" : "Επανεκτέλεση προγράμματος";
   const rerunConfirmBody =
@@ -415,7 +439,7 @@ export function ScheduleViewPage({
       const rerunPlan = await buildRerunSchedulePlan({
         sourceRun: selectedRun,
         sourceRunSlots: runSlots,
-        sourceRunAssignments: runAssignments,
+        sourceRunAssignments: activeRunAssignments,
         allScheduleSlots: scheduleSlots,
         allScheduleAssignments: scheduleAssignments,
         openingHours,
@@ -477,7 +501,16 @@ export function ScheduleViewPage({
       return;
     }
 
-    if (runAssignments.length === 0) {
+    if (exportType === "team" && scheduleSnapshot.managerStatus === "Invalid") {
+      setExportError(
+        language === "en"
+          ? "The team PDF cannot be exported because the schedule has validation issues. Export the manager report to review the problem."
+          : "Δεν μπορεί να εξαχθεί το PDF ομάδας γιατί το πρόγραμμα έχει θέματα ελέγχου. Εξαγάγετε την αναφορά manager για να δείτε το πρόβλημα."
+      );
+      return;
+    }
+
+    if (exportType === "team" && runAssignments.length === 0) {
       setExportError(
         "Δεν υπάρχουν αναθέσεις εργαζομένων για εξαγωγή PDF."
       );
@@ -487,16 +520,16 @@ export function ScheduleViewPage({
     setExportingPdfType(exportType);
 
     try {
-      const unfilledSlots = runSlots.filter(
-        (slot) => slot.status !== "filled" && !assignmentBySlotId.has(slot.id)
-      );
+      const unfilledSlots = scheduleSnapshot.unfilledSlots;
       const html =
         exportType === "team"
           ? buildTeamSchedulePdfHtml({
               businessName,
               run: selectedRun,
               dates,
-              employeeRows
+              employeeRows,
+              snapshot: scheduleSnapshot,
+              language
             })
           : buildManagerReportPdfHtml({
               businessName,
@@ -511,7 +544,8 @@ export function ScheduleViewPage({
               unfilledSlots,
               employeeWorkRules,
               coverageIssues: managerCoverageIssues,
-              language
+              language,
+              snapshot: scheduleSnapshot
             });
       const filePrefix =
         exportType === "team" ? "Programma_Omadas" : "Manager_Report";
@@ -664,6 +698,60 @@ export function ScheduleViewPage({
         </div>
       ) : null}
 
+      <div
+        className={`mt-4 rounded-lg border bg-white p-4 shadow-sm ${managerStatusClassName(
+          scheduleSnapshot.managerStatus
+        )}`}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {language === "en" ? "Schedule readiness" : "Έλεγχος προγράμματος"}
+            </p>
+            <h3 className="mt-1 text-base font-semibold tracking-normal text-slate-950">
+              {managerStatusLabel(scheduleSnapshot.managerStatus, language)}
+            </h3>
+          </div>
+          {cpSatAttempt ? (
+            <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 ring-1 ring-slate-200">
+              <span className="font-semibold text-slate-700">
+                {language === "en" ? "CP-SAT attempt" : "CP-SAT προσπάθεια"}:
+              </span>{" "}
+              {cpSatAttemptLabelForUi(cpSatAttempt, language)}
+            </div>
+          ) : null}
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          {snapshotSummaryItems.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200"
+            >
+              <p className="text-[11px] font-semibold uppercase leading-4 tracking-wide text-slate-500 [overflow-wrap:anywhere]">
+                {item.label}
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-tight text-slate-950">
+                {item.value}
+              </p>
+            </div>
+          ))}
+        </div>
+        {scheduleSnapshot.invalidReasons.length > 0 ? (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <p className="font-semibold">
+              {language === "en"
+                ? "Validation issues"
+                : "Θέματα ελέγχου"}
+            </p>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {scheduleSnapshot.invalidReasons.slice(0, 5).map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+
       <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -689,17 +777,15 @@ export function ScheduleViewPage({
           <div className="grid min-w-[260px] grid-cols-3 gap-2 text-center">
             <QualityMetric
               label={language === "en" ? "Coverage" : "Κάλυψη"}
-              value={`${Math.round(
-                scheduleEvaluation.metrics.coverageRate * 100
-              )}%`}
+              value={`${snapshotCoveragePercent}%`}
             />
             <QualityMetric
               label={language === "en" ? "Unfilled" : "Κενές"}
-              value={scheduleEvaluation.metrics.unfilledSlots}
+              value={scheduleSnapshot.unfilledSlotCount}
             />
             <QualityMetric
               label={language === "en" ? "Hard issues" : "Σκληρά θέματα"}
-              value={scheduleEvaluation.metrics.hardViolationCount}
+              value={scheduleSnapshot.hardIssueCount}
             />
           </div>
         </div>
@@ -1001,7 +1087,13 @@ export function ScheduleViewPage({
                           ) : (
                             <div className="space-y-1">
                               {cellSlots.map((slot) => {
-                                const assignment = assignmentBySlotId.get(slot.id) ?? null;
+                                const slotAssignments =
+                                  scheduleSnapshot.assignmentsBySlotId.get(slot.id) ?? [];
+                                const isDuplicateAssignmentSlot =
+                                  slotAssignments.length > 1;
+                                const assignment = isDuplicateAssignmentSlot
+                                  ? null
+                                  : assignmentBySlotId.get(slot.id) ?? null;
                                 const assignedEmployee = assignment
                                   ? employees.find(
                                       (employee) =>
@@ -1043,7 +1135,11 @@ export function ScheduleViewPage({
                                       }}
                                     />
                                     <span className="truncate text-slate-700">
-                                      {assignedEmployee
+                                      {isDuplicateAssignmentSlot
+                                        ? language === "en"
+                                          ? "Invalid duplicate"
+                                          : "Μη έγκυρο διπλό"
+                                        : assignedEmployee
                                         ? shortEmployeeName(assignedEmployee)
                                         : language === "en"
                                           ? "Unfilled"
@@ -1108,7 +1204,8 @@ export function ScheduleViewPage({
           body={rerunConfirmBody}
           confirmLabel={rerunConfirmLabel}
           cancelLabel={cancelLabel}
-          variant="warning"          isWorking={isRerunningProgram}
+          variant="warning"
+          isWorking={isRerunningProgram}
           onCancel={() => setIsRerunConfirmOpen(false)}
           onConfirm={() => void rerunCurrentProgram()}
         />
@@ -1145,6 +1242,124 @@ function QualityMetric({
       <p className="mt-1 text-base font-semibold text-slate-950">{value}</p>
     </div>
   );
+}
+
+function groupSlotsByDate(slots: ScheduleSlot[]): Map<string, ScheduleSlot[]> {
+  const grouped = new Map<string, ScheduleSlot[]>();
+
+  for (const slot of slots) {
+    grouped.set(slot.date, [...(grouped.get(slot.date) ?? []), slot]);
+  }
+
+  for (const [date, dateSlots] of grouped.entries()) {
+    grouped.set(
+      date,
+      [...dateSlots].sort(
+        (left, right) =>
+          left.start_time.localeCompare(right.start_time) ||
+          left.end_time.localeCompare(right.end_time) ||
+          left.role_id.localeCompare(right.role_id)
+      )
+    );
+  }
+
+  return grouped;
+}
+
+function managerStatusClassName(
+  status: CanonicalScheduleSnapshot["managerStatus"]
+): string {
+  if (status === "Invalid") {
+    return "border-red-200";
+  }
+
+  if (status === "Understaffed") {
+    return "border-amber-200";
+  }
+
+  return "border-emerald-200";
+}
+
+function managerStatusLabel(
+  status: CanonicalScheduleSnapshot["managerStatus"],
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    return status;
+  }
+
+  if (status === "Excellent") {
+    return "Άριστο";
+  }
+
+  if (status === "Understaffed") {
+    return "Υποστελεχωμένο";
+  }
+
+  return "Μη έγκυρο";
+}
+
+function optimizerEngineLabelForUi(
+  engine: CanonicalScheduleSnapshot["solver"]["engine"],
+  language: UiLanguage
+): string {
+  if (engine === "cp_sat") {
+    return "CP-SAT";
+  }
+
+  if (engine === "heuristic_fallback") {
+    return language === "en" ? "Heuristic fallback" : "Heuristic fallback";
+  }
+
+  return language === "en" ? "Unknown" : "Άγνωστο";
+}
+
+function validationStatusLabelForUi(
+  status: CanonicalScheduleSnapshot["validationStatus"],
+  language: UiLanguage
+): string {
+  if (language === "en") {
+    return status === "passed" ? "Passed" : "Failed";
+  }
+
+  return status === "passed" ? "Πέρασε" : "Απέτυχε";
+}
+
+function coverageProofLabelForUi(
+  snapshot: CanonicalScheduleSnapshot,
+  language: UiLanguage
+): string {
+  if (snapshot.solver.engine !== "cp_sat") {
+    return language === "en"
+      ? "Not applicable for heuristic fallback"
+      : "Δεν εφαρμόζεται για heuristic fallback";
+  }
+
+  if (snapshot.solver.coverageProvenOptimal === true) {
+    return language === "en"
+      ? "Coverage proven optimal"
+      : "Η κάλυψη αποδείχθηκε βέλτιστη";
+  }
+
+  return language === "en"
+    ? "Coverage not proven optimal"
+    : "Η κάλυψη δεν αποδείχθηκε βέλτιστη";
+}
+
+function cpSatAttemptLabelForUi(
+  attempt: NonNullable<CanonicalScheduleSnapshot["solver"]["cpSatAttempt"]>,
+  language: UiLanguage
+): string {
+  if (!attempt.attempted) {
+    return language === "en" ? "Unavailable before fallback" : "Μη διαθέσιμο πριν το fallback";
+  }
+
+  const status = attempt.status ?? "UNKNOWN";
+  if (!attempt.failureOrFallbackReason) {
+    return status;
+  }
+
+  return `${status} · ${attempt.failureOrFallbackReason}`;
 }
 
 function qualityGradeLabel(
